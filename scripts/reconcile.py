@@ -11,6 +11,7 @@ example's file location, delete one example, or delete every confirmed example f
 import shutil
 
 import common
+import train
 
 # Deterministic geographic split: bucket by tile x-column so adjacent tiles (which can be
 # near-duplicates) land on the same side of the train/val split, avoiding leakage.
@@ -129,3 +130,35 @@ def delete_round(class_name: str, round_num: int) -> dict:
         purged = True
 
     return {"deleted": pending_ids, "skipped_confirmed": skipped_confirmed, "purged": purged}
+
+
+def generate_package(class_name: str) -> dict:
+    """Rebuilds dataset/images|labels/{train,val} from scratch out of samples.jsonl (see the
+    /manual page's hand-drawn examples) — deterministic and safe to re-run any time samples are
+    added, edited, or removed. Split: round-robin by sample order (every VAL_FRACTION-th -> val),
+    since manual sample ids aren't grid-aligned so split_for()'s tile-x-parity doesn't apply."""
+    samples = common.load_samples(class_name)
+    if not samples:
+        raise ValueError(f"'{class_name}' has no samples yet")
+
+    for split in ("train", "val"):
+        for kind in ("images", "labels"):
+            d = common.dataset_dir(class_name) / kind / split
+            if d.exists():
+                shutil.rmtree(d)
+            d.mkdir(parents=True, exist_ok=True)
+
+    counts = {"train": 0, "val": 0}
+    for i, row in enumerate(samples):
+        src = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
+        if src is None:
+            continue
+        split = "val" if i % VAL_FRACTION == 0 else "train"
+        dst = common.dataset_dir(class_name) / "images" / split / f"{row['id']}{_dataset_ext(src)}"
+        shutil.copy(src, dst)
+        lbl_dst = common.dataset_dir(class_name) / "labels" / split / f"{row['id']}.txt"
+        lbl_dst.write_text(common.yolo_seg_lines([row["label_polygon"]]))
+        counts[split] += 1
+
+    train.ensure_data_yaml(class_name)
+    return {"class_name": class_name, **counts}

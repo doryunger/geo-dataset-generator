@@ -7,6 +7,7 @@ import re
 import time
 from pathlib import Path
 
+import numpy as np
 import requests
 from PIL import Image, ImageDraw
 
@@ -22,6 +23,7 @@ TILE_MANIFEST_PATH = TILES_DIR / "manifest.jsonl"
 EMBEDDINGS_DIR = ROOT / "embeddings"
 INDEX_PATH = EMBEDDINGS_DIR / "index.npy"
 INDEX_IDS_PATH = EMBEDDINGS_DIR / "index_ids.json"
+EMBED_DIM = 384  # dinov2-small hidden size
 SCRATCH_DIR = ROOT / ".scratch"  # one-off seed crops; never cached/reused across calls
 
 MAPBOX_ACCESS_TOKEN_ENV = "MAPBOX_ACCESS_TOKEN"
@@ -62,6 +64,17 @@ def review_dir(name: str) -> Path:
 
 def dataset_dir(name: str) -> Path:
     return class_dir(name) / "dataset"
+
+
+def samples_dir(name: str) -> Path:
+    """Hand-drawn examples' crops (see the /manual page) — real persisted files, unlike the
+    ephemeral .scratch/ seed crops, since samples.jsonl is the source of truth that
+    generate_package regenerates dataset/ from."""
+    return class_dir(name) / "samples"
+
+
+def samples_path(name: str) -> Path:
+    return class_dir(name) / "samples.jsonl"
 
 
 def yolo_seg_lines(polygons: list[list[list[float]]]) -> str:
@@ -108,6 +121,7 @@ def stage_review_candidate(
 
 def ensure_class_dirs(name: str) -> None:
     review_dir(name).mkdir(parents=True, exist_ok=True)
+    samples_dir(name).mkdir(parents=True, exist_ok=True)
     for split in ("train", "val"):
         (dataset_dir(name) / "images" / split).mkdir(parents=True, exist_ok=True)
         (dataset_dir(name) / "labels" / split).mkdir(parents=True, exist_ok=True)
@@ -181,6 +195,71 @@ def load_manifest() -> dict[str, dict]:
 
 def append_manifest(rows: list[dict]) -> None:
     append_jsonl(TILE_MANIFEST_PATH, rows)
+
+
+# ---------- embeddings index (global, shared across every class and search.py/manual samples) ----------
+
+def load_index() -> tuple[np.ndarray, list[str]]:
+    vectors = np.load(INDEX_PATH) if INDEX_PATH.exists() else np.zeros((0, EMBED_DIM), dtype="float32")
+    ids = json.loads(INDEX_IDS_PATH.read_text()) if INDEX_IDS_PATH.exists() else []
+    return vectors, ids
+
+
+def save_index(vectors: np.ndarray, ids: list[str]) -> None:
+    EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    np.save(INDEX_PATH, vectors)
+    INDEX_IDS_PATH.write_text(json.dumps(ids))
+
+
+def add_to_index(tid: str, vector: np.ndarray) -> None:
+    """Add or replace one vector by id — used for manual samples (id `sample_<class>_<id>`),
+    which aren't grid tiles and so don't go through search.py's ring-loop embedding path."""
+    vectors, ids = load_index()
+    if tid in ids:
+        vectors[ids.index(tid)] = vector
+    else:
+        vectors = np.vstack([vectors, vector[None, :]]) if vectors.shape[0] else vector[None, :]
+        ids = ids + [tid]
+    save_index(vectors, ids)
+
+
+def remove_from_index(tid: str) -> None:
+    vectors, ids = load_index()
+    if tid not in ids:
+        return
+    i = ids.index(tid)
+    vectors = np.delete(vectors, i, axis=0)
+    ids = ids[:i] + ids[i + 1:]
+    save_index(vectors, ids)
+
+
+# ---------- samples (hand-drawn examples, see the /manual page) ----------
+
+def sample_index_id(class_name: str, sample_id: str) -> str:
+    return f"sample_{class_name}_{sample_id}"
+
+
+def load_samples(class_name: str) -> list[dict]:
+    return read_jsonl(samples_path(class_name))
+
+
+def append_sample(class_name: str, row: dict) -> None:
+    append_jsonl(samples_path(class_name), [row])
+
+
+def remove_sample(class_name: str, sample_id: str) -> dict | None:
+    """Removes the jsonl row and returns it (so the caller can also clean up its crop file/index
+    entry), or None if no such sample exists."""
+    samples = load_samples(class_name)
+    remaining, removed = [], None
+    for row in samples:
+        if row["id"] == sample_id:
+            removed = row
+        else:
+            remaining.append(row)
+    if removed is not None:
+        rewrite_jsonl(samples_path(class_name), remaining)
+    return removed
 
 
 # ---------- tile id / slippy-map math ----------

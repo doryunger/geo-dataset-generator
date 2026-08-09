@@ -7,7 +7,9 @@ Run with:
     uvicorn api:app --reload --app-dir scripts
 """
 import re
+import shutil
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from shapely.geometry import Polygon as ShapelyPolygon
 
 import common
 import reconcile
@@ -96,6 +99,45 @@ class ValidateBboxRequest(BaseModel):
     east: float
     north: float
     zoom: float
+
+
+class ManualSampleRequest(BaseModel):
+    class_name: str
+    lat: float
+    lon: float
+    zoom: float
+    west: float
+    south: float
+    east: float
+    north: float
+    polygon: list[list[float]]  # drawn ring [[lon,lat], ...] — exact label, no guessing needed
+
+
+class ManualSampleUpdateRequest(BaseModel):
+    polygon: list[list[float]]  # edited ring; bbox is recomputed from it, not passed separately
+
+
+class ManualValidateRequest(BaseModel):
+    class_name: str
+    lat: float
+    lon: float
+    zoom: float
+    n: int = 10
+    threshold: float = 0.75
+    max_fetches: int = 300
+
+
+class ManualPromoteRequest(BaseModel):
+    class_name: str
+    tile_id: str
+    # Passed straight from the validation result the candidate came from, rather than looked up
+    # server-side — run_validation deliberately never persists to labels.jsonl (it's read-only,
+    # repeatable any time with no side effects), so there's nothing to look up by tile_id alone.
+    label_polygon: list[list[list[float]]]
+
+
+class GeneratePackageRequest(BaseModel):
+    class_name: str
 
 
 @app.get("/api/config")
@@ -300,6 +342,205 @@ def pack_data(req: PackRequest):
     _jobs[job.id] = job
     threading.Thread(target=_run_pack_job, args=(job, req.epochs), daemon=True).start()
     return {"job_id": job.id}
+
+
+# ---------- /manual: hand-labeling-only page (see web/manual.html/.js) ----------
+
+def _sample_response(class_name: str, row: dict) -> dict:
+    return {
+        "id": row["id"], "class_name": class_name, "lon": row["lon"], "lat": row["lat"],
+        "polygon": row["polygon"],
+        "thumbnail_url": f"/api/manual/sample_image/{class_name}/{row['id']}",
+    }
+
+
+@app.post("/api/manual/samples")
+def create_manual_sample(req: ManualSampleRequest):
+    common.ensure_class_dirs(req.class_name)
+    z = round(req.zoom)
+    tileset, ext = common.DEFAULT_TILESET, common.DEFAULT_FORMAT
+    save_ext = "jpg" if ext.startswith("jpg") else "png"
+
+    sample_id = uuid.uuid4().hex[:12]
+    crop_path = common.fetch_and_crop_bbox(
+        z, req.west, req.south, req.east, req.north, tileset, ext,
+        common.samples_dir(req.class_name) / f"{sample_id}.{save_ext}",
+    )
+    normalized = common.polygon_to_normalized(req.polygon, req.west, req.south, req.east, req.north)
+    vec = _state["embedder"].embed(crop_path)
+    common.add_to_index(common.sample_index_id(req.class_name, sample_id), vec)
+
+    row = {
+        "id": sample_id, "class_name": req.class_name, "polygon": req.polygon,
+        "west": req.west, "south": req.south, "east": req.east, "north": req.north,
+        "lon": req.lon, "lat": req.lat, "zoom": z, "label_polygon": normalized,
+        "ext": crop_path.suffix.lstrip("."), "created_at": time.time(),
+    }
+    common.append_sample(req.class_name, row)
+    return _sample_response(req.class_name, row)
+
+
+@app.get("/api/manual/samples")
+def list_manual_samples(class_name: str):
+    return {"samples": [_sample_response(class_name, row) for row in common.load_samples(class_name)]}
+
+
+@app.patch("/api/manual/samples/{class_name}/{sample_id}")
+def update_manual_sample(class_name: str, sample_id: str, req: ManualSampleUpdateRequest):
+    """After an edit-mode change (vertices dragged/added/removed): bbox is recomputed from the
+    edited ring's own extent, the crop is regenerated against that new bbox, and the label is
+    re-normalized — keeps the crop and its label consistent with whatever shape now exists,
+    regardless of how much the edit changed it."""
+    samples = common.load_samples(class_name)
+    row = next((r for r in samples if r["id"] == sample_id), None)
+    if row is None:
+        raise HTTPException(404, "Sample not found")
+
+    lons = [p[0] for p in req.polygon]
+    lats = [p[1] for p in req.polygon]
+    west, east, south, north = min(lons), max(lons), min(lats), max(lats)
+
+    tileset, ext = common.DEFAULT_TILESET, common.DEFAULT_FORMAT
+    crop_path = common.fetch_and_crop_bbox(
+        row["zoom"], west, south, east, north, tileset, ext,
+        common.samples_dir(class_name) / f"{sample_id}.{row['ext']}",
+    )
+    normalized = common.polygon_to_normalized(req.polygon, west, south, east, north)
+    vec = _state["embedder"].embed(crop_path)
+    common.add_to_index(common.sample_index_id(class_name, sample_id), vec)
+
+    row.update({
+        "polygon": req.polygon, "west": west, "south": south, "east": east, "north": north,
+        "label_polygon": normalized, "ext": crop_path.suffix.lstrip("."),
+    })
+    common.rewrite_jsonl(common.samples_path(class_name), [r if r["id"] != sample_id else row for r in samples])
+    return _sample_response(class_name, row)
+
+
+@app.delete("/api/manual/samples/{class_name}/{sample_id}")
+def delete_manual_sample(class_name: str, sample_id: str):
+    row = common.remove_sample(class_name, sample_id)
+    if row is None:
+        return {"deleted": False}
+    crop = common.samples_dir(class_name) / f"{sample_id}.{row['ext']}"
+    crop.unlink(missing_ok=True)
+    common.remove_from_index(common.sample_index_id(class_name, sample_id))
+    return {"deleted": True}
+
+
+@app.get("/api/manual/sample_image/{class_name}/{sample_id}")
+def manual_sample_image(class_name: str, sample_id: str):
+    match = next(common.samples_dir(class_name).glob(f"{sample_id}.*"), None)
+    if match is None:
+        raise HTTPException(404, "Sample image not found")
+    media_type = "image/png" if match.suffix.lower().startswith(".png") else "image/jpeg"
+    # Unlike the shared tile cache, a sample's crop can be regenerated in place after an edit
+    # (same URL, new bytes) -- no-store so the browser never shows a stale thumbnail post-edit.
+    return FileResponse(match, media_type=media_type, headers={"Cache-Control": "no-store"})
+
+
+def _build_validate_response(class_name: str, result: search.ValidationResult) -> dict:
+    return {
+        "z": result.z, "lon": result.lon, "lat": result.lat,
+        "exemplar_count": result.exemplar_count,
+        "fetched_count": result.fetched_count,
+        "stopped_reason": result.stopped_reason,
+        "candidates": [
+            {
+                "tile_id": c["tile_id"], "similarity": c["similarity"],
+                "thumbnail_url": f"/api/tile_image/{class_name}/{c['tile_id']}",
+                "lat": (c["north"] + c["south"]) / 2, "lon": (c["west"] + c["east"]) / 2,
+                "label_polygon": c.get("label_polygon"),
+            }
+            for c in result.candidates
+        ],
+    }
+
+
+def _run_validate_job(job: Job, req: ManualValidateRequest) -> None:
+    try:
+        def on_progress(fetched: int, found: int) -> None:
+            job.progress = {"fetched_count": fetched, "candidates_found": found}
+
+        result = search.run_validation(
+            req.class_name, _state["embedder"], _state["auto_labeler"],
+            lon=req.lon, lat=req.lat, zoom=req.zoom,
+            n=req.n, threshold=req.threshold, max_fetches=req.max_fetches,
+            on_progress=on_progress, should_abort=lambda: job.abort_requested,
+        )
+        job.result = _build_validate_response(req.class_name, result)
+        job.status = "aborted" if result.stopped_reason == "aborted" else "done"
+    except Exception as e:
+        job.status = "error"
+        job.error = str(e)
+
+
+@app.post("/api/manual/validate")
+def manual_validate(req: ManualValidateRequest):
+    job = Job("validate")
+    _jobs[job.id] = job
+    threading.Thread(target=_run_validate_job, args=(job, req), daemon=True).start()
+    return {"job_id": job.id}
+
+
+@app.post("/api/manual/promote")
+def manual_promote(req: ManualPromoteRequest):
+    """Turns a validation candidate into a real sample, using its already-computed auto-guessed
+    label (see auto_labeler.py) instead of requiring a manual redraw — an explicit opt-in action,
+    not automatic, since the whole point of /manual is that examples are normally hand-drawn."""
+    if not _TILE_ID_RE.match(req.tile_id):
+        raise HTTPException(400, "Invalid tile_id")
+    if not req.label_polygon:
+        raise HTTPException(400, "No auto-guessed label for this candidate")
+    label_polygons = req.label_polygon
+    src = next(common.TILE_IMAGES_DIR.glob(f"{req.tile_id}.*"), None)
+    if src is None:
+        raise HTTPException(404, "Candidate tile not found in cache")
+
+    z, x, y = (int(v) for v in req.tile_id.split("_"))
+    bounds = common.tile_bounds(z, x, y)
+    # A candidate can have more than one labeled region (see auto_labeler.py) -- a sample is one
+    # polygon, so take the largest region as the one being promoted.
+    largest = max(label_polygons, key=lambda poly: ShapelyPolygon(poly).area)
+    polygon = [
+        [bounds["west"] + x_ * (bounds["east"] - bounds["west"]), bounds["north"] - y_ * (bounds["north"] - bounds["south"])]
+        for x_, y_ in largest
+    ]
+
+    common.ensure_class_dirs(req.class_name)
+    sample_id = uuid.uuid4().hex[:12]
+    dst = common.samples_dir(req.class_name) / f"{sample_id}{src.suffix}"
+    shutil.copy(src, dst)
+
+    row = {
+        "id": sample_id, "class_name": req.class_name, "polygon": polygon,
+        "west": bounds["west"], "south": bounds["south"], "east": bounds["east"], "north": bounds["north"],
+        "lon": (bounds["west"] + bounds["east"]) / 2, "lat": (bounds["south"] + bounds["north"]) / 2,
+        "zoom": z, "label_polygon": largest, "ext": dst.suffix.lstrip("."),
+        "created_at": time.time(), "promoted_from": req.tile_id,
+    }
+    common.append_sample(req.class_name, row)
+
+    vectors, ids = common.load_index()
+    vec = vectors[ids.index(req.tile_id)] if req.tile_id in ids else _state["embedder"].embed(dst)
+    common.add_to_index(common.sample_index_id(req.class_name, sample_id), vec)
+    # Marked confirmed purely for dedup — so future searches/validation runs don't re-suggest it.
+    common.set_registry_status(req.class_name, {req.tile_id: {"status": "confirmed", "round": 0}})
+
+    return _sample_response(req.class_name, row)
+
+
+@app.post("/api/manual/generate_package")
+def generate_package(req: GeneratePackageRequest):
+    try:
+        return reconcile.generate_package(req.class_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/manual")
+def manual_page():
+    return FileResponse(WEB_DIR / "manual.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")

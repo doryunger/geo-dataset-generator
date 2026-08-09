@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Manual Dataset Collector</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.css" rel="stylesheet" />
+  <script src="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="sidebar">
+    <h1>Manual Collector</h1>
+
+    <label for="class-select">Class</label>
+    <select id="class-select">
+      <option value="__new__">+ New class</option>
+    </select>
+    <input id="class-new-input" type="text" placeholder="New class name" autocomplete="off" style="display:none" />
+
+    <div id="tab-bar">
+      <button id="tab-btn-samples" class="tab-btn active">Samples</button>
+      <button id="tab-btn-validation" class="tab-btn">Validation</button>
+    </div>
+
+    <div id="samples-tab" class="tab-panel">
+      <p class="hint">Draw a shape (polygon tool, top-left of the map) to add a sample. Double-click an existing shape to edit it.</p>
+      <div id="samples-list"></div>
+      <hr />
+      <button id="generate-package-btn">Generate Package</button>
+      <div id="generate-package-status"></div>
+    </div>
+
+    <div id="validation-tab" class="tab-panel" style="display:none">
+      <button id="open-validation-modal-btn">Run Validation</button>
+      <button id="abort-validation-btn" class="danger" style="display:none">Abort</button>
+      <div id="validation-status"></div>
+
+      <div id="validation-results"></div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="validation-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <label for="validation-zoom-input">Zoom level</label>
+      <input id="validation-zoom-input" type="number" value="17" min="1" max="22" step="1" />
+
+      <label for="validation-threshold-input">Similarity threshold</label>
+      <input id="validation-threshold-input" type="number" value="0.75" min="0" max="1" step="0.01" />
+
+      <label for="validation-max-fetches-input">Search budget (max tiles)</label>
+      <input id="validation-max-fetches-input" type="number" value="300" min="10" step="10" />
+
+      <label>Start position</label>
+      <div id="validation-position-display" class="hint">Not set</div>
+      <button id="validation-pick-position-btn" class="secondary">Pick on Map</button>
+
+      <div class="modal-actions">
+        <button id="validation-modal-cancel" class="secondary">Cancel</button>
+        <button id="validation-modal-run" disabled>Run Validation</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="warning-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <p id="warning-modal-text"></p>
+      <div class="modal-actions">
+        <button id="warning-modal-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/manual.js"></script>
+</body>
+</html>
