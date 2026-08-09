@@ -1,0 +1,11 @@
+requests
+torch
+transformers
+pillow
+numpy
+pyyaml
+ultralytics
+opencv-python
+shapely
+fastapi
+uvicorn

@@ -1,0 +1,134 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; font-family: -apple-system, sans-serif; }
+
+/* mapbox-gl-draw's controls use "mapboxgl-ctrl*" class names (built for Mapbox GL JS), but
+   MapLibre's own CSS only re-enables click-through (pointer-events) on its own "maplibregl-ctrl*"
+   names, leaving the draw control's ancestor container at pointer-events:none — so without this,
+   clicks silently fall through to the map canvas underneath and the draw buttons do nothing. */
+.mapboxgl-ctrl-group, .mapboxgl-ctrl {
+  pointer-events: auto;
+}
+
+#sidebar {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 340px;
+  z-index: 1;
+  background: white;
+  padding: 16px;
+  overflow-y: auto;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+}
+
+#map { position: absolute; top: 0; right: 0; bottom: 0; left: 340px; }
+
+h1 { font-size: 18px; margin: 0 0 12px; }
+
+label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+
+.hint { font-size: 13px; color: #666; margin: 0 0 12px; }
+
+input[type="number"] {
+  width: 100%; padding: 8px; margin-bottom: 12px;
+  border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+}
+
+button {
+  width: 100%; padding: 10px; margin-bottom: 8px;
+  border: none; border-radius: 4px; font-size: 14px; font-weight: 600;
+  cursor: pointer; background: #1a73e8; color: white;
+}
+button:disabled { background: #aaa; cursor: not-allowed; }
+button:hover:not(:disabled) { background: #1558b0; }
+button.danger { background: #e74c3c; }
+button.danger:hover:not(:disabled) { background: #c0392b; }
+
+#tab-bar { display: flex; gap: 4px; margin-bottom: 16px; }
+.tab-btn {
+  flex: 1; background: #eee; color: #333; margin-bottom: 0;
+  border-radius: 4px 4px 0 0;
+}
+.tab-btn.active { background: #1a73e8; color: white; }
+.tab-btn:hover:not(.active) { background: #ddd; }
+
+#manage-class-select {
+  width: 100%; padding: 8px; margin-bottom: 12px;
+  border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+}
+
+.round-section {
+  border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin-bottom: 10px;
+}
+.round-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; font-weight: 600; margin-bottom: 6px;
+}
+.round-header button {
+  width: auto; padding: 4px 8px; font-size: 11px; margin-bottom: 0;
+  background: #e74c3c;
+}
+.round-thumbs {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;
+}
+.round-thumb { position: relative; border-radius: 4px; overflow: hidden; }
+.round-thumb img { width: 100%; display: block; }
+.round-thumb button {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0;
+  font-size: 12px; line-height: 18px; margin: 0; border-radius: 50%;
+  background: rgba(231, 76, 60, 0.9);
+}
+.pending-section { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ccc; }
+.pending-thumb { border: 3px solid #2ecc71; cursor: pointer; }
+.pending-thumb.rejected { border-color: #e74c3c; opacity: 0.45; }
+.pending-section button { margin-top: 6px; }
+
+#pack-status { font-size: 13px; color: #666; min-height: 18px; margin-bottom: 8px; }
+
+#status { font-size: 13px; color: #666; min-height: 18px; margin-bottom: 8px; }
+
+#seed-info { font-size: 12px; color: #444; margin-bottom: 8px; }
+
+#results {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.thumb {
+  position: relative;
+  border: 3px solid #2ecc71; /* kept by default */
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.thumb.rejected { border-color: #e74c3c; opacity: 0.45; }
+.thumb img { width: 100%; display: block; }
+.thumb .sim {
+  position: absolute; bottom: 2px; right: 4px;
+  background: rgba(0,0,0,0.6); color: white; font-size: 10px; padding: 1px 4px; border-radius: 2px;
+}
+.label-overlay {
+  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+}
+.label-overlay polygon {
+  fill: rgba(46, 204, 113, 0.28); stroke: #2ecc71; stroke-width: 0.008;
+}
+
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 10;
+  background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-box {
+  background: white; padding: 20px; border-radius: 8px; width: 280px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.modal-box input {
+  width: 100%; padding: 8px; margin: 4px 0 12px;
+  border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+}
+.modal-actions { display: flex; gap: 8px; }
+.modal-actions button { margin-bottom: 0; }
+button.secondary { background: #eee; color: #333; }
+button.secondary:hover { background: #ddd; }

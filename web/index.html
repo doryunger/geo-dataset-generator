@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Dataset Collector</title>
+  <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.css" rel="stylesheet" />
+  <script src="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="sidebar">
+    <h1>Dataset Collector</h1>
+
+    <div id="tab-bar">
+      <button id="tab-btn-search" class="tab-btn active">Search</button>
+      <button id="tab-btn-manage" class="tab-btn">Manage Examples</button>
+    </div>
+
+    <div id="search-tab" class="tab-panel">
+      <label for="search-zoom-input">Zoom level</label>
+      <input id="search-zoom-input" type="number" value="17" min="1" max="22" step="1" />
+
+      <label for="threshold-input">Similarity threshold</label>
+      <input id="threshold-input" type="number" value="0.75" min="0" max="1" step="0.01" />
+
+      <label for="max-fetches-input">Search budget (max tiles)</label>
+      <input id="max-fetches-input" type="number" value="300" min="10" step="10" />
+
+      <button id="collect-btn" disabled>Find Examples</button>
+      <button id="abort-btn" class="danger" style="display:none">Abort Search</button>
+      <div id="status"></div>
+
+      <div id="seed-info"></div>
+
+      <div id="results"></div>
+
+      <button id="confirm-btn" style="display:none">Confirm Round</button>
+    </div>
+
+    <div id="manage-tab" class="tab-panel" style="display:none">
+      <label for="manage-class-select">Class</label>
+      <select id="manage-class-select">
+        <option value="">Select a class...</option>
+      </select>
+
+      <div id="manage-rounds"></div>
+
+      <hr />
+      <label for="pack-epochs-input">Pack Data — epochs per class</label>
+      <input id="pack-epochs-input" type="number" value="20" min="1" step="1" />
+      <p class="hint">Trains one .pt per class from its current dataset. No GPU on this machine — expect this to be slow.</p>
+      <button id="pack-btn">Pack Data</button>
+      <button id="pack-abort-btn" class="danger" style="display:none">Abort Pack</button>
+      <div id="pack-status"></div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="class-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <label for="class-modal-select">Object class</label>
+      <select id="class-modal-select">
+        <option value="__new__">+ New class</option>
+      </select>
+      <input id="class-modal-input" placeholder="New class name" autocomplete="off" style="display:none" />
+      <div class="modal-actions">
+        <button id="class-modal-cancel" class="secondary">Cancel</button>
+        <button id="class-modal-ok">Label Shape</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="warning-modal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <p id="warning-modal-text"></p>
+      <div class="modal-actions">
+        <button id="warning-modal-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

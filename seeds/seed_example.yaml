@@ -1,0 +1,6 @@
+# Copy this file, point it at a real Mapbox satellite tile URL you know contains a fence.
+# The URL must be a literal Mapbox Raster Tiles API tile (v4/{tileset}/{z}/{x}/{y}[@2x].{ext}),
+# e.g. from the Mapbox Static Tiles / Raster Tiles API under your enterprise plan.
+# Omit access_token here — it's always injected from the MAPBOX_ACCESS_TOKEN env var and
+# stripped from the URL if present, so seed files never need to hold the real token.
+tile_url: "https://api.mapbox.com/v4/mapbox.satellite/17/38210/50330@2x.jpg90"

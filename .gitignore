@@ -1,0 +1,23 @@
+# Generated/fetched data — not source-controlled (size + Mapbox licensing + it's all
+# reconstructible from a fresh search, none of it is hand-authored).
+tiles/
+embeddings/
+models/
+classes/
+.scratch/
+
+# Pretrained checkpoints downloaded by ultralytics/scripts on first run.
+*.pt
+
+# Secrets — seed files may get pasted with a real access_token in the URL by mistake.
+.env
+seeds/*.yaml
+!seeds/seed_example.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editors/OS
+.DS_Store
