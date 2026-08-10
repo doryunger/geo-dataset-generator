@@ -1,3 +1,20 @@
+# Setup / deploy to a new machine
+
+Only two things are machine-specific and can't be reconstructed: the code, and `.env`
+(`MAPBOX_ACCESS_TOKEN=...`). Everything else — `.venv/`, the pretrained `*.pt` checkpoints,
+and the generated data dirs (`tiles/`, `embeddings/`, `models/`, `classes/`, `.scratch/`) —
+is either reinstalled by `install.sh` or created lazily by the app on first use. None of it
+needs to be copied.
+
+```
+./install.sh                                          # creates .venv, installs requirements.txt
+set -a && source .env && set +a
+.venv/bin/uvicorn api:app --app-dir scripts            # serves the UI + API on :8000
+```
+
+`ultralytics` auto-downloads its base checkpoint (`yolo11n-seg.pt`) the first time `train.py`
+runs a fresh class — no manual step needed.
+
 # Directory layout
 
 ## Global (shared across every class)
