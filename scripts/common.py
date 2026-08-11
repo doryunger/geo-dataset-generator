@@ -62,8 +62,22 @@ def review_dir(name: str) -> Path:
     return class_dir(name) / "review"
 
 
+def validation_dir(name: str) -> Path:
+    """Browsable copies of /manual validation candidates that scored a real label -- unlike
+    review/, this isn't round-numbered since validation is a repeatable, read-only check (see
+    run_validation), not a production search round."""
+    return class_dir(name) / "validation"
+
+
 def dataset_dir(name: str) -> Path:
     return class_dir(name) / "dataset"
+
+
+def obb_dataset_dir(name: str) -> Path:
+    """Deliberately separate from dataset_dir() -- oriented-bounding-box training data (see
+    obb.py) is a different task/label format (rotated rectangles, not segmentation polygons)
+    built from the same samples.jsonl, not a variant of the seg dataset."""
+    return class_dir(name) / "dataset_obb"
 
 
 def samples_dir(name: str) -> Path:
@@ -117,6 +131,23 @@ def stage_review_candidate(
         (dst_dir / f"{tile_id}.txt").write_text(yolo_seg_lines(label_polygons))
         draw_polygon_overlay(src_path, label_polygons, dst_dir / f"{tile_id}_labeled.jpg")
     return raw_dst
+
+
+def stage_validation_candidate(name: str, tile_id: str, src_path: Path, label_polygons: list[list[list[float]]]) -> Path:
+    """Same idea as stage_review_candidate, for /manual's validate instead of a production search
+    round: persists the tile that was found (raw, symlinked so the shared cache isn't duplicated
+    on disk) plus a real image file with the guessed polygon(s) actually burned onto it, under
+    classes/<name>/validation/ -- so a candidate stays inspectable on disk after the browser tab
+    closes, not just visible while /manual happens to be open. Only ever called with a real label
+    (validation only stages candidates the auto-labeler found something in)."""
+    dst_dir = validation_dir(name)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    raw_dst = dst_dir / f"{tile_id}{src_path.suffix}"
+    if not raw_dst.exists():
+        raw_dst.symlink_to(src_path.resolve())
+    (dst_dir / f"{tile_id}.txt").write_text(yolo_seg_lines(label_polygons))
+    draw_polygon_overlay(src_path, label_polygons, dst_dir / f"{tile_id}_labeled.jpg")
+    return dst_dir / f"{tile_id}_labeled.jpg"
 
 
 def ensure_class_dirs(name: str) -> None:
@@ -212,8 +243,9 @@ def save_index(vectors: np.ndarray, ids: list[str]) -> None:
 
 
 def add_to_index(tid: str, vector: np.ndarray) -> None:
-    """Add or replace one vector by id — used for manual samples (id `sample_<class>_<id>`),
-    which aren't grid tiles and so don't go through search.py's ring-loop embedding path."""
+    """Add or replace one vector by id — used for manual samples (id `sample_<class>_<id>`,
+    or `sample_<class>_<id>_t<n>` for a tile — see slice_for_embedding), which aren't grid
+    tiles and so don't go through search.py's ring-loop embedding path."""
     vectors, ids = load_index()
     if tid in ids:
         vectors[ids.index(tid)] = vector
@@ -235,8 +267,140 @@ def remove_from_index(tid: str) -> None:
 
 # ---------- samples (hand-drawn examples, see the /manual page) ----------
 
+# DINOv2's preprocessing resizes the shortest edge to 256px then center-crops to 224x224 --
+# a crop whose long edge is much bigger than its short edge (a fence line drawn tight around a
+# long thin shape, say) gets most of that long edge thrown away before the model ever sees it
+# (at 3:1 only ~28% of the long axis survives, at 8:1 only ~11%). Past this aspect ratio, slice
+# into overlapping square tiles along the long axis instead, so every part of the drawn shape
+# ends up embedded by some tile rather than discarded by a single lossy center-crop.
+SAMPLE_TILE_MAX_ASPECT = 1.5
+SAMPLE_TILE_OVERLAP = 0.25  # fraction of a tile's edge shared with its neighbor
+SAMPLE_TILE_EDGE_PX = 224  # DINOv2's own crop size once its processor resizes/crops -- a tile
+                            # bigger than this buys nothing extra. Fixed instead of "this crop's
+                            # own short axis": a bend's bbox can be much taller than the fence
+                            # actually is at any single point along it (see aee3c19a3df5 -- the
+                            # bbox's full 331px height spans from grass down into rows of parked
+                            # cars), and a tile forced open to match that height can't avoid the
+                            # bbox's dead interior even while centered on the path. A small fixed
+                            # footprint leaves real room to hug the path in both axes instead.
+
+
+def _points_evenly_along_path(pts: list[tuple[float, float]], step: float) -> list[tuple[float, float]]:
+    """Points spaced every `step` distance along a polyline (pixel coords), walking its actual
+    segments end to end -- always includes the exact final point, however the spacing lands."""
+    if len(pts) < 2:
+        return pts
+    cumulative = [0.0]
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        cumulative.append(cumulative[-1] + math.hypot(x1 - x0, y1 - y0))
+    total = cumulative[-1]
+    if total < 1e-6:
+        return [pts[0]]
+
+    out, target, seg = [], 0.0, 0
+    while target < total:
+        while seg < len(pts) - 2 and cumulative[seg + 1] < target:
+            seg += 1
+        seg_len = cumulative[seg + 1] - cumulative[seg]
+        frac = (target - cumulative[seg]) / seg_len if seg_len > 1e-9 else 0.0
+        x0, y0 = pts[seg]
+        x1, y1 = pts[seg + 1]
+        out.append((x0 + (x1 - x0) * frac, y0 + (y1 - y0) * frac))
+        target += step
+    out.append(pts[-1])
+    return out
+
+
+def slice_for_embedding(image: Image.Image, normalized_ring: list[list[float]]) -> list[Image.Image]:
+    """Whole image (as [image]) if its aspect ratio is within SAMPLE_TILE_MAX_ASPECT, else a run
+    of overlapping square tiles centered at regular intervals *along the drawn shape's own path*
+    (normalized_ring: the label polygon, in the same [0,1]-of-the-crop coordinates produced by
+    polygon_to_normalized) -- not a naive grid across the bounding box's long axis.
+
+    A hand-drawn fence label is usually a thin ribbon polygon, and a ribbon can bend: it might
+    trace a fence running along one edge of a parking lot, jog around a corner, then continue
+    along another edge. Gridding the bounding box blindly would place some tiles in the box's
+    dead interior (e.g. squarely in the middle of the lot) that never touch the actual fence --
+    embedding those as if they were valid exemplars would contaminate the class with whatever's
+    actually sitting there instead. Walking the polygon's own vertices keeps every tile anchored
+    on real drawn content, however much the shape bends."""
+    w, h = image.size
+    short, long_ = min(w, h), max(w, h)
+    if short == 0 or long_ / short <= SAMPLE_TILE_MAX_ASPECT:
+        return [image]
+
+    tile = min(SAMPLE_TILE_EDGE_PX, short)
+    step = max(1, round(tile * (1 - SAMPLE_TILE_OVERLAP)))
+    pts = [(x * w, y * h) for x, y in normalized_ring]
+    centers = _points_evenly_along_path(pts, step) if len(pts) >= 2 else [(w / 2, h / 2)]
+
+    tiles, seen = [], set()
+    for cx, cy in centers:
+        left = min(max(cx - tile / 2, 0), w - tile)
+        top = min(max(cy - tile / 2, 0), h - tile)
+        left, top = int(round(left)), int(round(top))
+        if (left, top) in seen:  # a ribbon's out-and-back edges can land on the same window twice
+            continue
+        seen.add((left, top))
+        tiles.append(image.crop((left, top, left + tile, top + tile)))
+    return tiles
+
+
 def sample_index_id(class_name: str, sample_id: str) -> str:
     return f"sample_{class_name}_{sample_id}"
+
+
+def sample_index_ids(class_name: str, sample_id: str, count: int) -> list[str]:
+    """id(s) a sample's embedding(s) are stored under — one id if it wasn't tiled, else one
+    per tile (`..._t0`, `..._t1`, ...), so a class's exemplars can include every tile without
+    the rest of the index (grid tiles, other samples) needing to know tiling exists at all."""
+    base = sample_index_id(class_name, sample_id)
+    if count <= 1:
+        return [base]
+    return [f"{base}_t{i}" for i in range(count)]
+
+
+def index_vectors_for_sample(vectors: np.ndarray, ids: list[str], class_name: str, sample_id: str) -> list[np.ndarray]:
+    """All embedding(s) currently indexed for one sample — the single whole-crop vector, or
+    every tile vector if it was sliced."""
+    base = sample_index_id(class_name, sample_id)
+    prefix = base + "_t"
+    return [vectors[i] for i, tid in enumerate(ids) if tid == base or tid.startswith(prefix)]
+
+
+def remove_sample_from_index(class_name: str, sample_id: str) -> None:
+    """Removes every vector indexed for this sample, tiled or not -- use instead of
+    remove_from_index(sample_index_id(...)) so a re-tiled update or a delete doesn't leave
+    orphaned tile vectors behind."""
+    base = sample_index_id(class_name, sample_id)
+    prefix = base + "_t"
+    vectors, ids = load_index()
+    keep = [i for i, tid in enumerate(ids) if tid != base and not tid.startswith(prefix)]
+    if len(keep) == len(ids):
+        return
+    save_index(vectors[keep], [ids[i] for i in keep])
+
+
+def embed_and_index_sample(
+    embedder, class_name: str, sample_id: str, crop_path: Path, zoom: int,
+    west: float, south: float, east: float, north: float, polygon: list[list[float]],
+) -> int:
+    """Embeds a sample's saved crop for use as a search/validation exemplar: first GSD-normalized
+    (see resample_to_target_gsd -- zoom/the bbox's own center latitude are used to work out its
+    native ground resolution), then tiled along the drawn polygon's own path if still too
+    elongated for DINOv2 to see all of it in one center-crop (see slice_for_embedding -- west/
+    south/east/north/polygon are only needed to work out where that path falls in the crop's
+    pixel space). Replaces any previously indexed vector(s) for this sample (a re-drawn edit may
+    tile differently than the original). Returns the tile count (1 if not tiled)."""
+    remove_sample_from_index(class_name, sample_id)
+    normalized_ring = polygon_to_normalized(polygon, west, south, east, north)
+    lat = (south + north) / 2
+    with Image.open(crop_path) as img:
+        normalized = resample_to_target_gsd(img.convert("RGB"), meters_per_pixel(zoom, lat))
+        tiles = slice_for_embedding(normalized, normalized_ring)
+        for tid, tile in zip(sample_index_ids(class_name, sample_id, len(tiles)), tiles):
+            add_to_index(tid, embedder.embed_image(tile))
+    return len(tiles)
 
 
 def load_samples(class_name: str) -> list[dict]:
@@ -260,6 +424,39 @@ def remove_sample(class_name: str, sample_id: str) -> dict | None:
     if removed is not None:
         rewrite_jsonl(samples_path(class_name), remaining)
     return removed
+
+
+# ---------- sample changelog (created/updated/deleted audit trail) ----------
+
+def sample_changelog_path(class_name: str) -> Path:
+    return class_dir(class_name) / "sample_changelog.jsonl"
+
+
+def log_sample_change(class_name: str, event: str, sample_id: str) -> None:
+    """Append-only audit trail of sample lifecycle events -- lets package generation
+    (reconcile.generate_package, obb.generate_obb_package) report what's changed since it last
+    ran, instead of silently going stale with no visibility (see: dataset/ and dataset_obb/
+    both still holding copies of samples deleted from the UI, discovered only by manually
+    diffing folder contents against samples.jsonl)."""
+    append_jsonl(sample_changelog_path(class_name), [
+        {"event": event, "sample_id": sample_id, "timestamp": time.time()},
+    ])
+
+
+def load_sample_changelog(class_name: str) -> list[dict]:
+    return read_jsonl(sample_changelog_path(class_name))
+
+
+def changes_since_marker(class_name: str, marker_path: Path) -> list[dict]:
+    """Changelog entries newer than marker_path's last-write time (0 i.e. "everything" if the
+    marker doesn't exist yet, e.g. a package that's never been generated)."""
+    last_ts = float(marker_path.read_text()) if marker_path.exists() else 0.0
+    return [e for e in load_sample_changelog(class_name) if e["timestamp"] > last_ts]
+
+
+def touch_marker(marker_path: Path) -> None:
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(time.time()))
 
 
 # ---------- tile id / slippy-map math ----------
@@ -312,6 +509,40 @@ def tile_bounds(z: int, x: int, y: int) -> dict:
 def meters_per_pixel(z: int, lat: float, tile_px: int = TILE_PX) -> float:
     """Ground resolution at zoom z and latitude lat, for a tile_px-wide tile."""
     return (156543.03392 * math.cos(math.radians(lat)) / (2 ** z)) * (256 / tile_px)
+
+
+# DINOv2's own preprocessing (see embedder.py) only resizes in pixel space -- it has no notion
+# of ground scale, so two crops of the same real-world object fetched at different zooms embed
+# as different-looking textures purely because of which zoom happened to be used. This is the
+# median ground resolution across this project's existing hand-drawn samples (zoom 18-20,
+# mostly 19) -- fixed as one project-wide constant so every image handed to the embedder,
+# sample or candidate tile alike, represents the same real-world distance per pixel regardless
+# of its native capture zoom, making their embeddings actually comparable.
+TARGET_GSD_M = 0.125
+GSD_RESAMPLE_TOLERANCE = 0.02  # skip resampling if already within 2% of target -- avoids a
+                               # pointless resample (and its slight softening) for the common
+                               # case of imagery already fetched near the canonical zoom
+
+
+def resample_to_target_gsd(image: Image.Image, native_gsd_m: float) -> Image.Image:
+    """Rescales image so each pixel represents TARGET_GSD_M of ground distance, regardless of
+    native_gsd_m (the actual resolution it was fetched/drawn at) -- run this before handing any
+    image to the embedder so DINOv2 always sees a consistent real-world footprint per pixel."""
+    scale = native_gsd_m / TARGET_GSD_M
+    if abs(scale - 1.0) < GSD_RESAMPLE_TOLERANCE:
+        return image
+    w, h = image.size
+    new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+    return image.resize((new_w, new_h), Image.LANCZOS)
+
+
+def gsd_normalized_tile_image(path: Path, z: int, x: int, y: int) -> Image.Image:
+    """Loads a fetched grid tile and GSD-normalizes it -- shared by run_search/run_validation's
+    get_or_embed so every candidate tile is embedded on the same footing as samples."""
+    bounds = tile_bounds(z, x, y)
+    lat = (bounds["north"] + bounds["south"]) / 2
+    with Image.open(path) as img:
+        return resample_to_target_gsd(img.convert("RGB"), meters_per_pixel(z, lat))
 
 
 def parse_tile_url(url: str) -> tuple[int, int, int, str, str]:

@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""
+Train (or retrain) an OBB (oriented bounding-box) model on a class's dataset_obb/ and save a
+versioned .pt -- deliberately separate from train.py (which fine-tunes YOLO-seg on dataset/),
+since OBB is a different task/label format built by obb.py, not a variant of the seg pipeline.
+
+Defaults to yolo11n-obb.pt, Ultralytics' own DOTAv1 (aerial imagery)-pretrained checkpoint --
+unlike yolo11n-seg.pt (COCO-pretrained, confirmed via direct testing to have zero prior exposure
+to nadir/aerial views for any object, not just fence), this base model has already seen this
+general viewing angle, so fine-tuning only has to learn "what is a fence" rather than also
+"what does an aerial photo even look like."
+
+Usage:
+    python scripts/train_obb.py --class fence --version v1
+"""
+import argparse
+import json
+import shutil
+
+from ultralytics import YOLO
+
+import common
+import obb
+
+
+def train_obb_class(
+    class_name: str, version: str, base_model: str = "yolo11n-obb.pt", epochs: int = 100, imgsz: int = 1280,
+) -> dict:
+    data_yaml = obb.ensure_obb_data_yaml(class_name)
+    model = YOLO(base_model)
+
+    # Named/namespaced separately from train.py's fence_{version}(.pt|_run) so the two task
+    # types never collide or get confused for one another in models/.
+    common.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    results = model.train(
+        data=str(data_yaml), epochs=epochs, imgsz=imgsz,
+        project=str(common.MODELS_DIR), name=f"{class_name}_obb_{version}_run", exist_ok=True,
+    )
+
+    best_pt = results.save_dir / "weights" / "best.pt"
+    out_pt = common.MODELS_DIR / f"{class_name}_obb_{version}.pt"
+    shutil.copy(best_pt, out_pt)
+
+    metrics = {
+        "class": class_name, "version": version, "base_model": base_model,
+        "epochs": epochs, "imgsz": imgsz, "metrics": getattr(results, "results_dict", {}),
+    }
+    metrics_path = common.MODELS_DIR / f"{class_name}_obb_{version}_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2))
+
+    return {"class": class_name, "version": version, "path": str(out_pt), "metrics_path": str(metrics_path)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--class", dest="class_name", required=True, help="Object class name")
+    parser.add_argument("--version", required=True, help="Version tag for the output file, e.g. v1")
+    parser.add_argument("--base-model", default="yolo11n-obb.pt", help="Pretrained checkpoint to fine-tune from")
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--imgsz", type=int, default=1280)
+    args = parser.parse_args()
+
+    result = train_obb_class(args.class_name, args.version, args.base_model, args.epochs, args.imgsz)
+    print(f"\nSaved {result['path']}")
+
+
+if __name__ == "__main__":
+    main()

@@ -22,6 +22,7 @@ import shutil
 from dataclasses import dataclass, field
 
 import numpy as np
+from PIL import Image
 
 import common
 
@@ -180,7 +181,9 @@ def run_search(
             return vectors[ids.index(tid)]
         path = common.fetch_tile(zz, xx, yy, tileset, ext)
         common.append_manifest([{"tile_id": tid, "z": zz, "x": xx, "y": yy, **common.tile_bounds(zz, xx, yy)}])
-        vec = embedder.embed(path)
+        # GSD-normalized (see common.resample_to_target_gsd) -- this cache is shared with
+        # run_validation's get_or_embed above, so both must embed a given tile_id identically.
+        vec = embedder.embed_image(common.gsd_normalized_tile_image(path, zz, xx, yy))
         vectors = np.vstack([vectors, vec[None, :]]) if vectors.shape[0] else vec[None, :]
         ids = ids + [tid]
         return vec
@@ -197,7 +200,11 @@ def run_search(
         save_ext = "jpg" if ext.startswith("jpg") else "png"
         scratch_path = common.SCRATCH_DIR / f"{class_name}_seed_{round_num}.{save_ext}"
         crop_path = common.fetch_and_crop_bbox(z, west, south, east, north, tileset, ext, scratch_path)
-        seed_vec = embedder.embed(crop_path)
+        with Image.open(crop_path) as seed_img:
+            seed_normalized = common.resample_to_target_gsd(
+                seed_img.convert("RGB"), common.meters_per_pixel(z, (south + north) / 2),
+            )
+        seed_vec = embedder.embed_image(seed_normalized)
 
         if polygon is not None:
             _save_seed_to_dataset(class_name, crop_path, polygon, west, south, east, north)
@@ -280,9 +287,7 @@ def run_validation(
     samples = common.load_samples(class_name)
     query_vectors = []
     for sample in samples:
-        sid = common.sample_index_id(class_name, sample["id"])
-        if sid in ids:
-            query_vectors.append(vectors[ids.index(sid)])
+        query_vectors.extend(common.index_vectors_for_sample(vectors, ids, class_name, sample["id"]))
     if not query_vectors:
         raise ValueError(f"'{class_name}' has no embedded samples yet — draw at least one on /manual first")
     query_matrix = np.vstack(query_vectors)
@@ -295,13 +300,18 @@ def run_validation(
             return vectors[ids.index(tid)]
         path = common.fetch_tile(zz, xx, yy, tileset, ext)
         common.append_manifest([{"tile_id": tid, "z": zz, "x": xx, "y": yy, **common.tile_bounds(zz, xx, yy)}])
-        vec = embedder.embed(path)
+        # GSD-normalized (see common.resample_to_target_gsd) so a candidate tile is embedded on
+        # the same real-world scale as the query samples, regardless of this run's zoom.
+        vec = embedder.embed_image(common.gsd_normalized_tile_image(path, zz, xx, yy))
         vectors = np.vstack([vectors, vec[None, :]]) if vectors.shape[0] else vec[None, :]
         ids = ids + [tid]
         return vec
 
     def is_excluded(tid: str) -> bool:
         return tid in registry
+
+    def stage_candidate(tid, candidate_path, label_polygons) -> None:
+        common.stage_validation_candidate(class_name, tid, candidate_path, label_polygons)
 
     def on_progress_and_persist(fetched_count, candidates_found) -> None:
         if on_progress:
@@ -312,7 +322,7 @@ def run_validation(
     accepted, fetched, stopped_reason = _ring_search(
         query_matrix, z, x0, y0, tileset, ext,
         threshold=threshold, max_fetches=max_fetches, n=n, auto_labeler=auto_labeler,
-        get_or_embed=get_or_embed, is_excluded=is_excluded,
+        get_or_embed=get_or_embed, is_excluded=is_excluded, stage_candidate=stage_candidate,
         on_progress=on_progress_and_persist, should_abort=should_abort,
     )
     common.save_index(vectors, ids)

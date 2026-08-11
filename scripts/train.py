@@ -28,7 +28,7 @@ def ensure_data_yaml(class_name: str):
     return data_yaml
 
 
-def train_class(class_name: str, version: str, base_model: str = "yolo11n-seg.pt", epochs: int = 100, imgsz: int = 640) -> dict:
+def train_class(class_name: str, version: str, base_model: str = "yolo11n-seg.pt", epochs: int = 100, imgsz: int = 1280) -> dict:
     data_yaml = ensure_data_yaml(class_name)
     model = YOLO(base_model)
 
@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--version", required=True, help="Version tag for the output file, e.g. v1")
     parser.add_argument("--base-model", default="yolo11n-seg.pt", help="Pretrained checkpoint to fine-tune from")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--imgsz", type=int, default=1280)
     args = parser.parse_args()
 
     result = train_class(args.class_name, args.version, args.base_model, args.epochs, args.imgsz)

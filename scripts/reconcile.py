@@ -9,6 +9,7 @@ Also owns browsing/deleting what's already in a class's dataset (Manage Examples
 example's file location, delete one example, or delete every confirmed example from a round.
 """
 import shutil
+from collections import Counter
 
 import common
 import train
@@ -136,10 +137,20 @@ def generate_package(class_name: str) -> dict:
     """Rebuilds dataset/images|labels/{train,val} from scratch out of samples.jsonl (see the
     /manual page's hand-drawn examples) — deterministic and safe to re-run any time samples are
     added, edited, or removed. Split: round-robin by sample order (every VAL_FRACTION-th -> val),
-    since manual sample ids aren't grid-aligned so split_for()'s tile-x-parity doesn't apply."""
+    since manual sample ids aren't grid-aligned so split_for()'s tile-x-parity doesn't apply.
+
+    Always does a full wipe-and-rebuild (see below), so a sample deleted from the UI is already
+    correctly excluded with no special handling -- changes_since_last_generation in the return
+    value is purely informational, telling the caller *why* this run's output might differ from
+    the last one (found the hard way: dataset/ and dataset_obb/ silently held copies of samples
+    deleted from the UI, only noticed by manually diffing folder contents against samples.jsonl)."""
     samples = common.load_samples(class_name)
     if not samples:
         raise ValueError(f"'{class_name}' has no samples yet")
+
+    marker = common.dataset_dir(class_name) / ".last_generated"
+    changes = common.changes_since_marker(class_name, marker)
+    change_counts = Counter(c["event"] for c in changes)
 
     for split in ("train", "val"):
         for kind in ("images", "labels"):
@@ -161,4 +172,5 @@ def generate_package(class_name: str) -> dict:
         counts[split] += 1
 
     train.ensure_data_yaml(class_name)
-    return {"class_name": class_name, **counts}
+    common.touch_marker(marker)
+    return {"class_name": class_name, **counts, "changes_since_last_generation": dict(change_counts)}

@@ -19,8 +19,7 @@ class Embedder:
         self.model.eval()
 
     @torch.no_grad()
-    def _forward(self, image_path):
-        image = Image.open(image_path).convert("RGB")
+    def _forward(self, image: Image.Image):
         inputs = self.processor(images=image, return_tensors="pt")
         outputs = self.model(**inputs)
         hidden = outputs.last_hidden_state[0]  # [1 + H*W, D]: CLS token + patch tokens
@@ -33,10 +32,15 @@ class Embedder:
 
     def embed(self, image_path) -> np.ndarray:
         """Whole-image summary vector (CLS token), L2-normalized — for cosine similarity search."""
-        cls, _ = self._forward(image_path)
+        return self.embed_image(Image.open(image_path).convert("RGB"))
+
+    def embed_image(self, image: Image.Image) -> np.ndarray:
+        """Same as embed(), but for an already-in-memory image (e.g. one tile of a sliced
+        sample crop) instead of a file on disk."""
+        cls, _ = self._forward(image)
         return cls
 
     def embed_with_patches(self, image_path):
         """(cls_vec [D], patch_grid [H,W,D]) — patch_grid retains rough spatial position,
         unlike cls_vec which deliberately summarizes the whole image into one point."""
-        return self._forward(image_path)
+        return self._forward(Image.open(image_path).convert("RGB"))

@@ -367,8 +367,10 @@ def create_manual_sample(req: ManualSampleRequest):
         common.samples_dir(req.class_name) / f"{sample_id}.{save_ext}",
     )
     normalized = common.polygon_to_normalized(req.polygon, req.west, req.south, req.east, req.north)
-    vec = _state["embedder"].embed(crop_path)
-    common.add_to_index(common.sample_index_id(req.class_name, sample_id), vec)
+    common.embed_and_index_sample(
+        _state["embedder"], req.class_name, sample_id, crop_path, z,
+        req.west, req.south, req.east, req.north, req.polygon,
+    )
 
     row = {
         "id": sample_id, "class_name": req.class_name, "polygon": req.polygon,
@@ -377,6 +379,7 @@ def create_manual_sample(req: ManualSampleRequest):
         "ext": crop_path.suffix.lstrip("."), "created_at": time.time(),
     }
     common.append_sample(req.class_name, row)
+    common.log_sample_change(req.class_name, "created", sample_id)
     return _sample_response(req.class_name, row)
 
 
@@ -406,14 +409,17 @@ def update_manual_sample(class_name: str, sample_id: str, req: ManualSampleUpdat
         common.samples_dir(class_name) / f"{sample_id}.{row['ext']}",
     )
     normalized = common.polygon_to_normalized(req.polygon, west, south, east, north)
-    vec = _state["embedder"].embed(crop_path)
-    common.add_to_index(common.sample_index_id(class_name, sample_id), vec)
+    common.embed_and_index_sample(
+        _state["embedder"], class_name, sample_id, crop_path, row["zoom"],
+        west, south, east, north, req.polygon,
+    )
 
     row.update({
         "polygon": req.polygon, "west": west, "south": south, "east": east, "north": north,
         "label_polygon": normalized, "ext": crop_path.suffix.lstrip("."),
     })
     common.rewrite_jsonl(common.samples_path(class_name), [r if r["id"] != sample_id else row for r in samples])
+    common.log_sample_change(class_name, "updated", sample_id)
     return _sample_response(class_name, row)
 
 
@@ -422,9 +428,10 @@ def delete_manual_sample(class_name: str, sample_id: str):
     row = common.remove_sample(class_name, sample_id)
     if row is None:
         return {"deleted": False}
+    common.log_sample_change(class_name, "deleted", sample_id)
     crop = common.samples_dir(class_name) / f"{sample_id}.{row['ext']}"
     crop.unlink(missing_ok=True)
-    common.remove_from_index(common.sample_index_id(class_name, sample_id))
+    common.remove_sample_from_index(class_name, sample_id)
     return {"deleted": True}
 
 
@@ -520,10 +527,11 @@ def manual_promote(req: ManualPromoteRequest):
         "created_at": time.time(), "promoted_from": req.tile_id,
     }
     common.append_sample(req.class_name, row)
-
-    vectors, ids = common.load_index()
-    vec = vectors[ids.index(req.tile_id)] if req.tile_id in ids else _state["embedder"].embed(dst)
-    common.add_to_index(common.sample_index_id(req.class_name, sample_id), vec)
+    common.log_sample_change(req.class_name, "created", sample_id)
+    common.embed_and_index_sample(
+        _state["embedder"], req.class_name, sample_id, dst, z,
+        bounds["west"], bounds["south"], bounds["east"], bounds["north"], polygon,
+    )
     # Marked confirmed purely for dedup — so future searches/validation runs don't re-suggest it.
     common.set_registry_status(req.class_name, {req.tile_id: {"status": "confirmed", "round": 0}})
 

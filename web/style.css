@@ -133,6 +133,27 @@ button.danger:hover:not(:disabled) { background: #c0392b; }
 button.secondary { background: #eee; color: #333; }
 button.secondary:hover { background: #ddd; }
 
+#lightbox-box {
+  position: relative;
+  line-height: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+#lightbox-box img { display: block; max-width: 90vw; max-height: 90vh; }
+#lightbox-box .sim {
+  position: absolute; bottom: 8px; right: 10px;
+  background: rgba(0,0,0,0.6); color: white; font-size: 13px; padding: 3px 7px; border-radius: 3px;
+}
+.lightbox-close {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(0,0,0,0.55); color: white;
+  border: none; font-size: 16px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.lightbox-close:hover { background: rgba(0,0,0,0.75); }
+
 /* /manual page */
 #samples-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .sample-row {

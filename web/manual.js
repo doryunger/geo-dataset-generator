@@ -42,6 +42,43 @@ function showWarning(text) {
   warningModal.style.display = "flex";
 }
 
+const lightboxModal = document.getElementById("lightbox-modal");
+const lightboxBox = document.getElementById("lightbox-box");
+
+function openLightbox(candidate) {
+  lightboxBox.innerHTML = "";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "lightbox-close";
+  closeBtn.textContent = "✕";
+  closeBtn.title = "Close";
+  closeBtn.addEventListener("click", closeLightbox);
+  lightboxBox.appendChild(closeBtn);
+
+  const img = document.createElement("img");
+  img.src = candidate.thumbnail_url;
+  lightboxBox.appendChild(img);
+
+  lightboxBox.insertAdjacentHTML("beforeend", labelOverlaySvg(candidate.label_polygon));
+
+  const sim = document.createElement("span");
+  sim.className = "sim";
+  sim.textContent = candidate.similarity.toFixed(2);
+  lightboxBox.appendChild(sim);
+
+  lightboxModal.style.display = "flex";
+}
+
+function closeLightbox() {
+  lightboxModal.style.display = "none";
+}
+
+lightboxModal.addEventListener("click", (e) => {
+  if (e.target === lightboxModal) closeLightbox(); // click on the backdrop, not the image itself
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && lightboxModal.style.display !== "none") closeLightbox();
+});
+
 function currentClassName() {
   return classSelect.value === "__new__" ? classNewInput.value.trim() : classSelect.value;
 }
@@ -433,7 +470,7 @@ async function startValidation(lon, lat) {
     } else if (!validationCandidates.length) {
       setValidationStatus(`No candidates found (checked ${job.result.fetched_count} tiles). Your samples may not generalize well from this location/threshold yet.`);
     } else {
-      setValidationStatus(`${validationCandidates.length} candidate(s) found from ${job.result.exemplar_count} sample(s), ${job.result.fetched_count} tile(s) checked.`);
+      setValidationStatus(`${validationCandidates.length} candidate(s) found from ${job.result.exemplar_count} exemplar(s), ${job.result.fetched_count} tile(s) checked.`);
     }
     renderValidationResults();
   } catch (err) {
@@ -466,6 +503,7 @@ function renderValidationResults() {
     thumb.className = "thumb";
     const overlay = labelOverlaySvg(c.label_polygon);
     thumb.innerHTML = `<img src="${c.thumbnail_url}" />${overlay}<span class="sim">${c.similarity.toFixed(2)}</span>`;
+    thumb.addEventListener("click", () => openLightbox(c));
     wrap.appendChild(thumb);
 
     const promoteBtn = document.createElement("button");
@@ -508,6 +546,7 @@ async function loadClasses() {
     classSelect.appendChild(opt);
   }
   if (classes.includes(current)) classSelect.value = current;
+  updateClassInputVisibility();
 }
 
 classSelect.addEventListener("change", () => {
