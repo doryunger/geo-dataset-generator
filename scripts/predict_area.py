@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
 Run a trained YOLO-seg model over the tiles around a hardcoded position and save its predictions
-as browsable files -- the trained-model equivalent of /manual's DINOv2 Validation tab. Same
-hardcoded-position-via-seed-yaml convention as find_candidates.py (see seeds/seed_example.yaml),
-but scores the actual downstream detector instead of embedding similarity, so you can eyeball how
-well a freshly trained model generalizes to a new area -- ideally one none of your samples came
-from, for a genuine held-out check.
+as browsable files.
 
 Usage:
     python scripts/predict_area.py --class fence --model models/fence_v1.pt \
@@ -23,21 +19,15 @@ import common
 def predict_area(class_name: str, model_path: str, tile_url: str, radius: int, conf: float, imgsz: int = 1280) -> dict:
     z, x0, y0, tileset, ext = common.parse_tile_url(tile_url)
     model = YOLO(model_path)
-    run_name = f"{common.tile_id(z, x0, y0)}_r{radius}"  # same area+radius always overwrites its
-                                                            # own subfolder; a different one gets
-                                                            # its own, instead of both mixing flat
+    run_name = f"{common.tile_id(z, x0, y0)}_r{radius}"
 
     tile_ids, paths, positions = [], [], []
     for x in range(x0 - radius, x0 + radius + 1):
         for y in range(y0 - radius, y0 + radius + 1):
             paths.append(common.fetch_tile(z, x, y, tileset, ext))
             tile_ids.append(common.tile_id(z, x, y))
-            positions.append((x - (x0 - radius), y - (y0 - radius)))  # 0-based grid col/row
+            positions.append((x - (x0 - radius), y - (y0 - radius)))
 
-    # Chunked by hand: predict() given a whole list as `source` collates it into one batch
-    # regardless of the batch= kwarg (that only bounds the internal dataloader, not this path),
-    # which OOMs the 8GB GPU well before radius 8 (289 tiles). Looping keeps peak memory to one
-    # chunk's worth, independent of how many tiles the search radius covers.
     CHUNK = 8
     results = []
     for i in range(0, len(paths), CHUNK):
@@ -50,17 +40,14 @@ def predict_area(class_name: str, model_path: str, tile_url: str, radius: int, c
     mosaic = Image.new("RGB", (side * common.TILE_PX, side * common.TILE_PX))
     found = []
     for tid, path, result, (col, row) in zip(tile_ids, paths, results, positions):
-        # Every scanned tile gets a raw copy, hit or not -- a 0-detection run should still leave
-        # something to look at, so you can tell "the model found nothing" apart from "there was
-        # nothing here to find" by just eyeballing the imagery yourself.
         raw_dst = out_dir / f"{tid}{path.suffix}"
         if not raw_dst.exists():
             raw_dst.symlink_to(path.resolve())
         tile_for_mosaic = path
 
         if result.masks is not None and len(result.masks) > 0:
-            polygons = [m.tolist() for m in result.masks.xyn]  # already normalized [0,1], same
-            confs = [float(c) for c in result.boxes.conf]       # convention yolo_seg_lines expects
+            polygons = [m.tolist() for m in result.masks.xyn]
+            confs = [float(c) for c in result.boxes.conf]
             (out_dir / f"{tid}.txt").write_text(common.yolo_seg_lines(polygons))
             labeled_path = out_dir / f"{tid}_labeled.jpg"
             common.draw_polygon_overlay(path, polygons, labeled_path)

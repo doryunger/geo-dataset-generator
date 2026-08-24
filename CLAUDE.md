@@ -3,6 +3,10 @@
 For what the code does and where things live, see `README.md` — this file is about *how to work
 on it*, distilled from actual sessions rather than aspirational.
 
+Code files are kept deliberately free of explanatory comments/long docstrings — for the "why"
+behind a non-obvious design choice in any script, check `context/<script_name>.md` (one file per
+`scripts/*.py`, not every script has one).
+
 ## The one thing that matters most right now: dataset size
 
 Every class here (fence especially) is trained on a tiny number of hand-labeled samples (fence

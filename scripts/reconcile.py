@@ -14,23 +14,17 @@ from collections import Counter
 import common
 import train
 
-# Deterministic geographic split: bucket by tile x-column so adjacent tiles (which can be
-# near-duplicates) land on the same side of the train/val split, avoiding leakage.
-VAL_FRACTION = 5  # 1 in VAL_FRACTION source columns go to val
+VAL_FRACTION = 5
 
 
 def split_for(tile_id: str) -> str:
     if tile_id.startswith("seed_"):
-        return "train"  # matches search.py's _save_seed_to_dataset — always train, never split
+        return "train"
     _, x, _ = tile_id.split("_")
     return "val" if int(x) % VAL_FRACTION == 0 else "train"
 
 
 def _dataset_ext(src) -> str:
-    """Ultralytics' dataset scanner only recognizes standard image extensions — Mapbox's raw
-    cache filenames (e.g. .jpg90, .png32) read fine via PIL's content-sniffing (used everywhere
-    else in this project) but aren't recognized by YOLO's dataset loader, so anything copied into
-    dataset/ needs a normal extension regardless of what the tile cache named it."""
     return ".jpg" if src.suffix.lower().startswith(".jpg") else ".png"
 
 
@@ -75,7 +69,6 @@ def reconcile(class_name: str, round_num: int, kept_tile_ids: list[str]) -> dict
 
 
 def find_example(class_name: str, tile_id: str) -> dict | None:
-    """Locate a confirmed example's actual dataset file, if it's still there."""
     split = split_for(tile_id)
     image_path = next((common.dataset_dir(class_name) / "images" / split).glob(f"{tile_id}.*"), None)
     if image_path is None:
@@ -85,8 +78,6 @@ def find_example(class_name: str, tile_id: str) -> dict | None:
 
 
 def delete_example(class_name: str, tile_id: str) -> bool:
-    """Remove an example from the dataset and flip its registry status to rejected, so it's
-    treated the same as if it had never been kept — dataset and registry stay consistent."""
     registry = common.load_registry(class_name)
     rec = registry.get(tile_id)
     info = find_example(class_name, tile_id)
@@ -106,19 +97,12 @@ def _remove_review_files(class_name: str, round_num: int, tile_id: str) -> None:
 
 
 def delete_round(class_name: str, round_num: int) -> dict:
-    """Discard every not-yet-reviewed candidate from a round (pending_review -> rejected, its
-    review/ files removed) — confirmed examples are left untouched, since they're already
-    committed to the dataset and a blanket 'delete round' shouldn't silently remove those too.
-
-    If nothing confirmed is left afterwards, the round has nothing worth a record of any more, so
-    it's purged from the registry entirely (and its now-empty review/ folder removed) instead of
-    lingering in the Manage tab as a dead entry with a 'Delete Round' button that does nothing."""
     registry = common.load_registry(class_name)
     round_entries = [(tid, r) for tid, r in registry.items() if r.get("round") == round_num]
 
     pending_ids = [tid for tid, r in round_entries if r.get("status") == "pending_review"]
     for tid in pending_ids:
-        delete_example(class_name, tid)  # flips to rejected; no dataset files exist yet to remove
+        delete_example(class_name, tid)
         _remove_review_files(class_name, round_num, tid)
 
     skipped_confirmed = [tid for tid, r in round_entries if r.get("status") == "confirmed"]
@@ -134,16 +118,7 @@ def delete_round(class_name: str, round_num: int) -> dict:
 
 
 def generate_package(class_name: str) -> dict:
-    """Rebuilds dataset/images|labels/{train,val} from scratch out of samples.jsonl (see the
-    /manual page's hand-drawn examples) — deterministic and safe to re-run any time samples are
-    added, edited, or removed. Split: round-robin by sample order (every VAL_FRACTION-th -> val),
-    since manual sample ids aren't grid-aligned so split_for()'s tile-x-parity doesn't apply.
-
-    Always does a full wipe-and-rebuild (see below), so a sample deleted from the UI is already
-    correctly excluded with no special handling -- changes_since_last_generation in the return
-    value is purely informational, telling the caller *why* this run's output might differ from
-    the last one (found the hard way: dataset/ and dataset_obb/ silently held copies of samples
-    deleted from the UI, only noticed by manually diffing folder contents against samples.jsonl)."""
+    """Rebuilds dataset/images|labels/{train,val} from scratch out of samples.jsonl."""
     samples = common.load_samples(class_name)
     if not samples:
         raise ValueError(f"'{class_name}' has no samples yet")

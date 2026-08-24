@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 """
-Per-piece failure analysis for a trained OBB model: not just the aggregate mAP/precision/recall
-numbers, but *which* ground-truth boxes got missed (false negatives) and *which* predictions were
-spurious (false positives) -- and whether those failures cluster around particular original
-samples (a real coverage gap, worth labeling more like it) or scatter randomly across many
-different samples (closer to noise/model-capacity limits at this data scale, not something more
-of the same kind of label would fix).
-
-Matches each ground-truth box to the model's own predictions the same way mAP50 does: greedy
-best-IoU>=0.5 pairing. This is a single fixed-confidence-threshold snapshot, not the confidence-
-threshold-swept curve mAP integrates over, so don't expect this run's precision/recall to exactly
-reproduce the training metrics.json numbers -- it's a complementary, inspectable view of the same
-underlying errors, not a recomputation of the same statistic.
+Per-piece ground-truth-vs-prediction overlay for a trained OBB model.
 
 Usage:
     python scripts/error_analysis_obb.py --class fence --model models/fence_obb_v6.pt
@@ -29,10 +18,10 @@ from ultralytics import YOLO
 
 import common
 
-IOU_MATCH = 0.5  # same criterion mAP50 itself uses for a "correct" detection
-GT_FOUND_COLOR = (46, 204, 113)   # green -- ground truth box, matched by a prediction
-GT_MISSED_COLOR = (231, 76, 60)   # red -- ground truth box, no matching prediction (false negative)
-FP_COLOR = (241, 196, 15)         # yellow -- prediction with no matching ground truth (false positive)
+IOU_MATCH = 0.5
+GT_FOUND_COLOR = (46, 204, 113)
+GT_MISSED_COLOR = (231, 76, 60)
+FP_COLOR = (241, 196, 15)
 
 
 def _load_gt_polys(label_path: Path) -> list[list[tuple[float, float]]]:
@@ -56,15 +45,11 @@ def _iou(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> float:
 
 
 def _sample_id_of(piece_stem: str) -> str:
-    """'<sample_id>_p3' -> '<sample_id>'; a single-piece sample's stem is already its sample_id."""
     m = re.match(r"(.+)_p\d+$", piece_stem)
     return m.group(1) if m else piece_stem
 
 
 def _match(gt_polys: list, pred_polys: list, pred_confs: list) -> tuple[list[bool], list[bool]]:
-    """Greedy best-IoU>=IOU_MATCH pairing, highest-confidence predictions matched first (same
-    priority order mAP's own matching uses) -- returns (gt_found, pred_matched), both booleans
-    parallel to the input lists."""
     gt_found = [False] * len(gt_polys)
     pred_matched = [False] * len(pred_polys)
     order = sorted(range(len(pred_polys)), key=lambda i: -pred_confs[i])
@@ -91,7 +76,7 @@ def _draw_overlay(img_path: Path, gt_polys, gt_found, pred_polys, pred_matched, 
         draw.line(pts + [pts[0]], fill=GT_FOUND_COLOR if found else GT_MISSED_COLOR, width=3)
     for poly, matched, conf in zip(pred_polys, pred_matched, pred_confs):
         if matched:
-            continue  # already represented by the green ground-truth box it matched
+            continue
         pts = [(x * w, y * h) for x, y in poly]
         draw.line(pts + [pts[0]], fill=FP_COLOR, width=3)
         draw.text((pts[0][0], pts[0][1] - 12), f"{conf:.2f}", fill=FP_COLOR)

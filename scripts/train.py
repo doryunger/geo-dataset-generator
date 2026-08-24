@@ -29,13 +29,12 @@ def ensure_data_yaml(class_name: str):
 
 
 def train_class(class_name: str, version: str, base_model: str = "yolo11n-seg.pt", epochs: int = 100, imgsz: int = 1280) -> dict:
+    """Trains and saves models/<class>_<version>.pt. The run itself (weights, curves, args.yaml)
+    is written under models/ too, named after class+version, instead of Ultralytics' default
+    top-level ./runs/segment/trainN/ (unlinked to which class/version it belongs to)."""
     data_yaml = ensure_data_yaml(class_name)
     model = YOLO(base_model)
 
-    # Ultralytics defaults to a top-level ./runs/segment/trainN/ that has no link back to which
-    # class/version it belongs to, and piles up across every run. Pointing it at models/ instead,
-    # named after the class+version, keeps the full training run (weights, curves, args.yaml)
-    # right next to the .pt/metrics.json it produced.
     common.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     results = model.train(
         data=str(data_yaml), epochs=epochs, imgsz=imgsz,

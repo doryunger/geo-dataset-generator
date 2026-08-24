@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
 Run a trained OBB model over the tiles around a hardcoded position and save its predictions as
-browsable files -- the OBB counterpart to predict_area.py (segmentation). Deliberately separate
-output (predictions_obb/, not predictions/) and separate detection logic (result.obb, not
-result.masks), matching the rest of the OBB track's designated-files separation (obb.py,
-train_obb.py, dataset_obb/).
-
-conf=0.15/iou=0.4 defaults come from actually testing on a known-fence tile: the model's default
-NMS (iou=0.7) let through ~10 heavily-overlapping low-precision boxes in the same rough area
-(pairwise IoU maxed out around 0.4, so the default threshold never merged them); tightening iou
-to 0.4 cut that down to 3 boxes without losing the ones that were actually well-positioned.
+browsable files.
 
 Usage:
     python scripts/predict_area_obb.py --class fence --model models/fence_obb_v1.pt \
@@ -27,6 +19,8 @@ import common
 def predict_area_obb(
     class_name: str, model_path: str, tile_url: str, radius: int, conf: float, iou: float, imgsz: int,
 ) -> dict:
+    """Predicts over every tile in a (2*radius+1)^2 grid around tile_url and saves a mosaic +
+    per-tile labels/overlays."""
     z, x0, y0, tileset, ext = common.parse_tile_url(tile_url)
     model = YOLO(model_path)
     run_name = f"{common.tile_id(z, x0, y0)}_r{radius}"
@@ -38,8 +32,6 @@ def predict_area_obb(
             tile_ids.append(common.tile_id(z, x, y))
             positions.append((x - (x0 - radius), y - (y0 - radius)))
 
-    # Chunked by hand, same reasoning as predict_area.py: predict() collates a whole list
-    # `source` into one batch regardless of batch=, which OOMs the 8GB GPU at higher radii.
     CHUNK = 8
     results = []
     for i in range(0, len(paths), CHUNK):
@@ -58,7 +50,7 @@ def predict_area_obb(
         tile_for_mosaic = path
 
         if result.obb is not None and len(result.obb) > 0:
-            rects = result.obb.xyxyxyxyn.cpu().numpy().tolist()  # already normalized [0,1]
+            rects = result.obb.xyxyxyxyn.cpu().numpy().tolist()
             confs = [float(c) for c in result.obb.conf]
             (out_dir / f"{tid}.txt").write_text(common.yolo_seg_lines(rects))
             labeled_path = out_dir / f"{tid}_labeled.jpg"

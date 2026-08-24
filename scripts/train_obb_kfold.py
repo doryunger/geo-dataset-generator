@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
 """
-K-fold cross-validation over an OBB class's *original samples* (not pieces) -- trains K models,
-each with a different 1/K of samples held out as val, and reports mean +/- std of each metric
-across the K runs instead of one run's number.
-
-Exists because CLAUDE.md already documents that a single train/val split is noisy at this sample
-count -- two runs on identical data landed at precision 0.32 vs 0.045 (fence_obb_v2 vs v3) purely
-from random init. That's a statement about *variance*, and a single held-out split can't measure
-variance; only repeated runs over different splits can. This is the rigorous version of "look for
-a consistent direction across 2+ runs" from CLAUDE.md's own working conventions.
-
-Folding happens over samples.jsonl's ids, not dataset_obb pieces -- obb.generate_obb_package
-already keeps every piece of one sample on the same side of a split (see its docstring on why:
-adjacent pieces share near-identical background, so splitting them would leak). Fold assignment
-is a deterministic shuffle (fixed seed) so reruns are reproducible and comparable.
+K-fold cross-validation over an OBB class's original samples (not pieces): trains K models, each
+with a different 1/K held out as val, and reports mean +/- std of each metric across the folds.
 
 Usage:
     python scripts/train_obb_kfold.py --class fence --version v6 --folds 5
@@ -34,8 +22,6 @@ METRIC_KEYS = [
 
 
 def make_folds(sample_ids: list[str], k: int, seed: int = 0) -> list[list[str]]:
-    """k roughly-equal groups of sample ids, via a seeded shuffle -- deterministic across reruns
-    (same seed, same samples.jsonl) rather than dependent on the file's current row order."""
     ids = sorted(sample_ids)
     random.Random(seed).shuffle(ids)
     return [ids[i::k] for i in range(k)]
@@ -48,7 +34,7 @@ def run_kfold(class_name: str, version: str, k: int = 5, seed: int = 0, **train_
         raise ValueError(f"only {len(sample_ids)} samples, can't make {k} non-empty folds")
 
     folds = make_folds(sample_ids, k, seed)
-    embedder = Embedder()  # one load, reused for every fold's dataset regeneration
+    embedder = Embedder()
 
     fold_results = []
     for i, val_ids in enumerate(folds):

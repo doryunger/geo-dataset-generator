@@ -20,9 +20,11 @@ class Embedder:
 
     @torch.no_grad()
     def _forward(self, image: Image.Image):
+        """(cls_vec [D], patch_grid [H,W,D]), both L2-normalized. last_hidden_state is
+        [1 + H*W, D]: index 0 is the CLS token, the rest are patch tokens."""
         inputs = self.processor(images=image, return_tensors="pt")
         outputs = self.model(**inputs)
-        hidden = outputs.last_hidden_state[0]  # [1 + H*W, D]: CLS token + patch tokens
+        hidden = outputs.last_hidden_state[0]
         cls, patches = hidden[0], hidden[1:]
         cls = cls / cls.norm()
         patches = patches / patches.norm(dim=-1, keepdim=True)
