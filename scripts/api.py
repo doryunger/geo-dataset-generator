@@ -23,6 +23,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 import common
 import obb
 import reconcile
+import s3_sync
 import search
 import train
 from auto_labeler import PatchLabeler
@@ -545,10 +546,21 @@ def manual_promote(req: ManualPromoteRequest):
 
 @app.post("/api/manual/generate_package")
 def generate_package(req: GeneratePackageRequest):
+    """Rebuilds both dataset/ (segmentation) and dataset_obb/ (OBB) from the current samples, then
+    uploads the whole class directory -- both packages together -- to S3 as one fresh timestamped
+    snapshot. Deliberately does NOT train anything (see train.py/train_obb.py/train_obb_kfold.py
+    for that): this button is "process and publish what I've labeled," training is a separate,
+    explicit script-only step."""
     try:
-        return reconcile.generate_package(req.class_name)
+        seg_result = reconcile.generate_package(req.class_name)
+        obb_result = obb.generate_obb_package(req.class_name, embedder=_state["embedder"])
     except ValueError as e:
         raise HTTPException(400, str(e))
+    s3_key = s3_sync.upload_package(req.class_name) if s3_sync.s3_configured() else None
+    return {
+        "segmentation": seg_result, "obb": obb_result,
+        "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(),
+    }
 
 
 @app.get("/manual")

@@ -71,6 +71,34 @@ Hard negatives (`--hard-negatives` flag / `HARD_NEGATIVE_TILES` in `obb.py`) are
 tried once at 13 positives + 6 negatives and it destabilized training (cls_loss spiked, real
 confidence collapsed). Revisit only once positives comfortably outnumber any negatives added.
 
+## S3 backup (`scripts/s3_sync.py`)
+
+`classes/<class>/` (samples.jsonl, crops, bend_review/error_review, dataset_obb — the hand-labeled
+ground truth and everything derived from it) backs up to S3 as timestamped snapshots, not
+continuous per-write sync. `tiles/`, `embeddings/`, and `models/` stay local-only (all
+reconstructible: tiles re-fetch from Mapbox, embeddings rebuild from samples, models retrain).
+
+- The `/manual` editor (`api.py`) never touches S3 — every edit stays purely local while you're
+  actively labeling.
+- `python scripts/obb.py --class <class>` uploads a fresh timestamped package (`packages/<class>/
+  <epoch>.tar.gz`) as its last step, once it's rebuilt `dataset_obb/` — this is the one deliberate
+  "publish what I've labeled" action.
+- `python scripts/train_obb.py` and `train_obb_kfold.py` pull the latest S3 package (if S3 is
+  configured and one exists) before training, overwriting local `classes/<class>/` to match —
+  so a training run always uses whatever was last explicitly packaged, not just whatever happens
+  to be on that machine's disk. Both no-op back to local-only if `S3_BUCKET_NAME` isn't set.
+- The pull/push only happens at these CLI entry points, not inside `generate_obb_package`/
+  `train_obb_class` themselves — `train_obb_kfold.py` calls both of those once per fold against a
+  fold-specific local split, and pulling/pushing mid-fold would defeat the fold split entirely.
+- Extraction uses tarfile's `"tar"` filter, not the stricter `"data"` default — `review/` and
+  `predictions/` legitimately contain absolute symlinks into the shared `tiles/images/` cache
+  (see `stage_review_candidate`), which `"data"` rejects. Safe here specifically because this
+  archive is self-produced by `upload_package` and never comes from an untrusted source.
+- Needs `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET_NAME` in `.env`
+  (same gitignored-file pattern as `MAPBOX_ACCESS_TOKEN`) — the IAM user needs `s3:GetObject`,
+  `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::<bucket>/*` and `s3:ListBucket` on
+  `arn:aws:s3:::<bucket>` itself (a separate ARN, easy to miss).
+
 ## Git commits
 
 Dor Yunger (git user.name/user.email, configured locally) is the sole author of every commit in

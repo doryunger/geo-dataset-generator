@@ -417,6 +417,16 @@ def main():
     if changes:
         print(f"Changes since last generation: {changes}")
 
+    # Upload only from the CLI entry point, not generate_obb_package itself -- train_obb_kfold.py
+    # calls generate_obb_package once per fold with a temporary val split, and those aren't
+    # snapshots worth keeping in S3.
+    import s3_sync
+    if s3_sync.s3_configured():
+        key = s3_sync.upload_package(args.class_name)
+        print(f"Uploaded package to s3://{s3_sync.bucket_name()}/{key}")
+    else:
+        print("S3 not configured (no S3_BUCKET_NAME) -- skipped upload, data stays local-only")
+
 
 if __name__ == "__main__":
     main()

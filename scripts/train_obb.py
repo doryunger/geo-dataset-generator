@@ -72,6 +72,17 @@ def main():
     parser.add_argument("--patience", type=int, default=30)
     args = parser.parse_args()
 
+    # Pulled here (CLI entry), not inside train_obb_class -- train_obb_kfold.py calls
+    # train_obb_class once per fold against a fold-specific local dataset_obb/, and overwriting
+    # that mid-fold with whatever's latest in S3 would defeat the fold split entirely.
+    import s3_sync
+    if s3_sync.download_latest_package(args.class_name):
+        print(f"Pulled latest '{args.class_name}' package from S3 before training")
+    elif s3_sync.s3_configured():
+        print(f"S3 configured but no package found for '{args.class_name}' -- using local data as-is")
+    else:
+        print("S3 not configured (no S3_BUCKET_NAME) -- using local data as-is")
+
     result = train_obb_class(
         args.class_name, args.version, args.base_model, args.epochs, args.imgsz, args.patience,
     )

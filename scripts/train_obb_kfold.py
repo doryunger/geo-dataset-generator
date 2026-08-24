@@ -93,6 +93,14 @@ def main():
     parser.add_argument("--patience", type=int, default=30)
     args = parser.parse_args()
 
+    import s3_sync
+    if s3_sync.download_latest_package(args.class_name):
+        print(f"Pulled latest '{args.class_name}' package from S3 before k-fold run")
+    elif s3_sync.s3_configured():
+        print(f"S3 configured but no package found for '{args.class_name}' -- using local data as-is")
+    else:
+        print("S3 not configured (no S3_BUCKET_NAME) -- using local data as-is")
+
     out = run_kfold(
         args.class_name, args.version, args.folds, args.seed,
         base_model=args.base_model, epochs=args.epochs, imgsz=args.imgsz, patience=args.patience,

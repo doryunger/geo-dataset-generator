@@ -390,7 +390,13 @@ async function generatePackage() {
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
-    generatePackageStatusEl.textContent = `Done: ${data.train} train, ${data.val} val. Use Pack Data (main app's Manage tab) to train.`;
+    const s3Note = data.s3_configured
+      ? (data.s3_key ? `Uploaded to S3 (${data.s3_key}).` : "S3 upload failed -- check logs.")
+      : "S3 not configured -- kept local only.";
+    generatePackageStatusEl.textContent =
+      `Done: seg ${data.segmentation.train}/${data.segmentation.val} (train/val), ` +
+      `obb ${data.obb.train}/${data.obb.val} (train/val). ${s3Note} ` +
+      `Train separately via scripts/train.py or scripts/train_obb.py -- this button doesn't train.`;
   } catch (err) {
     generatePackageStatusEl.textContent = "Error: " + err.message;
   } finally {
