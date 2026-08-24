@@ -19,9 +19,10 @@ __pycache__/
 *.pyc
 .venv/
 
-# Runtime artifacts from restart.sh
+# Runtime artifacts from restart.sh / restart.ps1
 app.log
 .app.pid
+train_*.log
 
 # Editors/OS
 .DS_Store
