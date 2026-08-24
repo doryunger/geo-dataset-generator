@@ -191,7 +191,8 @@ def _clip_rect_to_window(
     clipped = poly.intersection(window)
     if clipped.is_empty or clipped.area <= 0:
         return None
-    return list(clipped.minimum_rotated_rectangle.exterior.coords)[:4]
+    mrr = list(clipped.minimum_rotated_rectangle.exterior.coords)[:4]
+    return [(min(max(x, left), right), min(max(y, top), bottom)) for x, y in mrr]
 
 
 def ensure_obb_data_yaml(class_name: str):
