@@ -69,6 +69,20 @@ def validation_dir(name: str) -> Path:
     return class_dir(name) / "validation"
 
 
+def bend_review_dir(name: str) -> Path:
+    """Per-sample polygon-overlay images for by-eye OBB bend checking (see obb.py's BEND_PIECES) --
+    regenerated on every sample create/update so a freshly drawn or edited ribbon is always
+    checkable without re-deriving the overlay from scratch."""
+    return class_dir(name) / "bend_review"
+
+
+def error_review_dir(name: str) -> Path:
+    """Per-piece overlays (ground truth vs a trained model's own predictions) for by-eye failure
+    analysis -- see error_analysis_obb.py. Separate from bend_review/ (which reviews the *labels*
+    before training) since this reviews the *model*, after training."""
+    return class_dir(name) / "error_review"
+
+
 def dataset_dir(name: str) -> Path:
     return class_dir(name) / "dataset"
 

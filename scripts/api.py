@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from shapely.geometry import Polygon as ShapelyPolygon
 
 import common
+import obb
 import reconcile
 import search
 import train
@@ -380,6 +381,7 @@ def create_manual_sample(req: ManualSampleRequest):
     }
     common.append_sample(req.class_name, row)
     common.log_sample_change(req.class_name, "created", sample_id)
+    obb.save_bend_review_overlay(req.class_name, sample_id)
     return _sample_response(req.class_name, row)
 
 
@@ -420,6 +422,7 @@ def update_manual_sample(class_name: str, sample_id: str, req: ManualSampleUpdat
     })
     common.rewrite_jsonl(common.samples_path(class_name), [r if r["id"] != sample_id else row for r in samples])
     common.log_sample_change(class_name, "updated", sample_id)
+    obb.save_bend_review_overlay(class_name, sample_id)
     return _sample_response(class_name, row)
 
 
@@ -431,6 +434,7 @@ def delete_manual_sample(class_name: str, sample_id: str):
     common.log_sample_change(class_name, "deleted", sample_id)
     crop = common.samples_dir(class_name) / f"{sample_id}.{row['ext']}"
     crop.unlink(missing_ok=True)
+    (common.bend_review_dir(class_name) / f"{sample_id}.jpg").unlink(missing_ok=True)
     common.remove_sample_from_index(class_name, sample_id)
     return {"deleted": True}
 
@@ -528,6 +532,7 @@ def manual_promote(req: ManualPromoteRequest):
     }
     common.append_sample(req.class_name, row)
     common.log_sample_change(req.class_name, "created", sample_id)
+    obb.save_bend_review_overlay(req.class_name, sample_id)
     common.embed_and_index_sample(
         _state["embedder"], req.class_name, sample_id, dst, z,
         bounds["west"], bounds["south"], bounds["east"], bounds["north"], polygon,

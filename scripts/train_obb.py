@@ -10,6 +10,16 @@ to nadir/aerial views for any object, not just fence), this base model has alrea
 general viewing angle, so fine-tuning only has to learn "what is a fence" rather than also
 "what does an aerial photo even look like."
 
+imgsz defaults to 640, not the old 1280 -- checked the actual dataset_obb/images/train once
+obb.py started emitting real-world-length pieces (median 257px, 98.5% <= 640px on their longer
+side) and 1280 meant every image spent most of its area as YOLO letterbox padding around a small
+upscaled crop. Bump this back up only if a future dataset's own pieces actually run bigger.
+
+patience=30 -- Ultralytics itself defaults this to 100, which combined with epochs=100 meant
+early stopping could never actually trigger (it needs 100 epochs with no improvement, but the
+run itself was only ever 100 epochs long). Stops wasting the remaining epochs once validation
+loss plateaus instead of training past convergence.
+
 Usage:
     python scripts/train_obb.py --class fence --version v1
 """
@@ -24,7 +34,8 @@ import obb
 
 
 def train_obb_class(
-    class_name: str, version: str, base_model: str = "yolo11n-obb.pt", epochs: int = 100, imgsz: int = 1280,
+    class_name: str, version: str, base_model: str = "yolo11n-obb.pt", epochs: int = 100, imgsz: int = 640,
+    patience: int = 30,
 ) -> dict:
     data_yaml = obb.ensure_obb_data_yaml(class_name)
     model = YOLO(base_model)
@@ -33,7 +44,7 @@ def train_obb_class(
     # types never collide or get confused for one another in models/.
     common.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     results = model.train(
-        data=str(data_yaml), epochs=epochs, imgsz=imgsz,
+        data=str(data_yaml), epochs=epochs, imgsz=imgsz, patience=patience,
         project=str(common.MODELS_DIR), name=f"{class_name}_obb_{version}_run", exist_ok=True,
     )
 
@@ -57,10 +68,13 @@ def main():
     parser.add_argument("--version", required=True, help="Version tag for the output file, e.g. v1")
     parser.add_argument("--base-model", default="yolo11n-obb.pt", help="Pretrained checkpoint to fine-tune from")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--imgsz", type=int, default=1280)
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--patience", type=int, default=30)
     args = parser.parse_args()
 
-    result = train_obb_class(args.class_name, args.version, args.base_model, args.epochs, args.imgsz)
+    result = train_obb_class(
+        args.class_name, args.version, args.base_model, args.epochs, args.imgsz, args.patience,
+    )
     print(f"\nSaved {result['path']}")
 
 
