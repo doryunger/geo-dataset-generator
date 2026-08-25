@@ -126,6 +126,7 @@ class ManualPromoteRequest(BaseModel):
 
 class GeneratePackageRequest(BaseModel):
     class_name: str
+    include_latest: bool = False
 
 
 @app.get("/api/config")
@@ -506,6 +507,10 @@ def manual_promote(req: ManualPromoteRequest):
 
 @app.post("/api/manual/generate_package")
 def generate_package(req: GeneratePackageRequest):
+    merge_result = None
+    if req.include_latest and s3_sync.s3_configured():
+        merge_result = s3_sync.merge_latest_package(req.class_name, embedder=_state["embedder"])
+
     try:
         seg_result = reconcile.generate_package(req.class_name)
         obb_result = obb.generate_obb_package(req.class_name, embedder=_state["embedder"])
@@ -513,7 +518,7 @@ def generate_package(req: GeneratePackageRequest):
         raise HTTPException(400, str(e))
     s3_key = s3_sync.upload_package(req.class_name) if s3_sync.s3_configured() else None
     return {
-        "segmentation": seg_result, "obb": obb_result,
+        "segmentation": seg_result, "obb": obb_result, "merge": merge_result,
         "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(),
     }
 

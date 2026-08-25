@@ -18,6 +18,7 @@ const validationTab = document.getElementById("validation-tab");
 const samplesListEl = document.getElementById("samples-list");
 const generatePackageBtn = document.getElementById("generate-package-btn");
 const generatePackageStatusEl = document.getElementById("generate-package-status");
+const includeLatestCheckbox = document.getElementById("include-latest-checkbox");
 
 const openValidationModalBtn = document.getElementById("open-validation-modal-btn");
 const abortValidationBtn = document.getElementById("abort-validation-btn");
@@ -386,15 +387,18 @@ async function generatePackage() {
     const res = await fetch("/api/manual/generate_package", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ class_name: className }),
+      body: JSON.stringify({ class_name: className, include_latest: includeLatestCheckbox.checked }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     const s3Note = data.s3_configured
       ? (data.s3_key ? `Uploaded to S3 (${data.s3_key}).` : "S3 upload failed -- check logs.")
       : "S3 not configured -- kept local only.";
+    const mergeNote = data.merge
+      ? `Merged ${data.merge.added_from_remote} new sample(s) from S3 (had ${data.merge.local_total} local, latest S3 entry had ${data.merge.remote_total}). `
+      : (includeLatestCheckbox.checked ? "No S3 package to merge yet -- packaged local samples only. " : "");
     generatePackageStatusEl.textContent =
-      `Done: seg ${data.segmentation.train}/${data.segmentation.val} (train/val), ` +
+      `${mergeNote}Done: seg ${data.segmentation.train}/${data.segmentation.val} (train/val), ` +
       `obb ${data.obb.train}/${data.obb.val} (train/val). ${s3Note} ` +
       `Train separately via scripts/train.py or scripts/train_obb.py -- this button doesn't train.`;
   } catch (err) {

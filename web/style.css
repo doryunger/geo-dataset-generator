@@ -167,6 +167,9 @@ button.secondary:hover { background: #ddd; }
   border-radius: 50%; font-size: 12px; line-height: 22px; background: #e74c3c;
 }
 #generate-package-status, #validation-status { font-size: 13px; color: #666; min-height: 18px; margin-bottom: 8px; }
+#include-latest-label {
+  display: flex; align-items: center; gap: 6px; font-size: 13px; color: #666; margin-bottom: 8px; cursor: pointer;
+}
 #validation-results {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
 }

@@ -28,6 +28,10 @@
       <p class="hint">Draw a shape (polygon tool, top-left of the map) to add a sample. Double-click an existing shape to edit it.</p>
       <div id="samples-list"></div>
       <hr />
+      <label id="include-latest-label">
+        <input type="checkbox" id="include-latest-checkbox" checked />
+        Include latest available entry (merge in S3's latest before packaging)
+      </label>
       <button id="generate-package-btn">Generate Package</button>
       <div id="generate-package-status"></div>
     </div>

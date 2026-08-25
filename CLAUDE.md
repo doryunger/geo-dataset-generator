@@ -82,11 +82,22 @@ ground truth and everything derived from it) backs up to S3 as timestamped snaps
 continuous per-write sync. `tiles/`, `embeddings/`, and `models/` stay local-only (all
 reconstructible: tiles re-fetch from Mapbox, embeddings rebuild from samples, models retrain).
 
-- The `/manual` editor (`api.py`) never touches S3 — every edit stays purely local while you're
-  actively labeling.
+- The `/manual` editor (`api.py`) never touches S3 while you're creating/editing/deleting
+  individual samples — those stay purely local. The one action that does touch S3 is the
+  "Generate Package" button, same as the CLI path below.
 - `python scripts/obb.py --class <class>` uploads a fresh timestamped package (`packages/<class>/
   <epoch>.tar.gz`) as its last step, once it's rebuilt `dataset_obb/` — this is the one deliberate
-  "publish what I've labeled" action.
+  "publish what I've labeled" action. The `/manual` UI's "Generate Package" button does the same
+  thing (plus rebuilding the segmentation `dataset/`), and defaults its "include latest available
+  entry" checkbox to on: before packaging, it pulls the latest S3 snapshot and merges in any
+  sample id not already present locally (local always wins on a collision, nothing local is ever
+  deleted or overwritten by the merge) via `s3_sync.merge_latest_package`. This is what keeps
+  multiple machines labeling into the same class from silently shadowing each other's work in
+  S3's "latest" package — without it, a fresh machine that labels a few samples and packages would
+  upload a small package that becomes the new "latest," effectively hiding what every other
+  machine already published (still recoverable from S3's version history, just not what
+  `download_latest_package` would pull by default). Unchecking it packages local samples only,
+  matching the plain CLI behavior.
 - `python scripts/train_obb.py` and `train_obb_kfold.py` pull the latest S3 package (if S3 is
   configured and one exists) before training, overwriting local `classes/<class>/` to match —
   so a training run always uses whatever was last explicitly packaged, not just whatever happens
