@@ -159,7 +159,7 @@ def run_search(
     if bbox is not None:
         west, south, east, north = bbox
         save_ext = "jpg" if ext.startswith("jpg") else "png"
-        scratch_path = common.SCRATCH_DIR / f"{class_name}_seed_{round_num}.{save_ext}"
+        scratch_path = common.SCRATCH_DIR / f"{common.class_slug(class_name)}_seed_{round_num}.{save_ext}"
         crop_path = common.fetch_and_crop_bbox(z, west, south, east, north, tileset, ext, scratch_path)
         with Image.open(crop_path) as seed_img:
             seed_normalized = common.resample_to_target_gsd(

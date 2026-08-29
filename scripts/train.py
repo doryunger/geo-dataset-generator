@@ -34,15 +34,16 @@ def train_class(class_name: str, version: str, base_model: str = "yolo11n-seg.pt
     top-level ./runs/segment/trainN/ (unlinked to which class/version it belongs to)."""
     data_yaml = ensure_data_yaml(class_name)
     model = YOLO(base_model)
+    slug = common.class_slug(class_name)
 
     common.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     results = model.train(
         data=str(data_yaml), epochs=epochs, imgsz=imgsz,
-        project=str(common.MODELS_DIR), name=f"{class_name}_{version}_run", exist_ok=True,
+        project=str(common.MODELS_DIR), name=f"{slug}_{version}_run", exist_ok=True,
     )
 
     best_pt = results.save_dir / "weights" / "best.pt"
-    out_pt = common.MODELS_DIR / f"{class_name}_{version}.pt"
+    out_pt = common.MODELS_DIR / f"{slug}_{version}.pt"
     shutil.copy(best_pt, out_pt)
 
     metrics = {
@@ -53,7 +54,7 @@ def train_class(class_name: str, version: str, base_model: str = "yolo11n-seg.pt
         "imgsz": imgsz,
         "metrics": getattr(results, "results_dict", {}),
     }
-    metrics_path = common.MODELS_DIR / f"{class_name}_{version}_metrics.json"
+    metrics_path = common.MODELS_DIR / f"{slug}_{version}_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2))
 
     return {"class": class_name, "version": version, "path": str(out_pt), "metrics_path": str(metrics_path)}

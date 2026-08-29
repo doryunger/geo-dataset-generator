@@ -18,10 +18,14 @@
       <option value="__new__">+ New class</option>
     </select>
     <input id="class-new-input" type="text" placeholder="New class name" autocomplete="off" style="display:none" />
+    <select id="class-new-parent-select" style="display:none">
+      <option value="">(top-level class)</option>
+    </select>
 
     <div id="tab-bar">
       <button id="tab-btn-samples" class="tab-btn active">Samples</button>
       <button id="tab-btn-validation" class="tab-btn">Validation</button>
+      <button id="tab-btn-training" class="tab-btn">Training</button>
     </div>
 
     <div id="samples-tab" class="tab-panel">
@@ -33,6 +37,7 @@
         Include latest available entry (merge in S3's latest before packaging)
       </label>
       <button id="generate-package-btn">Generate Package</button>
+      <progress id="generate-package-progress" value="0" max="100" style="display:none"></progress>
       <div id="generate-package-status"></div>
     </div>
 
@@ -42,6 +47,19 @@
       <div id="validation-status"></div>
 
       <div id="validation-results"></div>
+    </div>
+
+    <div id="training-tab" class="tab-panel" style="display:none">
+      <p class="hint">Pick a class or sub-class below to train an OBB model on its dataset_obb/ (run Generate Package first if it doesn't have one yet). Each class trains fully independently.</p>
+      <div class="training-settings">
+        <label for="training-epochs-input">Epochs</label>
+        <input id="training-epochs-input" type="number" value="100" min="1" step="1" />
+        <label for="training-patience-input">Patience</label>
+        <input id="training-patience-input" type="number" value="30" min="0" step="1" />
+        <label for="training-base-model-input">Base model</label>
+        <input id="training-base-model-input" type="text" value="yolo11n-obb.pt" />
+      </div>
+      <div id="training-tree"></div>
     </div>
   </div>
 

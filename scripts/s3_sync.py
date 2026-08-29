@@ -1,5 +1,6 @@
 """S3 backup for classes/ as timestamped package snapshots."""
 import io
+import logging
 import os
 import shutil
 import tarfile
@@ -10,6 +11,8 @@ from pathlib import Path
 import boto3
 
 import common
+
+logger = logging.getLogger(__name__)
 
 _BUCKET = os.environ.get("S3_BUCKET_NAME")
 
@@ -43,8 +46,11 @@ def upload_package(class_name: str) -> str | None:
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         tar.add(class_dir, arcname=class_name)
     buf.seek(0)
+    size_mb = buf.getbuffer().nbytes / 1_000_000
 
+    logger.info(f"[{class_name}] uploading package to s3://{_BUCKET}/{key} ({size_mb:.1f} MB)...")
     _client().upload_fileobj(buf, _BUCKET, key)
+    logger.info(f"[{class_name}] upload complete: {key}")
     return key
 
 
@@ -62,8 +68,10 @@ def download_latest_package(class_name: str) -> bool:
     """Replaces local classes/<class_name>/ with the latest S3 snapshot."""
     key = latest_package_key(class_name)
     if key is None:
+        logger.info(f"[{class_name}] no S3 package found, nothing to download")
         return False
 
+    logger.info(f"[{class_name}] downloading and replacing local data with s3://{_BUCKET}/{key}...")
     buf = io.BytesIO()
     _client().download_fileobj(_BUCKET, key, buf)
     buf.seek(0)
@@ -77,6 +85,7 @@ def download_latest_package(class_name: str) -> bool:
         if class_dir.exists():
             shutil.rmtree(class_dir)
         shutil.move(str(extracted), str(class_dir))
+    logger.info(f"[{class_name}] download complete: {key}")
     return True
 
 
@@ -87,8 +96,10 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
     already has its own local-only samples still pending publication."""
     key = latest_package_key(class_name)
     if key is None:
+        logger.info(f"[{class_name}] no S3 package found, nothing to merge")
         return None
 
+    logger.info(f"[{class_name}] merging in s3://{_BUCKET}/{key}...")
     buf = io.BytesIO()
     _client().download_fileobj(_BUCKET, key, buf)
     buf.seek(0)
@@ -103,6 +114,10 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
         local_samples = common.load_samples(class_name)
         local_ids = {r["id"] for r in local_samples}
         added_rows = [r for r in remote_samples if r["id"] not in local_ids]
+        logger.info(
+            f"[{class_name}] merge: {len(local_samples)} local, {len(remote_samples)} remote, "
+            f"{len(added_rows)} new from remote"
+        )
 
         if added_rows:
             common.samples_dir(class_name).mkdir(parents=True, exist_ok=True)

@@ -21,8 +21,10 @@ __pycache__/
 
 # Runtime artifacts from restart.sh / restart.ps1
 app.log
+app.err.log
 .app.pid
 train_*.log
+logs/
 
 # Editors/OS
 .DS_Store

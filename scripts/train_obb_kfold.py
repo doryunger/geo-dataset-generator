@@ -61,7 +61,7 @@ def run_kfold(class_name: str, version: str, k: int = 5, seed: int = 0, **train_
         "class": class_name, "version": version, "k": k, "seed": seed,
         "n_samples": len(sample_ids), "fold_results": fold_results, "summary": summary,
     }
-    out_path = common.MODELS_DIR / f"{class_name}_obb_{version}_kfold_summary.json"
+    out_path = common.MODELS_DIR / f"{common.class_slug(class_name)}_obb_{version}_kfold_summary.json"
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\nSaved {out_path}")
     return out
@@ -78,6 +78,7 @@ def main():
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=30)
     args = parser.parse_args()
+    common.setup_logging()
 
     import s3_sync
     if s3_sync.download_latest_package(args.class_name):

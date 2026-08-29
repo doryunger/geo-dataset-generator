@@ -6,17 +6,26 @@ let editingFeatureId = null; // the id mapbox-gl-draw assigned that feature
 let pickingValidationOrigin = false;
 let pickedOrigin = null; // {lon, lat} chosen via "Pick on Map", or null if not set yet
 let validationCandidates = []; // last validation run's results
+let knownClassNames = new Set();
 
 const classSelect = document.getElementById("class-select");
 const classNewInput = document.getElementById("class-new-input");
+const classNewParentSelect = document.getElementById("class-new-parent-select");
 
 const tabBtnSamples = document.getElementById("tab-btn-samples");
 const tabBtnValidation = document.getElementById("tab-btn-validation");
+const tabBtnTraining = document.getElementById("tab-btn-training");
 const samplesTab = document.getElementById("samples-tab");
 const validationTab = document.getElementById("validation-tab");
+const trainingTab = document.getElementById("training-tab");
+const trainingTreeEl = document.getElementById("training-tree");
+const trainingEpochsInput = document.getElementById("training-epochs-input");
+const trainingPatienceInput = document.getElementById("training-patience-input");
+const trainingBaseModelInput = document.getElementById("training-base-model-input");
 
 const samplesListEl = document.getElementById("samples-list");
 const generatePackageBtn = document.getElementById("generate-package-btn");
+const generatePackageProgressEl = document.getElementById("generate-package-progress");
 const generatePackageStatusEl = document.getElementById("generate-package-status");
 const includeLatestCheckbox = document.getElementById("include-latest-checkbox");
 
@@ -87,7 +96,31 @@ function currentClassName() {
 function updateClassInputVisibility() {
   const isNew = classSelect.value === "__new__";
   classNewInput.style.display = isNew ? "block" : "none";
+  classNewParentSelect.style.display = isNew ? "block" : "none";
   if (isNew) classNewInput.focus();
+}
+
+async function createNewClassAndLoad() {
+  const name = classNewInput.value.trim();
+  if (!name) return;
+  if (knownClassNames.has(name)) {
+    await loadSamples();
+    return;
+  }
+  const parent = classNewParentSelect.value || null;
+  const res = await fetch("/api/classes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, parent }),
+  });
+  if (!res.ok) {
+    alert("Could not create class: " + (await res.text()));
+    return;
+  }
+  await loadClasses();
+  classSelect.value = name;
+  updateClassInputVisibility();
+  await loadSamples();
 }
 
 // ---------- geometry helpers (same math as the main app's app.js, kept separate since the two
@@ -319,7 +352,7 @@ async function finishEditingSample() {
   draw.delete(featureId);
 
   const ring = feature.geometry.coordinates[0];
-  const res = await fetch(`/api/manual/samples/${encodeURIComponent(currentClassName())}/${sampleId}`, {
+  const res = await fetch(`/api/manual/samples/${sampleId}?class_name=${encodeURIComponent(currentClassName())}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ polygon: ring }),
@@ -367,7 +400,7 @@ function renderSamplesList() {
     delBtn.title = "Delete this sample";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await fetch(`/api/manual/samples/${encodeURIComponent(currentClassName())}/${s.id}`, { method: "DELETE" });
+      await fetch(`/api/manual/samples/${s.id}?class_name=${encodeURIComponent(currentClassName())}`, { method: "DELETE" });
       samples = samples.filter((x) => x.id !== s.id);
       refreshSamplesLayer();
       renderSamplesList();
@@ -382,7 +415,9 @@ async function generatePackage() {
   const className = currentClassName();
   if (!className) return;
   generatePackageBtn.disabled = true;
-  generatePackageStatusEl.textContent = "Generating...";
+  generatePackageProgressEl.value = 0;
+  generatePackageProgressEl.style.display = "block";
+  generatePackageStatusEl.textContent = "Starting...";
   try {
     const res = await fetch("/api/manual/generate_package", {
       method: "POST",
@@ -390,13 +425,24 @@ async function generatePackage() {
       body: JSON.stringify({ class_name: className, include_latest: includeLatestCheckbox.checked }),
     });
     if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
+    const { job_id } = await res.json();
+
+    const job = await pollJob(job_id, {
+      onProgress: (p) => {
+        generatePackageProgressEl.value = p.percent || 0;
+        generatePackageStatusEl.textContent = p.detail ? `${p.step} -- ${p.detail}` : (p.step || "Working...");
+      },
+    });
+    if (job.status === "error") throw new Error(job.error);
+
+    const data = job.result;
     const s3Note = data.s3_configured
       ? (data.s3_key ? `Uploaded to S3 (${data.s3_key}).` : "S3 upload failed -- check logs.")
       : "S3 not configured -- kept local only.";
     const mergeNote = data.merge
       ? `Merged ${data.merge.added_from_remote} new sample(s) from S3 (had ${data.merge.local_total} local, latest S3 entry had ${data.merge.remote_total}). `
       : (includeLatestCheckbox.checked ? "No S3 package to merge yet -- packaged local samples only. " : "");
+    generatePackageProgressEl.value = 100;
     generatePackageStatusEl.textContent =
       `${mergeNote}Done: seg ${data.segmentation.train}/${data.segmentation.val} (train/val), ` +
       `obb ${data.obb.train}/${data.obb.val} (train/val). ${s3Note} ` +
@@ -405,18 +451,135 @@ async function generatePackage() {
     generatePackageStatusEl.textContent = "Error: " + err.message;
   } finally {
     generatePackageBtn.disabled = false;
+    generatePackageProgressEl.style.display = "none";
+  }
+}
+
+// ---------- tabs ----------
+
+function switchTab(tab) {
+  samplesTab.style.display = tab === "samples" ? "block" : "none";
+  validationTab.style.display = tab === "validation" ? "block" : "none";
+  trainingTab.style.display = tab === "training" ? "block" : "none";
+  tabBtnSamples.classList.toggle("active", tab === "samples");
+  tabBtnValidation.classList.toggle("active", tab === "validation");
+  tabBtnTraining.classList.toggle("active", tab === "training");
+  if (tab === "training") loadTrainingTree();
+}
+
+// ---------- training tab ----------
+
+async function loadTrainingTree() {
+  const [classesRes, activeRes] = await Promise.all([
+    fetch("/api/classes").then((r) => r.json()),
+    fetch("/api/train/active").then((r) => r.json()),
+  ]);
+  const { classes, parents } = classesRes;
+  const activeJobs = activeRes.jobs || {};
+
+  const topLevel = classes.filter((c) => !parents[c]);
+  const childrenOf = (parent) => classes.filter((c) => parents[c] === parent);
+
+  trainingTreeEl.innerHTML = "";
+  for (const top of topLevel) {
+    trainingTreeEl.appendChild(buildTrainingRow(top, false));
+    for (const kid of childrenOf(top)) {
+      trainingTreeEl.appendChild(buildTrainingRow(kid, true));
+    }
+  }
+
+  for (const [className, jobId] of Object.entries(activeJobs)) {
+    const row = trainingTreeEl.querySelector(`[data-class="${CSS.escape(className)}"]`);
+    if (row) watchTrainingJob(row, jobId);
+  }
+}
+
+function buildTrainingRow(className, indented) {
+  const row = document.createElement("div");
+  row.className = "training-row" + (indented ? " indented" : "");
+  row.dataset.class = className;
+
+  const label = document.createElement("span");
+  label.className = "training-row-label";
+  label.textContent = (indented ? "↳ " : "") + className;
+  row.appendChild(label);
+
+  const status = document.createElement("span");
+  status.className = "training-row-status";
+  row.appendChild(status);
+
+  const progress = document.createElement("progress");
+  progress.max = 100;
+  progress.value = 0;
+  progress.style.display = "none";
+  row.appendChild(progress);
+
+  const btn = document.createElement("button");
+  btn.className = "training-row-btn secondary";
+  btn.textContent = "Train";
+  btn.addEventListener("click", () => startTraining(className, row));
+  row.appendChild(btn);
+
+  return row;
+}
+
+async function startTraining(className, row) {
+  const btn = row.querySelector(".training-row-btn");
+  const status = row.querySelector(".training-row-status");
+  btn.disabled = true;
+  status.textContent = "Starting...";
+  try {
+    const res = await fetch("/api/train", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        class_name: className,
+        epochs: parseInt(trainingEpochsInput.value, 10) || 100,
+        patience: parseInt(trainingPatienceInput.value, 10) || 30,
+        base_model: trainingBaseModelInput.value.trim() || "yolo11n-obb.pt",
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const { job_id } = await res.json();
+    await watchTrainingJob(row, job_id);
+  } catch (err) {
+    status.textContent = "Error: " + err.message;
+    btn.disabled = false;
+  }
+}
+
+async function watchTrainingJob(row, jobId) {
+  const btn = row.querySelector(".training-row-btn");
+  const status = row.querySelector(".training-row-status");
+  const progress = row.querySelector("progress");
+  btn.disabled = true;
+  progress.style.display = "inline-block";
+
+  const job = await pollJob(jobId, {
+    intervalMs: 3000,
+    onProgress: (p) => {
+      progress.value = p.percent || 0;
+      const metricsStr = p.metrics
+        ? Object.entries(p.metrics).map(([k, v]) => `${k.split("/").pop()}=${v}`).join(" ")
+        : "";
+      status.textContent = `${p.step || "Working..."} ${metricsStr}`;
+    },
+  });
+
+  progress.style.display = "none";
+  btn.disabled = false;
+  if (job.status === "error") {
+    status.textContent = "Error: " + job.error;
+  } else if (job.status === "done") {
+    const m = job.result && job.result.metrics && job.result.metrics.metrics;
+    const metricsStr = m
+      ? Object.entries(m).map(([k, v]) => `${k.split("/").pop()}=${typeof v === "number" ? v.toFixed(3) : v}`).join(" ")
+      : "";
+    status.textContent = `Saved ${job.result.version}. ${metricsStr}`;
   }
 }
 
 // ---------- validation tab ----------
-
-function switchTab(tab) {
-  const isSamples = tab === "samples";
-  samplesTab.style.display = isSamples ? "block" : "none";
-  validationTab.style.display = isSamples ? "none" : "block";
-  tabBtnSamples.classList.toggle("active", isSamples);
-  tabBtnValidation.classList.toggle("active", !isSamples);
-}
 
 function openValidationModal() {
   const className = currentClassName();
@@ -546,16 +709,40 @@ function renderValidationResults() {
 
 async function loadClasses() {
   const res = await fetch("/api/classes");
-  const { classes } = await res.json();
+  const { classes, parents } = await res.json();
+  knownClassNames = new Set(classes);
   const current = classSelect.value;
+
+  const topLevel = classes.filter((c) => !parents[c]);
+  const childrenOf = (parent) => classes.filter((c) => parents[c] === parent);
+
   classSelect.innerHTML = '<option value="__new__">+ New class</option>';
-  for (const c of classes) {
-    const opt = document.createElement("option");
-    opt.value = c;
-    opt.textContent = c;
-    classSelect.appendChild(opt);
+  for (const top of topLevel) {
+    const kids = childrenOf(top);
+    const group = document.createElement("optgroup");
+    group.label = top;
+    const topOpt = document.createElement("option");
+    topOpt.value = top;
+    topOpt.textContent = top;
+    group.appendChild(topOpt);
+    for (const kid of kids) {
+      const kidOpt = document.createElement("option");
+      kidOpt.value = kid;
+      kidOpt.textContent = `↳ ${kid}`;
+      group.appendChild(kidOpt);
+    }
+    classSelect.appendChild(group);
   }
   if (classes.includes(current)) classSelect.value = current;
+
+  classNewParentSelect.innerHTML = '<option value="">(top-level class)</option>';
+  for (const top of topLevel) {
+    const opt = document.createElement("option");
+    opt.value = top;
+    opt.textContent = `sub-class of ${top}`;
+    classNewParentSelect.appendChild(opt);
+  }
+
   updateClassInputVisibility();
 }
 
@@ -563,13 +750,14 @@ classSelect.addEventListener("change", () => {
   updateClassInputVisibility();
   loadSamples();
 });
-classNewInput.addEventListener("blur", loadSamples);
+classNewInput.addEventListener("blur", createNewClassAndLoad);
 classNewInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") loadSamples();
+  if (e.key === "Enter") createNewClassAndLoad();
 });
 
 tabBtnSamples.addEventListener("click", () => switchTab("samples"));
 tabBtnValidation.addEventListener("click", () => switchTab("validation"));
+tabBtnTraining.addEventListener("click", () => switchTab("training"));
 generatePackageBtn.addEventListener("click", generatePackage);
 openValidationModalBtn.addEventListener("click", openValidationModal);
 validationPickPositionBtn.addEventListener("click", startPickingPosition);

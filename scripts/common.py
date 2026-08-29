@@ -1,10 +1,12 @@
 """Shared helpers: global tile/embedding cache, per-class paths, tile math, jsonl/registry IO,
 Mapbox tile fetch+cache."""
 import json
+import logging
 import math
 import os
 import re
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +16,38 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 CLASSES_DIR = ROOT / "classes"
 MODELS_DIR = ROOT / "models"
+LOGS_DIR = ROOT / "logs"
+
+_logging_configured = False
+
+
+def setup_logging() -> None:
+    """Routes every module's logging.getLogger(__name__) calls to logs/app.log (rotated,
+    timestamped) and stdout. Call once at process startup (api.py does this) -- CLI scripts
+    that only use print() for their own terminal output don't need it."""
+    global _logging_configured
+    if _logging_configured:
+        return
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+
+    file_handler = RotatingFileHandler(LOGS_DIR / "app.log", maxBytes=10_000_000, backupCount=5, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(fmt)
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(stream_handler)
+
+    for noisy in (
+        "httpx", "httpcore", "huggingface_hub", "urllib3", "boto3", "botocore", "s3transfer", "PIL",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    _logging_configured = True
+
 
 TILES_DIR = ROOT / "tiles"
 TILE_IMAGES_DIR = TILES_DIR / "images"
@@ -33,13 +67,40 @@ _TILE_URL_RE = re.compile(r"/v4/(?P<tileset>[\w.\-]+)/(?P<z>\d+)/(?P<x>\d+)/(?P<
 
 
 def list_classes() -> list[str]:
+    """Top-level classes as their own name ("fence"); sub-classes as "<parent>/<child>"
+    ("fence/fence-face") -- one level of nesting. A sub-class is an ordinary class in every
+    respect (own samples.jsonl, own dataset_obb/, own S3 package, trained independently); the
+    nesting is real (classes/fence/fence-face/ is an actual subdirectory of classes/fence/,
+    not a separate top-level dir). A directory under a class dir counts as a sub-class if it has
+    its own samples/ subdirectory (which ensure_class_dirs always creates for a real class) --
+    an inclusion check rather than excluding known structural dir names (review/, dataset/,
+    predictions/, ...), so a future structural directory added elsewhere doesn't silently get
+    misread as a sub-class the way "predictions"/"predictions_obb" (from predict_area.py /
+    predict_area_obb.py, not listed here) once did."""
     if not CLASSES_DIR.exists():
         return []
-    return sorted(p.name for p in CLASSES_DIR.iterdir() if p.is_dir())
+    names = []
+    for top in sorted(p.name for p in CLASSES_DIR.iterdir() if p.is_dir()):
+        names.append(top)
+        for child in sorted(p.name for p in (CLASSES_DIR / top).iterdir() if p.is_dir()):
+            if (CLASSES_DIR / top / child / "samples").is_dir():
+                names.append(f"{top}/{child}")
+    return names
 
 
 def class_dir(name: str) -> Path:
     return CLASSES_DIR / name
+
+
+def class_parent_name(name: str) -> str | None:
+    return name.rsplit("/", 1)[0] if "/" in name else None
+
+
+def class_slug(name: str) -> str:
+    """Filesystem-flat form of a class name, e.g. for building a single model filename where a
+    real nested path isn't wanted -- unlike class_dir (and everything derived from it), which
+    nests a sub-class as a real subdirectory and should be used for everything else."""
+    return name.replace("/", "-")
 
 
 def registry_path(name: str) -> Path:
@@ -133,6 +194,7 @@ def ensure_class_dirs(name: str) -> None:
     for split in ("train", "val"):
         (dataset_dir(name) / "images" / split).mkdir(parents=True, exist_ok=True)
         (dataset_dir(name) / "labels" / split).mkdir(parents=True, exist_ok=True)
+
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -282,7 +344,7 @@ def slice_for_embedding(image: Image.Image, normalized_ring: list[list[float]]) 
 
 
 def sample_index_id(class_name: str, sample_id: str) -> str:
-    return f"sample_{class_name}_{sample_id}"
+    return f"sample_{class_slug(class_name)}_{sample_id}"
 
 
 def sample_index_ids(class_name: str, sample_id: str, count: int) -> list[str]:

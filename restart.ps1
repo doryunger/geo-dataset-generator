@@ -7,9 +7,12 @@ Set-Location $PSScriptRoot
 $LogFile = "app.log"
 $PidFile = ".app.pid"
 
-# Match by cmdline, not just the pidfile, so this also catches instances started manually
-# or by a previous run whose pidfile went stale.
-$existing = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'uvicorn api:app' }
+# Match by process name, not just the pidfile, so this also catches instances started
+# manually or by a previous run whose pidfile went stale. Matched on Name alone -- CommandLine
+# comes back blank for other processes in this environment even when same-user (some sandboxing
+# restriction on cross-process command-line reads), so a CommandLine-based match is unreliable
+# here. Name alone is fine: this is a single-purpose dev machine, nothing else runs uvicorn.exe.
+$existing = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'uvicorn.exe' }
 if ($existing) {
     $pidList = ($existing | ForEach-Object { $_.ProcessId }) -join ', '
     Write-Host "Stopping running app (pid(s): $pidList)..."
@@ -29,8 +32,11 @@ Get-Content .env | Where-Object { $_ -match '^\s*[^#\s][^=]*=' } | ForEach-Objec
     [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
 }
 
-$uvicornCmd = "`"$PSScriptRoot\.venv\Scripts\uvicorn.exe`" api:app --app-dir scripts >> `"$LogFile`" 2>&1"
-$proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $uvicornCmd -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
+$uvicornExe = Join-Path $PSScriptRoot ".venv\Scripts\uvicorn.exe"
+$ErrLogFile = "app.err.log"
+$proc = Start-Process -FilePath $uvicornExe -ArgumentList "api:app", "--app-dir", "scripts" `
+    -WorkingDirectory $PSScriptRoot -RedirectStandardOutput $LogFile -RedirectStandardError $ErrLogFile `
+    -WindowStyle Hidden -PassThru
 
 $proc.Id | Out-File -FilePath $PidFile -Encoding ascii -NoNewline
-Write-Host "App started (pid $($proc.Id)), logging to $LogFile"
+Write-Host "App started (pid $($proc.Id)), logging to $LogFile / $ErrLogFile"

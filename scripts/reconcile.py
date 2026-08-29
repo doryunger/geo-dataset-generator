@@ -8,11 +8,14 @@ and copies confirmed tile images (+ any guessed label) into dataset/images|label
 Also owns browsing/deleting what's already in a class's dataset (Manage Examples tab): find an
 example's file location, delete one example, or delete every confirmed example from a round.
 """
+import logging
 import shutil
 from collections import Counter
 
 import common
 import train
+
+logger = logging.getLogger(__name__)
 
 VAL_FRACTION = 5
 
@@ -146,6 +149,7 @@ def generate_package(class_name: str) -> dict:
         lbl_dst.write_text(common.yolo_seg_lines([row["label_polygon"]]))
         counts[split] += 1
 
+    logger.info(f"[{class_name}] segmentation: {counts['train']} train, {counts['val']} val from {len(samples)} sample(s)")
     train.ensure_data_yaml(class_name)
     common.touch_marker(marker)
     return {"class_name": class_name, **counts, "changes_since_last_generation": dict(change_counts)}

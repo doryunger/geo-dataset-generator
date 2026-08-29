@@ -6,13 +6,18 @@ Run with:
     set -a && source .env && set +a
     uvicorn api:app --reload --app-dir scripts
 """
+import json
+import logging
 import re
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -26,8 +31,12 @@ import reconcile
 import s3_sync
 import search
 import train
+import train_obb
 from auto_labeler import PatchLabeler
 from embedder import Embedder
+
+common.setup_logging()
+logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _TILE_ID_RE = re.compile(r"^(?:\d+_\d+_\d+|seed_\d+)$")
@@ -143,7 +152,30 @@ def validate_bbox(req: ValidateBboxRequest):
 
 @app.get("/api/classes")
 def get_classes():
-    return {"classes": common.list_classes()}
+    classes = common.list_classes()
+    parents = {c: p for c in classes if (p := common.class_parent_name(c))}
+    return {"classes": classes, "parents": parents}
+
+
+class CreateClassRequest(BaseModel):
+    name: str
+    parent: str | None = None
+
+
+@app.post("/api/classes")
+def create_class(req: CreateClassRequest):
+    name = req.name.strip()
+    if not name or "/" in name:
+        raise HTTPException(400, "Class name is required and cannot contain '/'")
+    if req.parent:
+        if req.parent not in common.list_classes():
+            raise HTTPException(400, f"Parent class '{req.parent}' does not exist")
+        if "/" in req.parent:
+            raise HTTPException(400, "Only one level of sub-classing is supported")
+    full_name = f"{req.parent}/{name}" if req.parent else name
+    common.ensure_class_dirs(full_name)
+    logger.info(f"Created class '{full_name}'")
+    return {"name": full_name, "parent": req.parent}
 
 
 def _build_collect_response(req: CollectRequest, round_num: int, result: search.SearchResult) -> dict:
@@ -291,8 +323,103 @@ def _has_dataset(class_name: str) -> bool:
 
 
 def _next_model_version(class_name: str) -> str:
-    nums = [int(m.group(1)) for p in common.MODELS_DIR.glob(f"{class_name}_v*.pt") if (m := _VERSION_RE.search(p.name))]
+    nums = [
+        int(m.group(1)) for p in common.MODELS_DIR.glob(f"{common.class_slug(class_name)}_v*.pt")
+        if (m := _VERSION_RE.search(p.name))
+    ]
     return f"v{(max(nums) + 1) if nums else 1}"
+
+
+def _next_obb_model_version(class_name: str) -> str:
+    slug = common.class_slug(class_name)
+    nums = [
+        int(m.group(1)) for p in common.MODELS_DIR.glob(f"{slug}_obb_v*.pt")
+        if (m := _VERSION_RE.search(p.name))
+    ]
+    return f"v{(max(nums) + 1) if nums else 1}"
+
+
+class TrainRequest(BaseModel):
+    class_name: str
+    epochs: int = 100
+    patience: int = 30
+    base_model: str = "yolo11n-obb.pt"
+
+
+_train_jobs: dict[str, str] = {}  # class_name -> job_id, present only while that class's training is running
+
+
+def _run_train_job(job: Job, class_name: str, version: str, run_dir: Path, log_path: Path, cmd: list[str]) -> None:
+    try:
+        logger.info(f"[{class_name}] training {version} started: {' '.join(cmd)}")
+        job.progress = {"step": "Starting training...", "percent": 0}
+        with open(log_path, "w", encoding="utf-8") as logf:
+            proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, cwd=str(Path(__file__).resolve().parent))
+            while proc.poll() is None:
+                status = train_obb.read_training_status(run_dir)
+                if status:
+                    percent = int(100 * status["epoch"] / status["total"]) if status["total"] else 0
+                    eta = f", ETA ~{status['eta_min']:.0f} min" if status["eta_min"] is not None else ""
+                    job.progress = {
+                        "step": f"epoch {status['epoch']}/{status['total'] or '?'}{eta}",
+                        "percent": percent, "metrics": status["metrics"],
+                    }
+                time.sleep(5)
+            returncode = proc.returncode
+
+        if returncode != 0:
+            tail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+            raise RuntimeError(f"train_obb.py exited with code {returncode}. Last output:\n{tail}")
+
+        slug = common.class_slug(class_name)
+        out_pt = common.MODELS_DIR / f"{slug}_obb_{version}.pt"
+        metrics_path = common.MODELS_DIR / f"{slug}_obb_{version}_metrics.json"
+        metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else None
+        job.progress = {"step": "Done", "percent": 100}
+        job.result = {"class_name": class_name, "version": version, "path": str(out_pt), "metrics": metrics}
+        job.status = "done"
+        logger.info(f"[{class_name}] training {version} finished: {out_pt}")
+    except Exception as e:
+        logger.exception(f"[{class_name}] training {version} failed")
+        job.status = "error"
+        job.error = str(e)
+    finally:
+        _train_jobs.pop(class_name, None)
+
+
+@app.post("/api/train")
+def start_training(req: TrainRequest):
+    class_name = req.class_name
+    if class_name not in common.list_classes():
+        raise HTTPException(404, f"Class '{class_name}' not found")
+    if class_name in _train_jobs:
+        raise HTTPException(409, f"Training is already running for '{class_name}'")
+    obb_images_train = common.obb_dataset_dir(class_name) / "images" / "train"
+    if not obb_images_train.exists() or next(obb_images_train.glob("*"), None) is None:
+        raise HTTPException(400, f"'{class_name}' has no OBB dataset yet -- run Generate Package first")
+
+    version = _next_obb_model_version(class_name)
+    slug = common.class_slug(class_name)
+    run_dir = common.MODELS_DIR / f"{slug}_obb_{version}_run"
+    common.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = common.LOGS_DIR / f"train_{slug}_{version}.log"
+
+    script_path = Path(__file__).resolve().parent / "train_obb.py"
+    cmd = [
+        sys.executable, str(script_path), "--class", class_name, "--version", version,
+        "--epochs", str(req.epochs), "--patience", str(req.patience), "--base-model", req.base_model,
+    ]
+
+    job = Job("train")
+    _jobs[job.id] = job
+    _train_jobs[class_name] = job.id
+    threading.Thread(target=_run_train_job, args=(job, class_name, version, run_dir, log_path, cmd), daemon=True).start()
+    return {"job_id": job.id, "class_name": class_name, "version": version}
+
+
+@app.get("/api/train/active")
+def active_training_jobs():
+    return {"jobs": dict(_train_jobs)}
 
 
 def _run_pack_job(job: Job, epochs: int) -> None:
@@ -325,7 +452,7 @@ def _sample_response(class_name: str, row: dict) -> dict:
     return {
         "id": row["id"], "class_name": class_name, "lon": row["lon"], "lat": row["lat"],
         "polygon": row["polygon"],
-        "thumbnail_url": f"/api/manual/sample_image/{class_name}/{row['id']}",
+        "thumbnail_url": f"/api/manual/sample_image/{row['id']}?class_name={quote(class_name, safe='')}",
     }
 
 
@@ -356,6 +483,7 @@ def create_manual_sample(req: ManualSampleRequest):
     common.append_sample(req.class_name, row)
     common.log_sample_change(req.class_name, "created", sample_id)
     obb.save_bend_review_overlay(req.class_name, sample_id)
+    logger.info(f"[{req.class_name}] created sample {sample_id}")
     return _sample_response(req.class_name, row)
 
 
@@ -364,8 +492,8 @@ def list_manual_samples(class_name: str):
     return {"samples": [_sample_response(class_name, row) for row in common.load_samples(class_name)]}
 
 
-@app.patch("/api/manual/samples/{class_name}/{sample_id}")
-def update_manual_sample(class_name: str, sample_id: str, req: ManualSampleUpdateRequest):
+@app.patch("/api/manual/samples/{sample_id}")
+def update_manual_sample(sample_id: str, class_name: str, req: ManualSampleUpdateRequest):
     samples = common.load_samples(class_name)
     row = next((r for r in samples if r["id"] == sample_id), None)
     if row is None:
@@ -393,11 +521,12 @@ def update_manual_sample(class_name: str, sample_id: str, req: ManualSampleUpdat
     common.rewrite_jsonl(common.samples_path(class_name), [r if r["id"] != sample_id else row for r in samples])
     common.log_sample_change(class_name, "updated", sample_id)
     obb.save_bend_review_overlay(class_name, sample_id)
+    logger.info(f"[{class_name}] updated sample {sample_id}")
     return _sample_response(class_name, row)
 
 
-@app.delete("/api/manual/samples/{class_name}/{sample_id}")
-def delete_manual_sample(class_name: str, sample_id: str):
+@app.delete("/api/manual/samples/{sample_id}")
+def delete_manual_sample(sample_id: str, class_name: str):
     row = common.remove_sample(class_name, sample_id)
     if row is None:
         return {"deleted": False}
@@ -406,11 +535,12 @@ def delete_manual_sample(class_name: str, sample_id: str):
     crop.unlink(missing_ok=True)
     (common.bend_review_dir(class_name) / f"{sample_id}.jpg").unlink(missing_ok=True)
     common.remove_sample_from_index(class_name, sample_id)
+    logger.info(f"[{class_name}] deleted sample {sample_id}")
     return {"deleted": True}
 
 
-@app.get("/api/manual/sample_image/{class_name}/{sample_id}")
-def manual_sample_image(class_name: str, sample_id: str):
+@app.get("/api/manual/sample_image/{sample_id}")
+def manual_sample_image(sample_id: str, class_name: str):
     match = next(common.samples_dir(class_name).glob(f"{sample_id}.*"), None)
     if match is None:
         raise HTTPException(404, "Sample image not found")
@@ -505,22 +635,59 @@ def manual_promote(req: ManualPromoteRequest):
     return _sample_response(req.class_name, row)
 
 
+def _run_generate_package_job(job: Job, req: GeneratePackageRequest) -> None:
+    class_name = req.class_name
+    logger.info(f"[{class_name}] generate_package started (include_latest={req.include_latest})")
+    try:
+        merge_result = None
+        if req.include_latest and s3_sync.s3_configured():
+            job.progress = {"step": "Merging latest S3 entry", "percent": 2}
+            merge_result = s3_sync.merge_latest_package(class_name, embedder=_state["embedder"])
+            logger.info(f"[{class_name}] merge complete: {merge_result}")
+
+        job.progress = {"step": "Rebuilding segmentation dataset", "percent": 15}
+        logger.info(f"[{class_name}] rebuilding segmentation dataset...")
+        seg_result = reconcile.generate_package(class_name)
+        logger.info(f"[{class_name}] segmentation dataset done: {seg_result['train']} train, {seg_result['val']} val")
+
+        job.progress = {"step": "Rebuilding OBB dataset", "percent": 20}
+        logger.info(f"[{class_name}] rebuilding OBB dataset (this is the slow step -- per-sample embedding for cut detection)...")
+
+        def on_obb_progress(i: int, total: int, sample_id: str) -> None:
+            job.progress = {
+                "step": f"Rebuilding OBB dataset (sample {i}/{total})", "detail": sample_id,
+                "percent": 20 + int(70 * i / max(total, 1)),
+            }
+
+        obb_result = obb.generate_obb_package(class_name, embedder=_state["embedder"], on_progress=on_obb_progress)
+        logger.info(f"[{class_name}] OBB dataset done: {obb_result['train']} train, {obb_result['val']} val")
+
+        job.progress = {"step": "Uploading to S3", "percent": 92}
+        s3_key = s3_sync.upload_package(class_name) if s3_sync.s3_configured() else None
+        logger.info(f"[{class_name}] generate_package finished, s3_key={s3_key}")
+
+        job.progress = {"step": "Done", "percent": 100}
+        job.result = {
+            "segmentation": seg_result, "obb": obb_result, "merge": merge_result,
+            "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(),
+        }
+        job.status = "done"
+    except ValueError as e:
+        logger.error(f"[{class_name}] generate_package failed: {e}")
+        job.status = "error"
+        job.error = str(e)
+    except Exception:
+        logger.exception(f"[{class_name}] generate_package failed unexpectedly")
+        job.status = "error"
+        job.error = "Unexpected error -- check logs/app.log for details"
+
+
 @app.post("/api/manual/generate_package")
 def generate_package(req: GeneratePackageRequest):
-    merge_result = None
-    if req.include_latest and s3_sync.s3_configured():
-        merge_result = s3_sync.merge_latest_package(req.class_name, embedder=_state["embedder"])
-
-    try:
-        seg_result = reconcile.generate_package(req.class_name)
-        obb_result = obb.generate_obb_package(req.class_name, embedder=_state["embedder"])
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    s3_key = s3_sync.upload_package(req.class_name) if s3_sync.s3_configured() else None
-    return {
-        "segmentation": seg_result, "obb": obb_result, "merge": merge_result,
-        "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(),
-    }
+    job = Job("generate_package")
+    _jobs[job.id] = job
+    threading.Thread(target=_run_generate_package_job, args=(job, req), daemon=True).start()
+    return {"job_id": job.id}
 
 
 @app.get("/manual")

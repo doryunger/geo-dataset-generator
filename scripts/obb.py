@@ -5,6 +5,7 @@ Usage:
     python scripts/obb.py --class fence
 """
 import argparse
+import logging
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -17,6 +18,8 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.ops import split as shapely_split
 
 import common
+
+logger = logging.getLogger(__name__)
 
 VAL_FRACTION = 5
 
@@ -209,6 +212,7 @@ def ensure_obb_data_yaml(class_name: str):
 
 def generate_obb_package(
     class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
+    on_progress=None,
 ) -> dict:
     """Rebuilds dataset_obb/images|labels/{train,val} from samples.jsonl. Split is decided per
     original sample, not per piece, so pieces of one fence always land together."""
@@ -239,20 +243,26 @@ def generate_obb_package(
         split = (row["id"] in val_ids) if val_ids is not None else (i % VAL_FRACTION == 0)
         split = "val" if split else "train"
 
+        logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']})...")
+        if on_progress:
+            on_progress(i + 1, len(samples), row["id"])
         img = Image.open(src)
+        native_gsd_m = common.meters_per_pixel(row["zoom"], (row["south"] + row["north"]) / 2)
+        img = common.resample_to_target_gsd(img, native_gsd_m)
         w, h = img.size
         normalized_ring = common.polygon_to_normalized(
             row["polygon"], row["west"], row["south"], row["east"], row["north"],
         )
         pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
-        gsd_m_per_px = common.meters_per_pixel(row["zoom"], (row["south"] + row["north"]) / 2)
+        gsd_m_per_px = common.TARGET_GSD_M
         rects = polygon_to_obb_corners(
             pixel_ring, BEND_PIECES.get(row["id"], 1), image=img, gsd_m_per_px=gsd_m_per_px, embedder=embedder,
         )
+        logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 
         if len(rects) == 1:
             dst = common.obb_dataset_dir(class_name) / "images" / split / f"{row['id']}{src.suffix}"
-            shutil.copy(src, dst)
+            img.convert("RGB").save(dst)
             line = "0 " + " ".join(f"{x/w:.6f} {y/h:.6f}" for x, y in rects[0])
             lbl_path = common.obb_dataset_dir(class_name) / "labels" / split / f"{row['id']}.txt"
             lbl_path.write_text(line + "\n")
