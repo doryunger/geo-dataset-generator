@@ -210,30 +210,16 @@ def ensure_obb_data_yaml(class_name: str):
     return data_yaml
 
 
-def generate_obb_package(
-    class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
-    on_progress=None,
+def _generate_pieces_for_class(
+    class_name: str, output_dir, embedder, val_ids: set[str] | None = None, on_progress=None,
 ) -> dict:
-    """Rebuilds dataset_obb/images|labels/{train,val} from samples.jsonl. Split is decided per
-    original sample, not per piece, so pieces of one fence always land together."""
+    """Writes dataset_obb-shaped images/labels/{train,val} under output_dir from class_name's own
+    samples.jsonl -- the part of dataset generation that's identical whether the output is a
+    class's own permanent dataset_obb/ (generate_obb_package) or a temporary combined dataset
+    pooling several classes together (generate_combined_obb_dataset)."""
     samples = common.load_samples(class_name)
     if not samples:
         raise ValueError(f"'{class_name}' has no samples yet")
-
-    if embedder is None:
-        from embedder import Embedder
-        embedder = Embedder()
-
-    marker = common.obb_dataset_dir(class_name) / ".last_generated"
-    changes = common.changes_since_marker(class_name, marker)
-    change_counts = Counter(c["event"] for c in changes)
-
-    for split in ("train", "val"):
-        for kind in ("images", "labels"):
-            d = common.obb_dataset_dir(class_name) / kind / split
-            if d.exists():
-                shutil.rmtree(d)
-            d.mkdir(parents=True, exist_ok=True)
 
     counts = {"train": 0, "val": 0}
     for i, row in enumerate(samples):
@@ -261,17 +247,17 @@ def generate_obb_package(
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 
         if len(rects) == 1:
-            dst = common.obb_dataset_dir(class_name) / "images" / split / f"{row['id']}{src.suffix}"
+            dst = output_dir / "images" / split / f"{row['id']}{src.suffix}"
             img.convert("RGB").save(dst)
             line = "0 " + " ".join(f"{x/w:.6f} {y/h:.6f}" for x, y in rects[0])
-            lbl_path = common.obb_dataset_dir(class_name) / "labels" / split / f"{row['id']}.txt"
+            lbl_path = output_dir / "labels" / split / f"{row['id']}.txt"
             lbl_path.write_text(line + "\n")
             counts[split] += 1
         else:
             for idx, rect in enumerate(rects):
                 piece_img, left, top = _crop_piece(img, rect)
                 pw, ph = piece_img.size
-                dst = common.obb_dataset_dir(class_name) / "images" / split / f"{row['id']}_p{idx}{src.suffix}"
+                dst = output_dir / "images" / split / f"{row['id']}_p{idx}{src.suffix}"
                 piece_img.convert("RGB").save(dst)
 
                 lines = []
@@ -282,23 +268,90 @@ def generate_obb_package(
                     local_rect = [((x - left) / pw, (y - top) / ph) for x, y in clipped]
                     lines.append("0 " + " ".join(f"{x:.6f} {y:.6f}" for x, y in local_rect))
 
-                lbl_path = common.obb_dataset_dir(class_name) / "labels" / split / f"{row['id']}_p{idx}.txt"
+                lbl_path = output_dir / "labels" / split / f"{row['id']}_p{idx}.txt"
                 lbl_path.write_text("\n".join(lines) + "\n")
                 counts[split] += 1
+    return counts
+
+
+def generate_obb_package(
+    class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
+    on_progress=None,
+) -> dict:
+    """Rebuilds dataset_obb/images|labels/{train,val} from samples.jsonl. Split is decided per
+    original sample, not per piece, so pieces of one fence always land together."""
+    if embedder is None:
+        from embedder import Embedder
+        embedder = Embedder()
+
+    output_dir = common.obb_dataset_dir(class_name)
+    marker = output_dir / ".last_generated"
+    changes = common.changes_since_marker(class_name, marker)
+    change_counts = Counter(c["event"] for c in changes)
+
+    for split in ("train", "val"):
+        for kind in ("images", "labels"):
+            d = output_dir / kind / split
+            if d.exists():
+                shutil.rmtree(d)
+            d.mkdir(parents=True, exist_ok=True)
+
+    counts = _generate_pieces_for_class(class_name, output_dir, embedder, val_ids=val_ids, on_progress=on_progress)
 
     if include_hard_negatives:
         for tile_id in HARD_NEGATIVE_TILES:
             src = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
             if src is None:
                 continue
-            dst = common.obb_dataset_dir(class_name) / "images" / "train" / f"{tile_id}{_dataset_ext(src)}"
+            dst = output_dir / "images" / "train" / f"{tile_id}{_dataset_ext(src)}"
             shutil.copy(src, dst)
-            (common.obb_dataset_dir(class_name) / "labels" / "train" / f"{tile_id}.txt").write_text("")
+            (output_dir / "labels" / "train" / f"{tile_id}.txt").write_text("")
             counts["negatives"] = counts.get("negatives", 0) + 1
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)
     return {"class_name": class_name, **counts, "changes_since_last_generation": dict(change_counts)}
+
+
+def generate_combined_obb_dataset(output_dir, class_names: list[str], embedder=None, on_progress=None) -> dict:
+    """Pools several classes' samples into one dataset_obb-shaped directory at output_dir (not
+    tied to any single class's permanent classes/<name>/dataset_obb/) -- for training a parent
+    together with its sub-classes' samples without ever touching either class's own independent
+    dataset. Each source class keeps its own train/val split (same per-class modulo logic as
+    generate_obb_package), so combining doesn't skew the split by class size. output_dir is the
+    caller's responsibility to create and clean up."""
+    if embedder is None:
+        from embedder import Embedder
+        embedder = Embedder()
+
+    for split in ("train", "val"):
+        for kind in ("images", "labels"):
+            (output_dir / kind / split).mkdir(parents=True, exist_ok=True)
+
+    totals = {"train": 0, "val": 0}
+    any_samples = False
+    for class_name in class_names:
+        if not common.load_samples(class_name):
+            logger.info(f"[{class_name}] no samples yet, skipping in combined dataset")
+            continue
+        any_samples = True
+
+        def _wrapped_progress(i, n, sample_id, class_name=class_name):
+            if on_progress:
+                on_progress(class_name, i, n, sample_id)
+
+        counts = _generate_pieces_for_class(class_name, output_dir, embedder, on_progress=_wrapped_progress)
+        totals["train"] += counts["train"]
+        totals["val"] += counts["val"]
+
+    if not any_samples:
+        raise ValueError(f"None of {class_names} have any samples yet")
+
+    data_yaml = output_dir / "data.yaml"
+    data_yaml.write_text(yaml.safe_dump({
+        "path": str(output_dir), "train": "images/train", "val": "images/val", "names": {0: class_names[0]},
+    }))
+    return {"class_names": class_names, **totals}
 
 
 def main():

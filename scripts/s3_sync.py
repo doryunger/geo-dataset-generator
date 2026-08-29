@@ -65,7 +65,12 @@ def latest_package_key(class_name: str) -> str | None:
 
 
 def download_latest_package(class_name: str) -> bool:
-    """Replaces local classes/<class_name>/ with the latest S3 snapshot."""
+    """Replaces local classes/<class_name>/ with the latest S3 snapshot. Local sub-class
+    directories nested under class_name (e.g. fence/fence-face) are preserved across the replace
+    -- a sub-class is a logically independent class synced under its own S3 key, not part of
+    class_name's own package, so it must survive class_name's own package being replaced, even if
+    the sub-class has local-only work never yet packaged to S3 (this was a real data-loss bug the
+    first time a plain parent-class training run silently wiped out a freshly-created sub-class)."""
     key = latest_package_key(class_name)
     if key is None:
         logger.info(f"[{class_name}] no S3 package found, nothing to download")
@@ -76,15 +81,35 @@ def download_latest_package(class_name: str) -> bool:
     _client().download_fileobj(_BUCKET, key, buf)
     buf.seek(0)
 
+    class_dir = common.class_dir(class_name)
+    sub_class_dirs = []
+    if class_dir.exists():
+        for child in class_dir.iterdir():
+            if child.is_dir() and (child / "samples").is_dir():
+                sub_class_dirs.append(child)
+
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(fileobj=buf, mode="r:gz") as tar:
             tar.extractall(tmp, filter="tar")
         extracted = Path(tmp) / class_name
 
-        class_dir = common.class_dir(class_name)
+        preserved_root = Path(tmp) / "_preserved_subclasses"
+        if sub_class_dirs:
+            preserved_root.mkdir()
+            for d in sub_class_dirs:
+                shutil.move(str(d), str(preserved_root / d.name))
+
         if class_dir.exists():
             shutil.rmtree(class_dir)
         shutil.move(str(extracted), str(class_dir))
+
+        if sub_class_dirs:
+            for d in sub_class_dirs:
+                dst = class_dir / d.name
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.move(str(preserved_root / d.name), str(dst))
+            logger.info(f"[{class_name}] preserved local sub-class(es): {[d.name for d in sub_class_dirs]}")
     logger.info(f"[{class_name}] download complete: {key}")
     return True
 

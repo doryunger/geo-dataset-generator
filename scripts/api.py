@@ -344,13 +344,47 @@ class TrainRequest(BaseModel):
     epochs: int = 100
     patience: int = 30
     base_model: str = "yolo11n-obb.pt"
+    include_subclasses: bool = False
 
 
 _train_jobs: dict[str, str] = {}  # class_name -> job_id, present only while that class's training is running
 
 
-def _run_train_job(job: Job, class_name: str, version: str, run_dir: Path, log_path: Path, cmd: list[str]) -> None:
+def _run_train_job(
+    job: Job, class_name: str, version: str, epochs: int, patience: int, base_model: str, children: list[str],
+) -> None:
+    slug = common.class_slug(class_name)
+    run_dir = common.MODELS_DIR / f"{slug}_obb_{version}_run"
+    common.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = common.LOGS_DIR / f"train_{slug}_{version}.log"
+    tmp_dataset_dir = None
     try:
+        data_dir_arg = None
+        if children:
+            tmp_dataset_dir = common.MODELS_DIR / f"_tmp_{slug}_{version}_dataset"
+            if tmp_dataset_dir.exists():
+                shutil.rmtree(tmp_dataset_dir)
+            tmp_dataset_dir.mkdir(parents=True)
+            classes_to_combine = [class_name] + children
+            logger.info(f"[{class_name}] building combined dataset from {classes_to_combine}...")
+            job.progress = {"step": f"Building combined dataset ({', '.join(classes_to_combine)})", "percent": 0}
+
+            def on_obb_progress(source_class, i, n, sample_id):
+                job.progress = {"step": f"Building dataset: {source_class} sample {i}/{n}", "percent": 0}
+
+            obb.generate_combined_obb_dataset(
+                tmp_dataset_dir, classes_to_combine, embedder=_state["embedder"], on_progress=on_obb_progress,
+            )
+            data_dir_arg = str(tmp_dataset_dir)
+
+        script_path = Path(__file__).resolve().parent / "train_obb.py"
+        cmd = [
+            sys.executable, str(script_path), "--class", class_name, "--version", version,
+            "--epochs", str(epochs), "--patience", str(patience), "--base-model", base_model,
+        ]
+        if data_dir_arg:
+            cmd.extend(["--data-dir", data_dir_arg])
+
         logger.info(f"[{class_name}] training {version} started: {' '.join(cmd)}")
         job.progress = {"step": "Starting training...", "percent": 0}
         with open(log_path, "w", encoding="utf-8") as logf:
@@ -371,12 +405,14 @@ def _run_train_job(job: Job, class_name: str, version: str, run_dir: Path, log_p
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
             raise RuntimeError(f"train_obb.py exited with code {returncode}. Last output:\n{tail}")
 
-        slug = common.class_slug(class_name)
         out_pt = common.MODELS_DIR / f"{slug}_obb_{version}.pt"
         metrics_path = common.MODELS_DIR / f"{slug}_obb_{version}_metrics.json"
         metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else None
         job.progress = {"step": "Done", "percent": 100}
-        job.result = {"class_name": class_name, "version": version, "path": str(out_pt), "metrics": metrics}
+        job.result = {
+            "class_name": class_name, "version": version, "path": str(out_pt), "metrics": metrics,
+            "included_subclasses": children,
+        }
         job.status = "done"
         logger.info(f"[{class_name}] training {version} finished: {out_pt}")
     except Exception as e:
@@ -385,6 +421,8 @@ def _run_train_job(job: Job, class_name: str, version: str, run_dir: Path, log_p
         job.error = str(e)
     finally:
         _train_jobs.pop(class_name, None)
+        if tmp_dataset_dir is not None and tmp_dataset_dir.exists():
+            shutil.rmtree(tmp_dataset_dir, ignore_errors=True)
 
 
 @app.post("/api/train")
@@ -394,27 +432,27 @@ def start_training(req: TrainRequest):
         raise HTTPException(404, f"Class '{class_name}' not found")
     if class_name in _train_jobs:
         raise HTTPException(409, f"Training is already running for '{class_name}'")
-    obb_images_train = common.obb_dataset_dir(class_name) / "images" / "train"
-    if not obb_images_train.exists() or next(obb_images_train.glob("*"), None) is None:
-        raise HTTPException(400, f"'{class_name}' has no OBB dataset yet -- run Generate Package first")
+
+    children = []
+    if req.include_subclasses:
+        children = [c for c in common.list_classes() if common.class_parent_name(c) == class_name]
+
+    if not children:
+        obb_images_train = common.obb_dataset_dir(class_name) / "images" / "train"
+        if not obb_images_train.exists() or next(obb_images_train.glob("*"), None) is None:
+            raise HTTPException(400, f"'{class_name}' has no OBB dataset yet -- run Generate Package first")
+    # else: combined path -- generate_combined_obb_dataset raises a clear error (surfaced as
+    # job.error) if none of class_name + children have any samples at all
 
     version = _next_obb_model_version(class_name)
-    slug = common.class_slug(class_name)
-    run_dir = common.MODELS_DIR / f"{slug}_obb_{version}_run"
-    common.LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = common.LOGS_DIR / f"train_{slug}_{version}.log"
-
-    script_path = Path(__file__).resolve().parent / "train_obb.py"
-    cmd = [
-        sys.executable, str(script_path), "--class", class_name, "--version", version,
-        "--epochs", str(req.epochs), "--patience", str(req.patience), "--base-model", req.base_model,
-    ]
-
     job = Job("train")
     _jobs[job.id] = job
     _train_jobs[class_name] = job.id
-    threading.Thread(target=_run_train_job, args=(job, class_name, version, run_dir, log_path, cmd), daemon=True).start()
-    return {"job_id": job.id, "class_name": class_name, "version": version}
+    threading.Thread(
+        target=_run_train_job, args=(job, class_name, version, req.epochs, req.patience, req.base_model, children),
+        daemon=True,
+    ).start()
+    return {"job_id": job.id, "class_name": class_name, "version": version, "included_subclasses": children}
 
 
 @app.get("/api/train/active")

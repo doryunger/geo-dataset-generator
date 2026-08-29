@@ -11,6 +11,7 @@ let knownClassNames = new Set();
 const classSelect = document.getElementById("class-select");
 const classNewInput = document.getElementById("class-new-input");
 const classNewParentSelect = document.getElementById("class-new-parent-select");
+const classNewCreateBtn = document.getElementById("class-new-create-btn");
 
 const tabBtnSamples = document.getElementById("tab-btn-samples");
 const tabBtnValidation = document.getElementById("tab-btn-validation");
@@ -97,6 +98,7 @@ function updateClassInputVisibility() {
   const isNew = classSelect.value === "__new__";
   classNewInput.style.display = isNew ? "block" : "none";
   classNewParentSelect.style.display = isNew ? "block" : "none";
+  classNewCreateBtn.style.display = isNew ? "block" : "none";
   if (isNew) classNewInput.focus();
 }
 
@@ -370,18 +372,24 @@ async function finishEditingSample() {
 
 // ---------- samples tab ----------
 
+let samplesRequestId = 0; // guards against a slow/stale fetch for a previously-selected class
+// overwriting the currently-selected class's freshly-loaded data if responses arrive out of order
+
 async function loadSamples() {
   const className = currentClassName();
+  const requestId = ++samplesRequestId;
+
+  // clear immediately so switching classes never shows a stale mix, even before the fetch below resolves
   samples = [];
   editingSampleId = null;
   editingFeatureId = null;
-  if (!className) {
-    refreshSamplesLayer();
-    renderSamplesList();
-    return;
-  }
+  refreshSamplesLayer();
+  renderSamplesList();
+  if (!className) return;
+
   const res = await fetch(`/api/manual/samples?class_name=${encodeURIComponent(className)}`);
   const data = await res.json();
+  if (requestId !== samplesRequestId) return; // a newer loadSamples() call has since superseded this one
   samples = data.samples || [];
   refreshSamplesLayer();
   renderSamplesList();
@@ -482,9 +490,10 @@ async function loadTrainingTree() {
 
   trainingTreeEl.innerHTML = "";
   for (const top of topLevel) {
-    trainingTreeEl.appendChild(buildTrainingRow(top, false));
-    for (const kid of childrenOf(top)) {
-      trainingTreeEl.appendChild(buildTrainingRow(kid, true));
+    const kids = childrenOf(top);
+    trainingTreeEl.appendChild(buildTrainingRow(top, false, kids));
+    for (const kid of kids) {
+      trainingTreeEl.appendChild(buildTrainingRow(kid, true, []));
     }
   }
 
@@ -494,10 +503,14 @@ async function loadTrainingTree() {
   }
 }
 
-function buildTrainingRow(className, indented) {
+function buildTrainingRow(className, indented, children) {
+  const wrap = document.createElement("div");
+  wrap.className = "training-row-wrap";
+
   const row = document.createElement("div");
   row.className = "training-row" + (indented ? " indented" : "");
   row.dataset.class = className;
+  wrap.appendChild(row);
 
   const label = document.createElement("span");
   label.className = "training-row-label";
@@ -517,15 +530,29 @@ function buildTrainingRow(className, indented) {
   const btn = document.createElement("button");
   btn.className = "training-row-btn secondary";
   btn.textContent = "Train";
-  btn.addEventListener("click", () => startTraining(className, row));
+  btn.addEventListener("click", () => startTraining(className, wrap));
   row.appendChild(btn);
 
-  return row;
+  if (children.length) {
+    const subLabel = document.createElement("label");
+    subLabel.className = "training-row-subclass-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "training-row-include-subclasses";
+    subLabel.appendChild(checkbox);
+    subLabel.appendChild(document.createTextNode(
+      ` include sub-class samples (${children.map((c) => c.split("/").pop()).join(", ")})`,
+    ));
+    wrap.appendChild(subLabel);
+  }
+
+  return wrap;
 }
 
-async function startTraining(className, row) {
-  const btn = row.querySelector(".training-row-btn");
-  const status = row.querySelector(".training-row-status");
+async function startTraining(className, wrap) {
+  const btn = wrap.querySelector(".training-row-btn");
+  const status = wrap.querySelector(".training-row-status");
+  const includeSubclassesCheckbox = wrap.querySelector(".training-row-include-subclasses");
   btn.disabled = true;
   status.textContent = "Starting...";
   try {
@@ -537,11 +564,12 @@ async function startTraining(className, row) {
         epochs: parseInt(trainingEpochsInput.value, 10) || 100,
         patience: parseInt(trainingPatienceInput.value, 10) || 30,
         base_model: trainingBaseModelInput.value.trim() || "yolo11n-obb.pt",
+        include_subclasses: includeSubclassesCheckbox ? includeSubclassesCheckbox.checked : false,
       }),
     });
     if (!res.ok) throw new Error(await res.text());
     const { job_id } = await res.json();
-    await watchTrainingJob(row, job_id);
+    await watchTrainingJob(wrap, job_id);
   } catch (err) {
     status.textContent = "Error: " + err.message;
     btn.disabled = false;
@@ -750,7 +778,7 @@ classSelect.addEventListener("change", () => {
   updateClassInputVisibility();
   loadSamples();
 });
-classNewInput.addEventListener("blur", createNewClassAndLoad);
+classNewCreateBtn.addEventListener("click", createNewClassAndLoad);
 classNewInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") createNewClassAndLoad();
 });

@@ -81,9 +81,13 @@ def _log_training_status_periodically(run_dir: Path, stop_event: threading.Event
 
 def train_obb_class(
     class_name: str, version: str, base_model: str = "yolo11n-obb.pt", epochs: int = 100, imgsz: int = 640,
-    patience: int = 30,
+    patience: int = 30, data_yaml_override: Path | None = None,
 ) -> dict:
-    data_yaml = obb.ensure_obb_data_yaml(class_name)
+    """data_yaml_override points training at a dataset other than class_name's own permanent
+    dataset_obb/ -- e.g. a temporary combined dataset pooling a parent class with its
+    sub-classes' samples (see obb.generate_combined_obb_dataset). class_name still names the
+    output model/metrics files either way."""
+    data_yaml = data_yaml_override if data_yaml_override is not None else obb.ensure_obb_data_yaml(class_name)
     model = YOLO(base_model)
     slug = common.class_slug(class_name)
 
@@ -123,19 +127,31 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=30)
+    parser.add_argument(
+        "--data-dir", default=None,
+        help="Train against this dataset_obb-shaped directory's data.yaml instead of <class>'s own "
+             "permanent one -- e.g. a temporary combined dataset. Skips the S3 pull step, which only "
+             "makes sense for a class's own dataset.",
+    )
     args = parser.parse_args()
     common.setup_logging()
 
-    import s3_sync
-    if s3_sync.download_latest_package(args.class_name):
-        print(f"Pulled latest '{args.class_name}' package from S3 before training")
-    elif s3_sync.s3_configured():
-        print(f"S3 configured but no package found for '{args.class_name}' -- using local data as-is")
+    data_yaml_override = None
+    if args.data_dir:
+        data_yaml_override = Path(args.data_dir) / "data.yaml"
+        print(f"Using dataset at {args.data_dir} instead of '{args.class_name}' own dataset_obb -- skipping S3 pull")
     else:
-        print("S3 not configured (no S3_BUCKET_NAME) -- using local data as-is")
+        import s3_sync
+        if s3_sync.download_latest_package(args.class_name):
+            print(f"Pulled latest '{args.class_name}' package from S3 before training")
+        elif s3_sync.s3_configured():
+            print(f"S3 configured but no package found for '{args.class_name}' -- using local data as-is")
+        else:
+            print("S3 not configured (no S3_BUCKET_NAME) -- using local data as-is")
 
     result = train_obb_class(
         args.class_name, args.version, args.base_model, args.epochs, args.imgsz, args.patience,
+        data_yaml_override=data_yaml_override,
     )
     print(f"\nSaved {result['path']}")
 
