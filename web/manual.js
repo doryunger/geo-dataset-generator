@@ -9,20 +9,49 @@ let validationCandidates = []; // last validation run's results
 let knownClassNames = new Set();
 
 const classSelect = document.getElementById("class-select");
-const classNewInput = document.getElementById("class-new-input");
-const classNewParentSelect = document.getElementById("class-new-parent-select");
-const classNewCreateBtn = document.getElementById("class-new-create-btn");
+const addClassToggleBtn = document.getElementById("add-class-toggle-btn");
+const addClassPanel = document.getElementById("add-class-panel");
+const addClassTypeSelect = document.getElementById("add-class-type-select");
+const addClassParentLabel = document.getElementById("add-class-parent-label");
+const addClassParentSelect = document.getElementById("add-class-parent-select");
+const addClassNameInput = document.getElementById("add-class-name-input");
+const addClassCreateBtn = document.getElementById("add-class-create-btn");
 
 const tabBtnSamples = document.getElementById("tab-btn-samples");
 const tabBtnValidation = document.getElementById("tab-btn-validation");
 const tabBtnTraining = document.getElementById("tab-btn-training");
+const tabBtnGraph = document.getElementById("tab-btn-graph");
 const samplesTab = document.getElementById("samples-tab");
 const validationTab = document.getElementById("validation-tab");
 const trainingTab = document.getElementById("training-tab");
+const graphTab = document.getElementById("graph-tab");
 const trainingTreeEl = document.getElementById("training-tree");
 const trainingEpochsInput = document.getElementById("training-epochs-input");
 const trainingPatienceInput = document.getElementById("training-patience-input");
 const trainingBaseModelInput = document.getElementById("training-base-model-input");
+
+const graphParentHeaderEl = document.getElementById("graph-parent-header");
+const graphDiagramEl = document.getElementById("graph-diagram");
+const graphNodeEditor = document.getElementById("graph-node-editor");
+const graphNodeEditorTitle = document.getElementById("graph-node-editor-title");
+const graphNodeDependencyEl = document.getElementById("graph-node-dependency");
+const graphNodeMinPieceInput = document.getElementById("graph-node-min-piece-input");
+const graphNodeMaxPieceInput = document.getElementById("graph-node-max-piece-input");
+const graphNodeSaveBtn = document.getElementById("graph-node-save-btn");
+const graphEdgesListEl = document.getElementById("graph-edges-list");
+const graphAddEdgeBtn = document.getElementById("graph-add-edge-btn");
+const graphEdgeEditor = document.getElementById("graph-edge-editor");
+const graphEdgeFromSelect = document.getElementById("graph-edge-from-select");
+const graphEdgeToSelect = document.getElementById("graph-edge-to-select");
+const graphEdgeMinDistInput = document.getElementById("graph-edge-min-dist-input");
+const graphEdgeMaxDistInput = document.getElementById("graph-edge-max-dist-input");
+const graphEdgeBoostInput = document.getElementById("graph-edge-boost-input");
+const graphEdgeSaveBtn = document.getElementById("graph-edge-save-btn");
+const graphEdgeCancelBtn = document.getElementById("graph-edge-cancel-btn");
+const graphStatusEl = document.getElementById("graph-status");
+
+mermaid.initialize({ startOnLoad: false, securityLevel: "loose" }); // "loose" is required for
+// the click-a-node-to-edit-it callbacks below to actually fire -- default "strict" sandboxes them
 
 const samplesListEl = document.getElementById("samples-list");
 const generatePackageBtn = document.getElementById("generate-package-btn");
@@ -91,25 +120,54 @@ document.addEventListener("keydown", (e) => {
 });
 
 function currentClassName() {
-  return classSelect.value === "__new__" ? classNewInput.value.trim() : classSelect.value;
+  return classSelect.value;
 }
 
-function updateClassInputVisibility() {
-  const isNew = classSelect.value === "__new__";
-  classNewInput.style.display = isNew ? "block" : "none";
-  classNewParentSelect.style.display = isNew ? "block" : "none";
-  classNewCreateBtn.style.display = isNew ? "block" : "none";
-  if (isNew) classNewInput.focus();
+// The add-class panel is a form with dependent fields: the parent picker only makes sense (and
+// only shows) once "New sub-class" is picked, and "Create Class" only enables once every field
+// relevant to the current type is actually filled in -- prevents submitting a sub-class with no
+// parent chosen, which is what silently produced a confusing top-level class before.
+function updateAddClassPanelState() {
+  const isSub = addClassTypeSelect.value === "sub";
+  addClassParentLabel.style.display = isSub ? "block" : "none";
+  addClassParentSelect.style.display = isSub ? "block" : "none";
+  updateAddClassCreateEnabled();
 }
 
-async function createNewClassAndLoad() {
-  const name = classNewInput.value.trim();
-  if (!name) return;
-  if (knownClassNames.has(name)) {
+function updateAddClassCreateEnabled() {
+  const isSub = addClassTypeSelect.value === "sub";
+  const nameOk = !!addClassNameInput.value.trim();
+  const parentOk = !isSub || !!addClassParentSelect.value;
+  addClassCreateBtn.disabled = !nameOk || !parentOk;
+}
+
+function openAddClassPanel() {
+  addClassPanel.style.display = "block";
+  addClassTypeSelect.value = "parent";
+  addClassParentSelect.value = "";
+  addClassNameInput.value = "";
+  updateAddClassPanelState();
+  addClassNameInput.focus();
+}
+
+function closeAddClassPanel() {
+  addClassPanel.style.display = "none";
+}
+
+async function createNewClass() {
+  const name = addClassNameInput.value.trim();
+  const isSub = addClassTypeSelect.value === "sub";
+  const parent = isSub ? addClassParentSelect.value : null;
+  if (!name || (isSub && !parent)) return;
+  const fullName = parent ? `${parent}/${name}` : name;
+  if (knownClassNames.has(fullName)) {
+    classSelect.value = fullName;
+    closeAddClassPanel();
     await loadSamples();
+    if (trainingTab.style.display !== "none") loadTrainingPanel();
+    if (graphTab.style.display !== "none") loadGraphTab();
     return;
   }
-  const parent = classNewParentSelect.value || null;
   const res = await fetch("/api/classes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -120,9 +178,10 @@ async function createNewClassAndLoad() {
     return;
   }
   await loadClasses();
-  classSelect.value = name;
-  updateClassInputVisibility();
+  classSelect.value = fullName;
+  closeAddClassPanel();
   await loadSamples();
+  if (trainingTab.style.display !== "none") loadTrainingPanel();
 }
 
 // ---------- geometry helpers (same math as the main app's app.js, kept separate since the two
@@ -445,16 +504,15 @@ async function generatePackage() {
 
     const data = job.result;
     const s3Note = data.s3_configured
-      ? (data.s3_key ? `Uploaded to S3 (${data.s3_key}).` : "S3 upload failed -- check logs.")
-      : "S3 not configured -- kept local only.";
-    const mergeNote = data.merge
-      ? `Merged ${data.merge.added_from_remote} new sample(s) from S3 (had ${data.merge.local_total} local, latest S3 entry had ${data.merge.remote_total}). `
-      : (includeLatestCheckbox.checked ? "No S3 package to merge yet -- packaged local samples only. " : "");
+      ? (data.s3_key ? "uploaded to S3" : "S3 upload FAILED, check logs")
+      : "local only";
+    const mergeNote = data.merge && data.merge.added_from_remote > 0
+      ? `merged ${data.merge.added_from_remote} from S3, `
+      : "";
     generatePackageProgressEl.value = 100;
     generatePackageStatusEl.textContent =
-      `${mergeNote}Done: seg ${data.segmentation.train}/${data.segmentation.val} (train/val), ` +
-      `obb ${data.obb.train}/${data.obb.val} (train/val). ${s3Note} ` +
-      `Train separately via scripts/train.py or scripts/train_obb.py -- this button doesn't train.`;
+      `Done -- ${mergeNote}seg ${data.segmentation.train}/${data.segmentation.val}, ` +
+      `obb ${data.obb.train}/${data.obb.val} (train/val), ${s3Note}.`;
   } catch (err) {
     generatePackageStatusEl.textContent = "Error: " + err.message;
   } finally {
@@ -469,69 +527,64 @@ function switchTab(tab) {
   samplesTab.style.display = tab === "samples" ? "block" : "none";
   validationTab.style.display = tab === "validation" ? "block" : "none";
   trainingTab.style.display = tab === "training" ? "block" : "none";
+  graphTab.style.display = tab === "graph" ? "block" : "none";
   tabBtnSamples.classList.toggle("active", tab === "samples");
   tabBtnValidation.classList.toggle("active", tab === "validation");
   tabBtnTraining.classList.toggle("active", tab === "training");
-  if (tab === "training") loadTrainingTree();
+  tabBtnGraph.classList.toggle("active", tab === "graph");
+  if (tab === "training") loadTrainingPanel();
+  if (tab === "graph") loadGraphTab();
 }
 
 // ---------- training tab ----------
+// Scoped to whatever class is currently picked in the Class dropdown at the top of the sidebar
+// -- that selection is the single source of truth for which class this panel acts on, so it
+// isn't repeated again as a label down here, and no other class's row is shown alongside it.
 
-async function loadTrainingTree() {
+async function loadTrainingPanel() {
+  const className = currentClassName();
+  trainingTreeEl.innerHTML = "";
+  if (!className) return;
+
   const [classesRes, activeRes] = await Promise.all([
     fetch("/api/classes").then((r) => r.json()),
     fetch("/api/train/active").then((r) => r.json()),
   ]);
   const { classes, parents } = classesRes;
   const activeJobs = activeRes.jobs || {};
+  const children = classes.filter((c) => parents[c] === className);
 
-  const topLevel = classes.filter((c) => !parents[c]);
-  const childrenOf = (parent) => classes.filter((c) => parents[c] === parent);
+  const row = buildTrainingRow(className, children);
+  trainingTreeEl.appendChild(row);
 
-  trainingTreeEl.innerHTML = "";
-  for (const top of topLevel) {
-    const kids = childrenOf(top);
-    trainingTreeEl.appendChild(buildTrainingRow(top, false, kids));
-    for (const kid of kids) {
-      trainingTreeEl.appendChild(buildTrainingRow(kid, true, []));
-    }
-  }
-
-  for (const [className, jobId] of Object.entries(activeJobs)) {
-    const row = trainingTreeEl.querySelector(`[data-class="${CSS.escape(className)}"]`);
-    if (row) watchTrainingJob(row, jobId);
-  }
+  if (activeJobs[className]) watchTrainingJob(row, activeJobs[className]);
 }
 
-function buildTrainingRow(className, indented, children) {
+function buildTrainingRow(className, children) {
+  // Stacked, not a flex row: a fixed-width button sitting next to a flex-growing status span
+  // risked the button's own `width:100%` (from the global `button` rule) fighting the status
+  // span for space and squeezing its text down to nothing -- full-width, stacked lines can't do
+  // that, and it matches every other button in this sidebar (Generate Package, Add new class).
   const wrap = document.createElement("div");
   wrap.className = "training-row-wrap";
 
-  const row = document.createElement("div");
-  row.className = "training-row" + (indented ? " indented" : "");
-  row.dataset.class = className;
-  wrap.appendChild(row);
-
-  const label = document.createElement("span");
-  label.className = "training-row-label";
-  label.textContent = (indented ? "↳ " : "") + className;
-  row.appendChild(label);
-
-  const status = document.createElement("span");
-  status.className = "training-row-status";
-  row.appendChild(status);
-
-  const progress = document.createElement("progress");
-  progress.max = 100;
-  progress.value = 0;
-  progress.style.display = "none";
-  row.appendChild(progress);
-
   const btn = document.createElement("button");
-  btn.className = "training-row-btn secondary";
+  btn.className = "training-row-btn";
   btn.textContent = "Train";
   btn.addEventListener("click", () => startTraining(className, wrap));
-  row.appendChild(btn);
+  wrap.appendChild(btn);
+
+  const progress = document.createElement("progress");
+  progress.className = "training-row-progress";
+  progress.max = 100;
+  progress.value = 0;
+  progress.style.visibility = "hidden"; // reserves its layout space even while idle, so it
+  // appearing/disappearing never shifts anything around it (kept invisible, not display:none)
+  wrap.appendChild(progress);
+
+  const status = document.createElement("div");
+  status.className = "training-row-status";
+  wrap.appendChild(status);
 
   if (children.length) {
     const subLabel = document.createElement("label");
@@ -547,6 +600,18 @@ function buildTrainingRow(className, indented, children) {
   }
 
   return wrap;
+}
+
+// Metric keys come back as e.g. "metrics/precision(B)" -- strip that down to "precision" and
+// round to 2 decimals so a mid-training status line stays a glance-able one-liner.
+function shortMetrics(prefix, metrics) {
+  if (!metrics) return prefix;
+  const parts = Object.entries(metrics).map(([k, v]) => {
+    const name = k.split("/").pop().replace(/\(B\)$/, "");
+    const val = typeof v === "number" ? v.toFixed(2) : v;
+    return `${name}=${val}`;
+  });
+  return `${prefix} (${parts.join(", ")})`;
 }
 
 async function startTraining(className, wrap) {
@@ -581,29 +646,269 @@ async function watchTrainingJob(row, jobId) {
   const status = row.querySelector(".training-row-status");
   const progress = row.querySelector("progress");
   btn.disabled = true;
-  progress.style.display = "inline-block";
+  progress.style.visibility = "visible";
 
   const job = await pollJob(jobId, {
     intervalMs: 3000,
     onProgress: (p) => {
       progress.value = p.percent || 0;
-      const metricsStr = p.metrics
-        ? Object.entries(p.metrics).map(([k, v]) => `${k.split("/").pop()}=${v}`).join(" ")
-        : "";
-      status.textContent = `${p.step || "Working..."} ${metricsStr}`;
+      status.textContent = shortMetrics(p.step, p.metrics);
     },
   });
 
-  progress.style.display = "none";
+  progress.style.visibility = "hidden";
   btn.disabled = false;
   if (job.status === "error") {
     status.textContent = "Error: " + job.error;
   } else if (job.status === "done") {
     const m = job.result && job.result.metrics && job.result.metrics.metrics;
-    const metricsStr = m
-      ? Object.entries(m).map(([k, v]) => `${k.split("/").pop()}=${typeof v === "number" ? v.toFixed(3) : v}`).join(" ")
-      : "";
-    status.textContent = `Saved ${job.result.version}. ${metricsStr}`;
+    status.textContent = shortMetrics(`Saved ${job.result.version}`, m);
+  }
+}
+
+// ---------- graph tab ----------
+// Edits classes/<parent>/subclass_graph.json: nodes (a class's own piece-cutting min/max, edited
+// by clicking the node in the Mermaid diagram) and edges (spatial-proximity confidence-boost
+// rules between two sub-classes, edited via the plain list below the diagram -- Mermaid's click
+// callback only fires on nodes, not edges, so editing an edge in the diagram itself isn't an
+// option here).
+
+let currentGraph = null; // {parent, available_nodes, nodes, edges} from the last GET/POST
+let editingEdgeIndex = null; // index into currentGraph.edges being edited, or null when adding new
+
+function graphNodeId(name) {
+  return "n_" + name.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+async function loadGraphTab() {
+  const className = currentClassName();
+  graphNodeEditor.style.display = "none";
+  graphEdgeEditor.style.display = "none";
+  graphStatusEl.textContent = "";
+  if (!className) {
+    graphDiagramEl.innerHTML = "";
+    graphEdgesListEl.innerHTML = "";
+    currentGraph = null;
+    return;
+  }
+  const res = await fetch(`/api/subclass_graph?class_name=${encodeURIComponent(className)}`);
+  currentGraph = await res.json();
+  await renderGraphDiagram();
+  renderEdgesList();
+}
+
+async function renderGraphDiagram() {
+  const { parent, available_nodes, edges } = currentGraph;
+  const subClasses = available_nodes.filter((n) => n !== parent);
+  const selectedBare = currentClassName().split("/").pop(); // whichever node the top Class
+  // dropdown currently points at -- highlighted here so the diagram reflects the real selection,
+  // not a fixed "this one is the parent" styling that stays on regardless of what's picked.
+
+  // The parent isn't a node in the Mermaid graph at all -- it doesn't have siblings to be laid
+  // out against, so it doesn't need dagre's automatic ranking, and giving it permanent special
+  // styling there made it look "highlighted/selected" even when it wasn't. It's just a plain
+  // clickable header above a pure sibling graph instead.
+  graphParentHeaderEl.textContent = `${parent} (parent)`;
+  graphParentHeaderEl.onclick = () => onGraphNodeClick(parent);
+  graphParentHeaderEl.classList.toggle("selected", selectedBare === parent);
+
+  if (!subClasses.length) {
+    graphDiagramEl.innerHTML = '<p class="hint">No sub-classes yet.</p>';
+    return;
+  }
+
+  // graph LR (not TD): sub-classes are pure siblings with no parent node pulling on the layout,
+  // so adding more of them grows the row sideways instead of stacking new ones underneath.
+  const lines = [
+    "graph LR",
+    "classDef selectedNode fill:#e3ecfb,stroke:#1a73e8,stroke-width:2px;",
+  ];
+  for (const name of subClasses) {
+    const cls = name === selectedBare ? ":::selectedNode" : "";
+    const label = incomingEdgesFor(name).length ? name : `${name} (seed)`;
+    lines.push(`  ${graphNodeId(name)}["${label}"]${cls}`);
+  }
+  for (const edge of edges) {
+    const label = `${edge.min_distance_m ?? 0}-${edge.max_distance_m}m +${edge.boost}`;
+    lines.push(`  ${graphNodeId(edge.from)} -->|"${label}"| ${graphNodeId(edge.to)}`);
+  }
+  for (const name of subClasses) {
+    lines.push(`  click ${graphNodeId(name)} call onGraphNodeClick("${name}")`);
+  }
+
+  const { svg, bindFunctions } = await mermaid.render("graph-mermaid-" + Date.now(), lines.join("\n"));
+  graphDiagramEl.innerHTML = svg;
+  if (bindFunctions) bindFunctions(graphDiagramEl); // without this, "click ... call ..." above never fires
+}
+
+// Edges where `name` is the "to" -- i.e. edges whose max_distance_m/boost describe how close
+// `name`'s own detections need to be to some other (anchor) sub-class to get boosted. A
+// sub-class with none of these is a "seed": nothing it depends on, so no proximity check ever
+// applies to it (though it can still be the anchor other sub-classes look for).
+function incomingEdgesFor(name) {
+  return (currentGraph.edges || []).filter((e) => e.to === name);
+}
+
+window.onGraphNodeClick = function (name) {
+  const cfg = (currentGraph.nodes && currentGraph.nodes[name]) || {};
+  graphNodeEditorTitle.textContent = `Piece size for "${name}"`;
+
+  const isParent = name === currentGraph.parent;
+  const incoming = isParent ? [] : incomingEdgesFor(name);
+  if (isParent) {
+    graphNodeDependencyEl.textContent = "";
+  } else if (!incoming.length) {
+    graphNodeDependencyEl.textContent = "Seed sub-class -- no proximity dependency.";
+  } else {
+    graphNodeDependencyEl.textContent = incoming
+      .map((e) => `Depends on "${e.from}": ${e.min_distance_m ?? 0}-${e.max_distance_m}m, +${e.boost} (edit in Edges below)`)
+      .join(" ");
+  }
+
+  graphNodeMinPieceInput.value = cfg.min_piece_m ?? "";
+  graphNodeMaxPieceInput.value = cfg.max_piece_m ?? "";
+  graphNodeEditor.dataset.node = name;
+  graphNodeEditor.style.display = "block";
+  graphEdgeEditor.style.display = "none";
+};
+
+function renderEdgesList() {
+  graphEdgesListEl.innerHTML = "";
+  if (!currentGraph.edges.length) {
+    graphEdgesListEl.innerHTML = '<p class="hint">No edges yet.</p>';
+  }
+  currentGraph.edges.forEach((edge, i) => {
+    const row = document.createElement("div");
+    row.className = "graph-edge-row";
+
+    const label = document.createElement("span");
+    label.className = "graph-edge-label";
+    label.textContent = `${edge.from} -> ${edge.to}  (${edge.min_distance_m ?? 0}-${edge.max_distance_m}m, +${edge.boost})`;
+    row.appendChild(label);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "secondary";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => openEdgeEditor(i));
+    row.appendChild(editBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "danger";
+    removeBtn.textContent = "Remove";
+    removeBtn.addEventListener("click", () => removeEdge(i));
+    row.appendChild(removeBtn);
+
+    graphEdgesListEl.appendChild(row);
+  });
+}
+
+function openEdgeEditor(index) {
+  editingEdgeIndex = index;
+  graphEdgeFromSelect.innerHTML = "";
+  graphEdgeToSelect.innerHTML = "";
+  // The parent itself is never a valid edge endpoint -- the proximity graph only relates
+  // sibling sub-classes to each other, so it's left out of these dropdowns entirely rather than
+  // being selectable and then rejected after the fact.
+  const edgeableNodes = currentGraph.available_nodes.filter((n) => n !== currentGraph.parent);
+  for (const name of edgeableNodes) {
+    for (const sel of [graphEdgeFromSelect, graphEdgeToSelect]) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    }
+  }
+  if (index === null) {
+    graphEdgeMinDistInput.value = 0;
+    graphEdgeMaxDistInput.value = 5;
+    graphEdgeBoostInput.value = 0.2;
+  } else {
+    const edge = currentGraph.edges[index];
+    graphEdgeFromSelect.value = edge.from;
+    graphEdgeToSelect.value = edge.to;
+    graphEdgeMinDistInput.value = edge.min_distance_m ?? 0;
+    graphEdgeMaxDistInput.value = edge.max_distance_m;
+    graphEdgeBoostInput.value = edge.boost;
+  }
+  graphEdgeEditor.style.display = "block";
+  graphNodeEditor.style.display = "none";
+}
+
+async function saveGraph() {
+  const className = currentClassName();
+  const res = await fetch("/api/subclass_graph", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ class_name: className, nodes: currentGraph.nodes, edges: currentGraph.edges }),
+  });
+  if (!res.ok) {
+    graphStatusEl.textContent = "Error: " + (await res.text());
+    return false;
+  }
+  const saved = await res.json();
+  currentGraph.nodes = saved.nodes;
+  currentGraph.edges = saved.edges;
+  graphStatusEl.textContent = "Saved.";
+  return true;
+}
+
+graphNodeSaveBtn.addEventListener("click", async () => {
+  const name = graphNodeEditor.dataset.node;
+  const minV = parseFloat(graphNodeMinPieceInput.value);
+  const maxV = parseFloat(graphNodeMaxPieceInput.value);
+  if (isNaN(minV) || isNaN(maxV)) {
+    graphStatusEl.textContent = "Enter both min and max piece size.";
+    return;
+  }
+  currentGraph.nodes[name] = { min_piece_m: minV, max_piece_m: maxV };
+  if (await saveGraph()) {
+    graphNodeEditor.style.display = "none";
+    await renderGraphDiagram();
+  }
+});
+
+graphAddEdgeBtn.addEventListener("click", () => openEdgeEditor(null));
+graphEdgeCancelBtn.addEventListener("click", () => { graphEdgeEditor.style.display = "none"; });
+
+graphEdgeSaveBtn.addEventListener("click", async () => {
+  const edge = {
+    from: graphEdgeFromSelect.value,
+    to: graphEdgeToSelect.value,
+    min_distance_m: graphEdgeMinDistInput.value.trim() === "" ? 0 : parseFloat(graphEdgeMinDistInput.value),
+    max_distance_m: parseFloat(graphEdgeMaxDistInput.value),
+    boost: parseFloat(graphEdgeBoostInput.value),
+  };
+  if (edge.from === edge.to) {
+    graphStatusEl.textContent = "From and To must be different sub-classes.";
+    return;
+  }
+  if (isNaN(edge.min_distance_m) || isNaN(edge.max_distance_m) || isNaN(edge.boost)) {
+    graphStatusEl.textContent = "Min/max distance and boost must all be numbers.";
+    return;
+  }
+  if (edge.min_distance_m > edge.max_distance_m) {
+    graphStatusEl.textContent = "Min distance can't be greater than max distance.";
+    return;
+  }
+  const dupIndex = currentGraph.edges.findIndex((e) => e.from === edge.from && e.to === edge.to);
+  if (dupIndex !== -1 && dupIndex !== editingEdgeIndex) {
+    graphStatusEl.textContent = `An edge from "${edge.from}" to "${edge.to}" already exists -- edit that one instead.`;
+    return;
+  }
+  if (editingEdgeIndex === null) currentGraph.edges.push(edge);
+  else currentGraph.edges[editingEdgeIndex] = edge;
+  if (await saveGraph()) {
+    graphEdgeEditor.style.display = "none";
+    await renderGraphDiagram();
+    renderEdgesList();
+  }
+});
+
+async function removeEdge(index) {
+  currentGraph.edges.splice(index, 1);
+  if (await saveGraph()) {
+    await renderGraphDiagram();
+    renderEdgesList();
   }
 }
 
@@ -744,48 +1049,66 @@ async function loadClasses() {
   const topLevel = classes.filter((c) => !parents[c]);
   const childrenOf = (parent) => classes.filter((c) => parents[c] === parent);
 
-  classSelect.innerHTML = '<option value="__new__">+ New class</option>';
+  // Flat list, not <optgroup>: an optgroup's label is a bold but unselectable header, so keeping
+  // the parent itself selectable meant *also* adding it as a plain option right below that
+  // header -- which just showed "fence" twice. Indentation is done with non-breaking spaces
+  // (plain spaces collapse when an <option> renders) instead of an arrow glyph, which doesn't
+  // render in every font. A child's own name has its "<parent>/" prefix stripped since the
+  // indentation under its parent already shows that relationship.
+  classSelect.innerHTML = "";
   for (const top of topLevel) {
-    const kids = childrenOf(top);
-    const group = document.createElement("optgroup");
-    group.label = top;
     const topOpt = document.createElement("option");
     topOpt.value = top;
     topOpt.textContent = top;
-    group.appendChild(topOpt);
-    for (const kid of kids) {
+    classSelect.appendChild(topOpt);
+    for (const kid of childrenOf(top)) {
       const kidOpt = document.createElement("option");
       kidOpt.value = kid;
-      kidOpt.textContent = `↳ ${kid}`;
-      group.appendChild(kidOpt);
+      kidOpt.textContent = "    " + kid.slice(top.length + 1);
+      classSelect.appendChild(kidOpt);
     }
-    classSelect.appendChild(group);
   }
   if (classes.includes(current)) classSelect.value = current;
 
-  classNewParentSelect.innerHTML = '<option value="">(top-level class)</option>';
+  const parentSelectValue = addClassParentSelect.value;
+  addClassParentSelect.innerHTML = '<option value="">-- select parent --</option>';
   for (const top of topLevel) {
     const opt = document.createElement("option");
     opt.value = top;
-    opt.textContent = `sub-class of ${top}`;
-    classNewParentSelect.appendChild(opt);
+    opt.textContent = top;
+    addClassParentSelect.appendChild(opt);
   }
+  if (topLevel.includes(parentSelectValue)) addClassParentSelect.value = parentSelectValue;
 
-  updateClassInputVisibility();
+  updateAddClassCreateEnabled();
+
+  // Whatever ends up selected -- restored above, or just the browser's default first option --
+  // gets its samples loaded, regardless of whether the user actually interacted with the
+  // dropdown. A <select>'s default selection doesn't fire a "change" event, so without this the
+  // samples panel stayed empty until the user manually touched the dropdown.
+  if (classSelect.value) await loadSamples();
 }
 
 classSelect.addEventListener("change", () => {
-  updateClassInputVisibility();
   loadSamples();
+  if (trainingTab.style.display !== "none") loadTrainingPanel();
 });
-classNewCreateBtn.addEventListener("click", createNewClassAndLoad);
-classNewInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") createNewClassAndLoad();
+addClassToggleBtn.addEventListener("click", () => {
+  if (addClassPanel.style.display === "none") openAddClassPanel();
+  else closeAddClassPanel();
 });
+addClassTypeSelect.addEventListener("change", updateAddClassPanelState);
+addClassParentSelect.addEventListener("change", updateAddClassCreateEnabled);
+addClassNameInput.addEventListener("input", updateAddClassCreateEnabled);
+addClassNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !addClassCreateBtn.disabled) createNewClass();
+});
+addClassCreateBtn.addEventListener("click", createNewClass);
 
 tabBtnSamples.addEventListener("click", () => switchTab("samples"));
 tabBtnValidation.addEventListener("click", () => switchTab("validation"));
 tabBtnTraining.addEventListener("click", () => switchTab("training"));
+tabBtnGraph.addEventListener("click", () => switchTab("graph"));
 generatePackageBtn.addEventListener("click", generatePackage);
 openValidationModalBtn.addEventListener("click", openValidationModal);
 validationPickPositionBtn.addEventListener("click", startPickingPosition);

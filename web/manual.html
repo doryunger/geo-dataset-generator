@@ -7,6 +7,7 @@
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <link href="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.css" rel="stylesheet" />
   <script src="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.3/dist/mapbox-gl-draw.js"></script>
+  <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -14,19 +15,30 @@
     <h1>Manual Collector</h1>
 
     <label for="class-select">Class</label>
-    <select id="class-select">
-      <option value="__new__">+ New class</option>
-    </select>
-    <input id="class-new-input" type="text" placeholder="New class name" autocomplete="off" style="display:none" />
-    <select id="class-new-parent-select" style="display:none">
-      <option value="">(top-level class)</option>
-    </select>
-    <button id="class-new-create-btn" class="secondary" style="display:none">Create Class</button>
+    <select id="class-select"></select>
+
+    <button id="add-class-toggle-btn" class="secondary">+ Add new class</button>
+    <div id="add-class-panel" class="round-section" style="display:none">
+      <label for="add-class-type-select">New class type</label>
+      <select id="add-class-type-select">
+        <option value="parent">New top-level class</option>
+        <option value="sub">New sub-class</option>
+      </select>
+
+      <label id="add-class-parent-label" for="add-class-parent-select" style="display:none">Parent class</label>
+      <select id="add-class-parent-select" style="display:none">
+        <option value="">-- select parent --</option>
+      </select>
+
+      <input id="add-class-name-input" type="text" placeholder="New class name" autocomplete="off" />
+      <button id="add-class-create-btn" disabled>Create Class</button>
+    </div>
 
     <div id="tab-bar">
       <button id="tab-btn-samples" class="tab-btn active">Samples</button>
       <button id="tab-btn-validation" class="tab-btn">Validation</button>
       <button id="tab-btn-training" class="tab-btn">Training</button>
+      <button id="tab-btn-graph" class="tab-btn">Graph</button>
     </div>
 
     <div id="samples-tab" class="tab-panel">
@@ -51,7 +63,7 @@
     </div>
 
     <div id="training-tab" class="tab-panel" style="display:none">
-      <p class="hint">Pick a class or sub-class below to train an OBB model on its dataset_obb/ (run Generate Package first if it doesn't have one yet). Each class trains fully independently.</p>
+      <p class="hint">Trains the class picked above on its dataset_obb/ (run Generate Package first if it doesn't have one yet).</p>
       <div class="training-settings">
         <label for="training-epochs-input">Epochs</label>
         <input id="training-epochs-input" type="number" value="100" min="1" step="1" />
@@ -61,6 +73,47 @@
         <input id="training-base-model-input" type="text" value="yolo11n-obb.pt" />
       </div>
       <div id="training-tree"></div>
+    </div>
+
+    <div id="graph-tab" class="tab-panel" style="display:none">
+      <p class="hint">
+        classes/&lt;parent&gt;/subclass_graph.json for the class picked above (its own graph, or its
+        parent's if a sub-class is picked). Click the parent, or a sub-class node below, to set its
+        piece-cutting size.
+      </p>
+      <button id="graph-parent-header" class="secondary"></button>
+      <div id="graph-diagram"></div>
+
+      <div id="graph-node-editor" class="round-section" style="display:none">
+        <div id="graph-node-editor-title" class="round-header"></div>
+        <div id="graph-node-dependency" class="hint"></div>
+        <label for="graph-node-min-piece-input">Min piece (m)</label>
+        <input id="graph-node-min-piece-input" type="number" step="0.1" min="0" />
+        <label for="graph-node-max-piece-input">Max piece (m)</label>
+        <input id="graph-node-max-piece-input" type="number" step="0.1" min="0" />
+        <button id="graph-node-save-btn">Save node</button>
+      </div>
+
+      <h4>Edges</h4>
+      <div id="graph-edges-list"></div>
+      <button id="graph-add-edge-btn" class="secondary">+ Add edge</button>
+
+      <div id="graph-edge-editor" class="round-section" style="display:none">
+        <label for="graph-edge-from-select">From</label>
+        <select id="graph-edge-from-select"></select>
+        <label for="graph-edge-to-select">To</label>
+        <select id="graph-edge-to-select"></select>
+        <label for="graph-edge-min-dist-input">Min distance (m)</label>
+        <input id="graph-edge-min-dist-input" type="number" step="0.1" min="0" value="0" />
+        <label for="graph-edge-max-dist-input">Max distance (m)</label>
+        <input id="graph-edge-max-dist-input" type="number" step="0.1" min="0" value="5" />
+        <label for="graph-edge-boost-input">Confidence boost</label>
+        <input id="graph-edge-boost-input" type="number" step="0.01" min="0" max="1" value="0.2" />
+        <button id="graph-edge-save-btn">Save edge</button>
+        <button id="graph-edge-cancel-btn" class="secondary">Cancel</button>
+      </div>
+
+      <div id="graph-status" class="hint"></div>
     </div>
   </div>
 

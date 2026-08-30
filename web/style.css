@@ -12,7 +12,7 @@ html, body { margin: 0; height: 100%; font-family: -apple-system, sans-serif; }
 #sidebar {
   position: absolute;
   top: 0; left: 0; bottom: 0;
-  width: 340px;
+  width: 460px;
   z-index: 1;
   background: white;
   padding: 16px;
@@ -20,7 +20,7 @@ html, body { margin: 0; height: 100%; font-family: -apple-system, sans-serif; }
   box-shadow: 2px 0 8px rgba(0,0,0,0.15);
 }
 
-#map { position: absolute; top: 0; right: 0; bottom: 0; left: 340px; }
+#map { position: absolute; top: 0; right: 0; bottom: 0; left: 460px; }
 
 h1 { font-size: 18px; margin: 0 0 12px; }
 
@@ -181,15 +181,25 @@ button.secondary:hover { background: #ddd; }
   font-size: 13px; margin-bottom: 12px;
 }
 .training-settings input { width: 100%; box-sizing: border-box; }
-.training-row-wrap { border-bottom: 1px solid #eee; padding: 2px 0; }
-.training-row {
-  display: flex; align-items: center; gap: 8px; padding: 4px 4px; }
-.training-row.indented { padding-left: 20px; }
-.training-row-label { flex: 0 0 auto; font-size: 13px; }
-.training-row-status { flex: 1 1 auto; font-size: 12px; color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.training-row progress { width: 80px; height: 8px; }
-.training-row-btn { flex: 0 0 auto; }
+.training-row-wrap { border-bottom: 1px solid #eee; padding: 8px 0; }
+.training-row-status { font-size: 12px; color: #666; margin-top: 4px; }
+.training-row-progress { display: block; width: 100%; height: 8px; margin-top: 6px; }
 .training-row-subclass-toggle {
   display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: normal; color: #666;
   padding: 0 4px 4px 4px; cursor: pointer;
 }
+
+#graph-parent-header { margin-bottom: 8px; }
+#graph-parent-header.selected { background: #e3ecfb; border: 2px solid #1a73e8; font-weight: 600; }
+#graph-diagram {
+  overflow-x: auto; margin-bottom: 12px; border: 1px solid #eee; border-radius: 4px; padding: 8px;
+}
+#graph-diagram svg { max-width: 100%; }
+#graph-diagram .node { cursor: pointer; }
+#graph-diagram .node:hover rect, #graph-diagram .node:hover polygon { stroke-width: 3px; }
+#graph-node-editor, #graph-edge-editor { margin-bottom: 12px; }
+.graph-edge-row {
+  display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee;
+}
+.graph-edge-label { flex: 1 1 auto; font-size: 12px; color: #444; }
+.graph-edge-row button { width: auto; padding: 4px 8px; font-size: 11px; margin-bottom: 0; }

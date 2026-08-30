@@ -18,6 +18,7 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.ops import split as shapely_split
 
 import common
+import subclass_graph
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,8 @@ def _dataset_ext(src) -> str:
     return ".jpg" if src.suffix.lower().startswith(".jpg") else ".png"
 
 
-MIN_PIECE_M = 10.0
-MAX_PIECE_M = 30.0
-CONTEXT_STEP_M = MIN_PIECE_M / 3
+DEFAULT_MIN_PIECE_M = 2.0
+DEFAULT_MAX_PIECE_M = 5.0
 CONTEXT_TILE_PX = 224
 
 
@@ -102,13 +102,15 @@ def _flatten_polygons(geom):
 
 def _length_context_cut_ts(
     piece_ring, center, axis, perp, proj, image: Image.Image, gsd_m_per_px: float, embedder,
+    min_piece_m: float, max_piece_m: float,
 ) -> list[float]:
     proj_min, proj_max = proj.min(), proj.max()
     length_m = (proj_max - proj_min) * gsd_m_per_px
-    if length_m <= MAX_PIECE_M:
+    if length_m <= max_piece_m:
         return []
 
-    step_px = CONTEXT_STEP_M / gsd_m_per_px
+    context_step_m = min_piece_m / 3
+    step_px = context_step_m / gsd_m_per_px
     n_samples = max(2, int((proj_max - proj_min) / step_px) + 1)
     sample_t = np.linspace(proj_min, proj_max, n_samples)
 
@@ -124,9 +126,9 @@ def _length_context_cut_ts(
     dissim = [0.0] + [1 - float(np.dot(embs[i - 1], embs[i])) for i in range(1, len(embs))]
 
     cuts_t, pos = [], 0
-    while (proj_max - sample_t[pos]) * gsd_m_per_px > MAX_PIECE_M:
-        lo = sample_t[pos] + MIN_PIECE_M / gsd_m_per_px
-        hi = sample_t[pos] + MAX_PIECE_M / gsd_m_per_px
+    while (proj_max - sample_t[pos]) * gsd_m_per_px > max_piece_m:
+        lo = sample_t[pos] + min_piece_m / gsd_m_per_px
+        hi = sample_t[pos] + max_piece_m / gsd_m_per_px
         candidates = [i for i in range(pos + 1, len(sample_t)) if lo <= sample_t[i] <= hi]
         if not candidates:
             cuts_t.append(hi)
@@ -141,9 +143,12 @@ def _length_context_cut_ts(
 def polygon_to_obb_corners(
     pixel_ring: list[tuple[float, float]], n_pieces: int,
     image: Image.Image | None = None, gsd_m_per_px: float | None = None, embedder=None,
+    min_piece_m: float = DEFAULT_MIN_PIECE_M, max_piece_m: float = DEFAULT_MAX_PIECE_M,
 ) -> list[list[tuple[float, float]]]:
     """Rotated rectangles tightly bounding the ribbon polygon: BEND_PIECES corner cuts first, then
-    real-world-length sub-cuts (only if image/gsd_m_per_px/embedder are all given)."""
+    real-world-length sub-cuts (only if image/gsd_m_per_px/embedder are all given). min/max_piece_m
+    default to the module-wide defaults but are meant to be overridden per class -- see
+    subclass_graph.node_config()."""
     poly = ShapelyPolygon(pixel_ring)
     if not poly.is_valid:
         poly = poly.buffer(0)
@@ -164,7 +169,10 @@ def polygon_to_obb_corners(
             continue
         mp_ring = list(mp.exterior.coords)
         mp_center, mp_axis, mp_perp, mp_proj = _axis_projection(mp_ring)
-        cut_ts = _length_context_cut_ts(mp_ring, mp_center, mp_axis, mp_perp, mp_proj, image, gsd_m_per_px, embedder)
+        cut_ts = _length_context_cut_ts(
+            mp_ring, mp_center, mp_axis, mp_perp, mp_proj, image, gsd_m_per_px, embedder,
+            min_piece_m, max_piece_m,
+        )
         final_pieces.extend(_cut_polygon_at(mp, mp_center, mp_axis, mp_perp, cut_ts))
 
     return [list(p.minimum_rotated_rectangle.exterior.coords)[:4] for p in final_pieces if p.area > 0]
@@ -221,6 +229,10 @@ def _generate_pieces_for_class(
     if not samples:
         raise ValueError(f"'{class_name}' has no samples yet")
 
+    node_cfg = subclass_graph.node_config(class_name)
+    min_piece_m = node_cfg.get("min_piece_m", DEFAULT_MIN_PIECE_M)
+    max_piece_m = node_cfg.get("max_piece_m", DEFAULT_MAX_PIECE_M)
+
     counts = {"train": 0, "val": 0}
     for i, row in enumerate(samples):
         src = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
@@ -243,6 +255,7 @@ def _generate_pieces_for_class(
         gsd_m_per_px = common.TARGET_GSD_M
         rects = polygon_to_obb_corners(
             pixel_ring, BEND_PIECES.get(row["id"], 1), image=img, gsd_m_per_px=gsd_m_per_px, embedder=embedder,
+            min_piece_m=min_piece_m, max_piece_m=max_piece_m,
         )
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 

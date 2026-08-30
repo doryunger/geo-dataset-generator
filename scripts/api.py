@@ -30,6 +30,7 @@ import obb
 import reconcile
 import s3_sync
 import search
+import subclass_graph
 import train
 import train_obb
 from auto_labeler import PatchLabeler
@@ -176,6 +177,61 @@ def create_class(req: CreateClassRequest):
     common.ensure_class_dirs(full_name)
     logger.info(f"Created class '{full_name}'")
     return {"name": full_name, "parent": req.parent}
+
+
+def _graph_parent(class_name: str) -> str:
+    """The graph a given class's node config/edges live under -- a sub-class's own parent, or
+    itself if it has no parent (a top-level class is a node in its own graph)."""
+    return common.class_parent_name(class_name) or class_name
+
+
+@app.get("/api/subclass_graph")
+def get_subclass_graph(class_name: str):
+    parent = _graph_parent(class_name)
+    if parent not in common.list_classes():
+        raise HTTPException(404, f"Class '{parent}' not found")
+    graph = subclass_graph.load_full(parent)
+    available_nodes = sorted(subclass_graph.node_names(parent))
+    return {"parent": parent, "available_nodes": available_nodes, **graph}
+
+
+class SaveSubclassGraphRequest(BaseModel):
+    class_name: str
+    nodes: dict[str, dict]
+    edges: list[dict]
+
+
+@app.post("/api/subclass_graph")
+def save_subclass_graph(req: SaveSubclassGraphRequest):
+    parent = _graph_parent(req.class_name)
+    if parent not in common.list_classes():
+        raise HTTPException(404, f"Class '{parent}' not found")
+    valid_names = subclass_graph.node_names(parent)
+    for name in req.nodes:
+        if name not in valid_names:
+            raise HTTPException(400, f"'{name}' is not {parent} or one of its sub-classes")
+
+    seen_pairs = set()
+    for edge in req.edges:
+        frm, to = edge.get("from"), edge.get("to")
+        if frm not in valid_names or to not in valid_names:
+            raise HTTPException(400, f"Edge {edge} references a name that isn't {parent} or one of its sub-classes")
+        if parent in (frm, to):
+            raise HTTPException(400, f"Edge {edge} can't involve '{parent}' itself -- only sub-classes relate to each other")
+        if frm == to:
+            raise HTTPException(400, f"Edge {edge} has the same 'from' and 'to'")
+        if (frm, to) in seen_pairs:
+            raise HTTPException(400, f"Duplicate edge from '{frm}' to '{to}'")
+        seen_pairs.add((frm, to))
+        min_dist, max_dist, boost = edge.get("min_distance_m", 0.0), edge.get("max_distance_m"), edge.get("boost")
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (min_dist, max_dist, boost)):
+            raise HTTPException(400, f"Edge {edge} needs numeric min_distance_m/max_distance_m/boost")
+        if min_dist > max_dist:
+            raise HTTPException(400, f"Edge {edge} has min_distance_m greater than max_distance_m")
+
+    subclass_graph.save_graph(parent, req.nodes, req.edges)
+    logger.info(f"[{parent}] subclass_graph.json saved: {len(req.nodes)} node(s), {len(req.edges)} edge(s)")
+    return {"parent": parent, "nodes": req.nodes, "edges": req.edges}
 
 
 def _build_collect_response(req: CollectRequest, round_num: int, result: search.SearchResult) -> dict:
