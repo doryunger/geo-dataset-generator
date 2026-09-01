@@ -6,6 +6,10 @@ models/
 classes/
 .scratch/
 
+# oil_refinery experiments — probe/benchmark outputs and raw downloaded datasets
+oil_refinery/probe/
+oil_refinery/xview_raw/
+
 # Pretrained checkpoints downloaded by ultralytics/scripts on first run.
 *.pt
 
