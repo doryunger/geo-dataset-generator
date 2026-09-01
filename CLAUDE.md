@@ -52,19 +52,21 @@ current count). At this scale:
    counts look right (should be ≥ the sample count, not equal to it, if any `BEND_PIECES` entries
    exist).
 4. Train with `python scripts/train_obb.py --class <class> --version vN` — pick the next `vN` by
-   checking `models/<class>_obb_v*.pt`. This machine has no GPU (`torch.cuda.is_available()` is
-   `False`) despite earlier notes here assuming otherwise — a 100-epoch run is CPU-bound and took
-   ~90 min at the 448-piece dataset size (2026-08-16), not the "~1-3 min" once assumed. Still worth
-   just running rather than predicting the result, just budget real wall-clock time for it, and
-   prefer `patience` (early stopping, on by default now) over guessing an epoch count.
+   checking `models/<class>_obb_v*.pt`. GPU/CPU status on this machine has flipped more than once
+   (a 2026-08-16 note claimed no GPU and a ~90 min/100-epoch CPU-bound run at the 448-piece dataset
+   size; as of 2026-09-01 `nvidia-smi` and `torch.cuda.is_available()` show a real GPU, NVIDIA RTX
+   2000 Ada) — **don't trust either claim, re-check live** with `torch.cuda.is_available()` /
+   `nvidia-smi` before assuming training speed or writing a new wall-clock note here. Still worth
+   just running rather than predicting the result, and prefer `patience` (early stopping, on by
+   default now) over guessing an epoch count.
 5. Compare `models/<class>_obb_vN_metrics.json` against prior versions in a table, with the sample
    size caveat above front and center.
 6. **Optional**: `python scripts/train_obb_kfold.py --class <class> --version vN --folds 5` trains
    N models, each with a different 1/N of *original samples* (not pieces) held out as val, and
    reports mean±std across folds instead of one run's number — a single split's number can be
    meaningfully optimistic (`fence_obb_v6`: single-run mAP50-95 0.455, true k-fold mean 0.33±0.08,
-   confirmed 2026-08-16). Off by default (a 5-fold run is ~5x the cost of one training run,
-   multi-hour on this CPU-only machine) — reach for it when a result needs to be trustworthy
+   confirmed 2026-08-16). Off by default (a 5-fold run is ~5x the cost of one training run) —
+   reach for it when a result needs to be trustworthy
    enough to act on, not for every routine iteration. Folds split by original sample id
    specifically because `dataset_obb/` pieces of the same sample aren't independent — see
    `generate_obb_package`'s `val_ids` param and the module docstring on why the *pieces* count
