@@ -399,7 +399,7 @@ class TrainRequest(BaseModel):
     class_name: str
     epochs: int = 100
     patience: int = 30
-    base_model: str = "yolo11n-obb.pt"
+    base_model: str = str(common.WEIGHTS_DIR / "yolo11n-obb.pt")
     include_subclasses: bool = False
 
 

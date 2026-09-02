@@ -13,6 +13,12 @@ oil_refinery/xview_raw/
 oil_refinery/checkpoint_eval/
 oil_refinery/training_status.txt
 
+# oil_refinery/xview-yolov3 -- the ultralytics/xview-yolov3 clone (its own nested .git,
+# checkpoints, logs) that train_xview.py drives. Relocated here from an ephemeral Temp
+# scratchpad 2026-09-03 so it survives across sessions/machines; still not source-controlled
+# itself since it has its own git history plus multi-GB weights/logs.
+oil_refinery/xview-yolov3/
+
 # oil_refinery/app's frontend -- standard npm/Vite build artifacts, not source
 oil_refinery/app/web/node_modules/
 oil_refinery/app/web/dist/

@@ -41,7 +41,7 @@ import geometry  # noqa: E402
 common.setup_logging()
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = REPO_ROOT / "yolo11n-obb.pt"
+MODEL_PATH = common.WEIGHTS_DIR / "yolo11n-obb.pt"
 STORAGE_TANK_CLASS_ID = 2  # confirmed by loading the checkpoint: {0: 'plane', 1: 'ship', 2: 'storage tank', ...}
 CONF_THRESHOLD = 0.15  # matches the threshold already used for this exact checkpoint in probe_pretrained.py
 PREDICT_IMGSZ = 640

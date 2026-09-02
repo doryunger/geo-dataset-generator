@@ -17,10 +17,7 @@ from pathlib import Path
 SUBSTEPS_PER_BATCH = 16  # batch_size 8 * 8 chips/image / n=4 per forward pass -- see AGENTS.md
 DATA_ROW_RE = re.compile(r"^\s*(\d+)/(\d+)\s+(\d+)/(\d+)\s+.*\s([\d.eE+-]+)\s*$")
 
-SCRATCH = Path(
-    r"C:\Users\Shadow\AppData\Local\Temp\claude\c--Users-Shadow-projects-geo-dataset-generator"
-    r"\763708af-76a3-4227-ac5e-cd659ca516cd\scratchpad\xview-yolov3"
-)
+SCRATCH = Path(__file__).resolve().parent / "xview-yolov3"
 RESULTS_PATH = SCRATCH / "results.txt"
 CHECKPOINT_PATH = SCRATCH / "weights" / "latest.pt"
 LOG_PATH = SCRATCH / "training_full.log"

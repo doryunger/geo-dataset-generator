@@ -21,10 +21,7 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRATCH = Path(
-    r"C:\Users\Shadow\AppData\Local\Temp\claude\c--Users-Shadow-projects-geo-dataset-generator"
-    r"\763708af-76a3-4227-ac5e-cd659ca516cd\scratchpad\xview-yolov3"
-)
+SCRATCH = REPO_ROOT / "oil_refinery" / "xview-yolov3"
 sys.path.insert(0, str(SCRATCH))
 
 import cv2  # noqa: E402

@@ -73,7 +73,7 @@ def main():
     parser.add_argument("--version", required=True, help="Version tag, e.g. v6 -- folds are saved as v6_fold0..N")
     parser.add_argument("--folds", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--base-model", default="yolo11n-obb.pt")
+    parser.add_argument("--base-model", default=str(common.WEIGHTS_DIR / "yolo11n-obb.pt"))
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=30)
