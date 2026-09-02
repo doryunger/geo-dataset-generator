@@ -6,9 +6,12 @@ models/
 classes/
 .scratch/
 
-# oil_refinery experiments — probe/benchmark outputs and raw downloaded datasets
+# oil_refinery experiments — probe/benchmark outputs, raw downloaded datasets, and the
+# live-updating training status file (rewritten every epoch by the xview training run)
 oil_refinery/probe/
 oil_refinery/xview_raw/
+oil_refinery/checkpoint_eval/
+oil_refinery/training_status.txt
 
 # Pretrained checkpoints downloaded by ultralytics/scripts on first run.
 *.pt
