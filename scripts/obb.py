@@ -260,9 +260,18 @@ def _generate_pieces_for_class(
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 
         if len(rects) == 1:
+            # A minimum-rotated-rectangle's corners can extend slightly past the polygon it
+            # bounds (normal for non-rectangular shapes) -- clip to the image window the same
+            # way the multi-piece branch below already does, or a tightly-cropped sample (no
+            # margin) can produce out-of-[0,1] normalized coordinates that ultralytics silently
+            # rejects as invalid during label caching.
+            clipped = _clip_rect_to_window(rects[0], 0, 0, w, h)
+            if clipped is None:
+                logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
+                continue
             dst = output_dir / "images" / split / f"{row['id']}{src.suffix}"
             img.convert("RGB").save(dst)
-            line = "0 " + " ".join(f"{x/w:.6f} {y/h:.6f}" for x, y in rects[0])
+            line = "0 " + " ".join(f"{x/w:.6f} {y/h:.6f}" for x, y in clipped)
             lbl_path = output_dir / "labels" / split / f"{row['id']}.txt"
             lbl_path.write_text(line + "\n")
             counts[split] += 1

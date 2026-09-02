@@ -502,6 +502,15 @@ def parse_tile_url(url: str) -> tuple[int, int, int, str, str]:
     return int(match["z"]), int(match["x"]), int(match["y"]), match["tileset"], match["ext"]
 
 
+MIN_SEED_CROP_PX = 150  # below this, DINOv2 has too little real pixel data for a usable embedding
+
+
+def bbox_crop_px(z: int, west: float, south: float, east: float, north: float) -> tuple[float, float]:
+    x0f, y0f = lonlat_to_tile_float(west, north, z)
+    x1f, y1f = lonlat_to_tile_float(east, south, z)
+    return (x1f - x0f) * TILE_PX, (y1f - y0f) * TILE_PX
+
+
 def mapbox_tile_url(z: int, x: int, y: int, tileset: str = DEFAULT_TILESET, ext: str = DEFAULT_FORMAT) -> str:
     return f"https://api.mapbox.com/v4/{tileset}/{z}/{x}/{y}@2x.{ext}"
 
@@ -535,15 +544,6 @@ def fetch_tile(
         local_path.write_bytes(resp.content)
         return local_path
     raise RuntimeError(f"Failed to fetch tile {z}/{x}/{y} after {max_retries} retries (rate limited)")
-
-
-MIN_SEED_CROP_PX = 150
-
-
-def bbox_crop_px(z: int, west: float, south: float, east: float, north: float) -> tuple[float, float]:
-    x0f, y0f = lonlat_to_tile_float(west, north, z)
-    x1f, y1f = lonlat_to_tile_float(east, south, z)
-    return (x1f - x0f) * TILE_PX, (y1f - y0f) * TILE_PX
 
 
 def fetch_and_crop_bbox(

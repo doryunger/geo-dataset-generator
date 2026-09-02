@@ -357,18 +357,6 @@ async function handleNewShape(feature) {
   const ring = feature.geometry.coordinates[0];
   const bbox = polygonBbox(ring);
   const zoom = Math.round(map.getZoom());
-
-  const check = await (await fetch("/api/validate_bbox", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...bbox, zoom }),
-  })).json();
-  if (!check.ok) {
-    draw.delete(feature.id);
-    showWarning(`Shape rejected: too small to use (~${check.min_px}px at zoom ${zoom}, need at least 150px). Redraw with more margin around the object.`);
-    return;
-  }
-
   const { lon, lat } = polygonCentroid(ring);
   draw.delete(feature.id); // saved samples live on the static layer, not in `draw`
 
