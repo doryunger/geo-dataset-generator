@@ -133,10 +133,7 @@ def run_once(burst_epochs: int = 15, total_target: int = 100) -> None:
     # epochs happened to run faster or slower than steady-state
     now = time.time()
     last_check = json.loads(LAST_CHECK_PATH.read_text()) if LAST_CHECK_PATH.exists() else None
-    print()
-    print("=== Marginal pace (since progress last actually changed) ===")
     if last_check is None:
-        print("  First-ever check -- no baseline yet.")
         LAST_CHECK_PATH.write_text(json.dumps({"time": now, "epochs": len(lines)}))
     elif len(lines) > last_check["epochs"]:
         # only advance the baseline on a REAL change -- overwriting it on every
@@ -148,13 +145,13 @@ def run_once(burst_epochs: int = 15, total_target: int = 100) -> None:
         marginal_s = delta_s / delta_epochs
         remaining = total_target - len(lines)
         eta_s = marginal_s * remaining
+        print()
+        print("=== Marginal pace (since progress last actually changed) ===")
         print(f"  {delta_epochs} epoch(s) completed in the {delta_s / 60:.1f} min since progress last changed")
         print(f"  Current pace: {marginal_s / 60:.1f} min/epoch")
         print(f"  ETA to {total_target} epochs at this pace: {eta_s / 3600:.2f}h ({remaining} epochs remaining)")
         LAST_CHECK_PATH.write_text(json.dumps({"time": now, "epochs": len(lines)}))
-    else:
-        waiting_s = now - last_check["time"]
-        print(f"  Still on the same epoch as last check -- {waiting_s / 60:.1f} min elapsed since progress last changed")
+    # else: no new epoch since last check -- nothing new to report, stay quiet
 
     print()
     print("=== Action ===")
