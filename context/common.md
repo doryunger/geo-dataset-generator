@@ -118,9 +118,19 @@ fetched near the canonical zoom.
 
 ## Mapbox fetch + cache
 
-`MIN_SEED_CROP_PX = 150`: below this, DINOv2 has too little real pixel data for a usable embedding
-(see the `fence_seed_4` case: a 31x98px crop matched nothing above 0.27 similarity out of 300
-tiles checked, median ~0.02 — essentially noise).
+`MIN_SEED_CROP_PX = 150` / `bbox_crop_px` / `/api/validate_bbox`: below this, DINOv2 has too
+little real pixel data for a usable embedding (see the `fence_seed_4` case: a 31x98px crop matched
+nothing above 0.27 similarity out of 300 tiles checked, median ~0.02 — essentially noise).
+
+As of 2026-09-02 this only gates the main app's similarity-search flow (`app.js`'s
+`validateAndOpenModal`) — reject a too-small search shape up front rather than run a search that
+can never find anything. `/manual`'s sample-creation flow (`manual.js`) no longer calls this
+endpoint: it was originally tuned for fence, an elongated-ribbon class where a tight crop is
+naturally large, but smaller "tactical" object classes (e.g. distillation columns) legitimately
+need much smaller crops, so that gate was removed rather than raised per-class. The
+embedding-quality tradeoff below ~150px still applies to samples created that way — it's just no
+longer auto-enforced there, so search/validation results involving very small manually-created
+samples may be noisy.
 
 `fetch_and_crop_bbox`: fetch+stitch whichever grid tiles overlap the bbox at zoom z (from the
 shared global cache) then crop precisely to that bbox — used to turn a drawn shape into a tight
