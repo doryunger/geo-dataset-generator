@@ -1,0 +1,9 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Standard baseline (pyflakes, pycodestyle, isort, pyupgrade) -- no repo-wide adoption yet, since
+# the pre-existing scripts/*.py were never linted and haven't been audited against this. Currently
+# only run against oil_refinery/app/server/ (see its README) -- extend to the rest of the repo as
+# a deliberate separate pass, not implicitly via this config existing.
+select = ["E", "F", "I", "UP"]

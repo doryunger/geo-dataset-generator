@@ -13,6 +13,19 @@ oil_refinery/xview_raw/
 oil_refinery/checkpoint_eval/
 oil_refinery/training_status.txt
 
+# oil_refinery/app's frontend -- standard npm/Vite build artifacts, not source
+oil_refinery/app/web/node_modules/
+oil_refinery/app/web/dist/
+
+# oil_refinery/app's own dev-run log/pid files (restart.bat/.ps1/.sh), same pattern as
+# app.log/app.err.log/.app.pid above
+oil_refinery/app/server.log
+oil_refinery/app/server.err.log
+oil_refinery/app/.server.pid
+oil_refinery/app/web.log
+oil_refinery/app/web.err.log
+oil_refinery/app/.web.pid
+
 # Pretrained checkpoints downloaded by ultralytics/scripts on first run.
 *.pt
 
