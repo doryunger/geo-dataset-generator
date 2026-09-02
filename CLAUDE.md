@@ -7,6 +7,12 @@ Code files are kept deliberately free of explanatory comments/long docstrings â€
 behind a non-obvious design choice in any script, check `context/<script_name>.md` (one file per
 `scripts/*.py`, not every script has one).
 
+## Reply style
+
+Keep chat replies concise and informative â€” dense with actual information, not padded.
+Replies have been running too long relative to how much they actually say. Default to short;
+expand only for something that genuinely needs the space (a real tradeoff, a bug explanation).
+
 ## The one thing that matters most right now: dataset size
 
 Every class here (fence especially) is trained on a tiny number of hand-labeled samples (fence
