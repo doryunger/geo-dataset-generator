@@ -20,7 +20,7 @@ to decide "is this a refinery." That's the special case of a more general shape 
   edges against different site profiles, not a single fixed assignment.
 - A site's boundary isn't drawn or configured — it emerges from where the proximity chain breaks.
   Worked example (the one raised in conversation): a storage tank near a chimney near a
-  distillation column, all within the proximity threshold of each other, raises the probability
+  harbor, all within the proximity threshold of each other, raises the probability
   this is an oil refinery. The site's extent is exactly the connected region reachable by chaining
   "next component within threshold" outward from any seed component in it — it stops, naturally,
   at the point where no further oil-refinery-relevant component is found within reach. This is
@@ -37,7 +37,7 @@ implies exclusive tree ownership this explicitly isn't:
 
 | Term | Meaning |
 |---|---|
-| **Component** | A base-level detection (storage tank, chimney, distillation column, ...) — a node. |
+| **Component** | A base-level detection (storage tank, chimney, harbor, ...) — a node. |
 | **Edge** | A proximity relationship between two components, with a distance threshold — exactly the primitive `geometry.py` already computes (see below). |
 | **Site** | An emergent cluster of components connected (directly or transitively) within threshold — what the worked example above converges on. Not exclusive: a component can sit inside more than one candidate site if it's near enough to more than one plausible cluster. |
 | **Site profile** | The composition rule for one site *type* (generalizes `README.md`'s existing per-class count-range table): which component types, in what count ranges, define "this site reads as an oil refinery" vs. some other type. |
@@ -227,8 +227,8 @@ component type -> every site that has a `requires` edge to it.
   `README.md` — need calibration against real, known refineries before any of this is trustworthy,
   not just structurally sound. **This is an accepted, deliberate risk of the chosen approach, not
   a gap to patch by pulling in outside data sources** -- the point of this phase is to see what's
-  achievable with exactly the models actually available (DOTAv1 + DIOR for the first slice below,
-  more as custom-trained checkpoints are added), not to fuse in additional external data to
+  achievable with exactly the pretrained models actually available (DOTAv1 + DIOR for the first
+  slice below, and xView once trained), not to fuse in additional external data to
   compensate. Calibration still means testing against known real refineries as ground truth (as
   already planned) -- that's validating the available models' own output against reality, not
   adding a third data source.
@@ -244,25 +244,27 @@ component type -> every site that has a `requires` edge to it.
 
 ## First slice: fuse the two pretrained checkpoints, no fixed component list
 
-What changed from the original plan is narrower than it might sound: **no custom-trained model for
-this phase**, not "only look for two specific components." The first slice runs the two pretrained
-checkpoints already in this repo (DOTAv1's `models/yolo11n-obb.pt`, DIOR's
-`models/DIOR_yolov8s_backbone.pt`), each triggered **unfiltered** — every class either model knows
-about, not a config-picked subset (see "Pipeline" below: `config.json`'s current per-target
-`class_id` filter, which restricts a model to one class before it even runs, goes away; nothing
-tells a model in advance what to look for) — and feeds whatever comes out into the site-profile
-graph logic already specified above (nodes/edges/`identification_threshold`/candidacy/affiliation/
-prominence). That logic layer is already generic by design (see "The problem with a flat cluster"
-and "Proposed schema" above): it doesn't hardcode which component types must show up, it scores
-whatever's present against a profile's `nodes`. Nothing about this slice changes that — it's the
-first time it runs against real fused detections instead of a sketch.
+What changed from the original plan is narrower than it might sound: **no custom-trained model at
+all**, not "only look for two specific components." This project doesn't label or train its own
+detection classes for oil-refinery components — it works entirely off pretrained checkpoints
+(DOTAv1, DIOR, and xView once trained), whatever component vocabulary those happen to cover. The
+first slice runs the two pretrained checkpoints already in this repo (DOTAv1's
+`models/yolo11n-obb.pt`, DIOR's `models/DIOR_yolov8s_backbone.pt`), each triggered **unfiltered** —
+every class either model knows about, not a config-picked subset (see "Pipeline" below:
+`config.json`'s current per-target `class_id` filter, which restricts a model to one class before
+it even runs, goes away; nothing tells a model in advance what to look for) — and feeds whatever
+comes out into the site-profile graph logic already specified above (nodes/edges/
+`identification_threshold`/candidacy/affiliation/prominence). That logic layer is already generic
+by design (see "The problem with a flat cluster" and "Proposed schema" above): it doesn't hardcode
+which component types must show up, it scores whatever's present against a profile's `nodes`.
+Nothing about this slice changes that — it's the first time it runs against real fused detections
+instead of a sketch.
 
-- **`distillation-column` drops out because neither pretrained checkpoint has that class**, not
-  because this slice is scoped down to specific components on purpose. It has labeled samples
-  (`classes/distillation-column/`) but no trained model, so it simply isn't part of what these two
-  checkpoints can produce yet. It re-enters the profile once a `distillation-column_obb_v*.pt`
-  exists — no other change needed, since the profile's `nodes` already generalize to whatever
-  classes are available.
+- **Any component neither pretrained checkpoint covers simply isn't part of the profile** — not a
+  gap to fill with a custom-trained model, since that's not this project's approach. The profile's
+  `nodes` generalize to whatever classes the available pretrained models (currently DOTAv1 and
+  DIOR, xView once trained) actually produce; a component with no pretrained coverage anywhere just
+  doesn't exist for the graph.
 - **The two checkpoints' full class lists overlap heavily on the refinery-relevant subset**, checked
   directly against each model's own `model.names`:
   | Concept | DOTAv1 (`yolo11n-obb.pt`) | DIOR (`DIOR_yolov8s_backbone.pt`) |
@@ -286,7 +288,7 @@ first time it runs against real fused detections instead of a sketch.
   use identical class vocabularies).
 - `oil_refinery`'s `requires` edges for this slice cover whatever canonical types the fuser (see
   below) resolves overlapping detections down to -- component nodes and their `requires` edges get
-  added to the graph as more classes (custom or pretrained) become available, not fixed to a
+  added to the graph as more pretrained models are fused in, not fixed to a
   specific list in this doc.
 
 ## Pipeline: model router, fuser, classifier
@@ -372,10 +374,11 @@ beyond that.
 
 ## Sequencing
 
-Custom-trained classes (`distillation-column`, and anything else not covered by DOTAv1/DIOR) stay
-sequenced behind their own training work. The first slice above needs none of that -- both
-checkpoints already exist -- so the three pipeline modules above (router, fuser, classifier) are the
-next concrete thing to build, in that order: the router's job is small and mostly already exists in
+Nothing here waits on custom training -- this project doesn't label or train its own classes, so
+whatever DOTAv1/DIOR/xView don't cover simply isn't part of the profile, not a queued-up gap. The
+first slice above needs only the two pretrained checkpoints, which already exist -- so the three
+pipeline modules above (router, fuser, classifier) are the next concrete thing to build, in that
+order: the router's job is small and mostly already exists in
 `server.py`; the fuser is required before the classifier can trust its input; the classifier is
 where the graph logic already specified in this doc actually gets exercised against real data for
 the first time.

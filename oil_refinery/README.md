@@ -63,7 +63,9 @@ rather than guessed. Don't treat these numbers as anything but a starting point 
 
 ## Next steps
 1. Confirm which of the "reliable" objects already have a usable pretrained detector
-   (xView-style classes) vs. need custom labeled samples.
+   (DOTAv1/DIOR/xView-style classes) — this project works entirely off pretrained checkpoints, no
+   custom labeled samples/training for oil-refinery components, so anything none of those cover
+   simply isn't part of the profile.
 2. Pick 2-3 known real refineries, pull imagery, and manually catalog object counts/spacing
    to calibrate the proximity threshold and count ranges above instead of guessing them.
 3. Implement clustering (proximity) + composition check (count ranges) as two separate,
