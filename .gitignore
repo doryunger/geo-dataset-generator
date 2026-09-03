@@ -40,6 +40,12 @@ oil_refinery/app/.web.pid
 seeds/*.yaml
 !seeds/seed_example.yaml
 
+# EC2 SSH private key — must never be committed.
+*.pem
+
+# Instance-specific deployment runbook (real IP/instance ID) — repo is public.
+DEPLOY_EC2.md
+
 # Python
 __pycache__/
 *.pyc

@@ -4,10 +4,13 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { ExtentSocket, type SiteFeatureCollection, type SiteFeatureProperties } from './api'
 
 // The floor below which nothing here does anything at all, not even reporting a live view --
-// deliberately one zoom level below the server's DETECT_ZOOM (tile_server.py, currently 16), not
+// deliberately below the server's DETECT_ZOOM (tile_server.py, currently 17), not
 // equal to it: the live view still always resolves to DETECT_ZOOM tiles regardless of what zoom the
 // user is actually at (see visibleDetectZoomTiles()), so starting the trigger a level earlier just
-// means detection kicks in a little before the display zoom catches up to DETECT_ZOOM itself.
+// means detection kicks in a little before the display zoom catches up to DETECT_ZOOM itself. Kept
+// 2 levels below DETECT_ZOOM rather than 1 (as when DETECT_ZOOM was 16) would mean 16x the tiles per
+// viewport report at this floor (2^(DETECT_ZOOM - MIN_DETECT_ZOOM) per axis) -- worth reconsidering
+// if browsing right at this floor turns out to feel slow with the queue this generates.
 const MIN_DETECT_ZOOM = 15
 
 // Matches the server's DETECT_ZOOM (tile_server.py) -- the *only* zoom real detection ever runs at.
@@ -15,7 +18,7 @@ const MIN_DETECT_ZOOM = 15
 // map is actually displaying, so the tiles sent are exactly what intersects the current screen at
 // DETECT_ZOOM resolution -- not "whatever tile the current zoom's grid happens to cover," which
 // could include a lot of ground that's barely touching the edge of the viewport, not actually on it.
-const DETECT_ZOOM = 16
+const DETECT_ZOOM = 17
 
 // Same Hamburg refinery site already used elsewhere in this repo's own probing
 // (oil_refinery/probe_pretrained.py) -- a known-good spot with real storage tanks to look at.
@@ -174,6 +177,19 @@ export default function Map() {
     }
     map.on('load', updateExtent)
     map.on('moveend', updateExtent)
+
+    // As soon as a new gesture starts, tell the server to drop whatever it queued for the view
+    // we're about to leave -- ws_server.py already cancels the in-flight classify task and prunes
+    // tile_server's pending queue on every new extent report (see ws_server.py's ws_extent
+    // docstring), but until now that only happened once the *next* moveend arrived, so a stale
+    // batch kept getting worked on for the entire duration of the pan/zoom gesture even though it
+    // was already guaranteed to be discarded. An empty-tiles report reuses that exact same
+    // cancel/prune path for free -- current_tiles is empty so nothing new gets queued, but the
+    // cancel-then-prune sequence still runs immediately. Jobs a worker had *already* started
+    // can't be cheaply cancelled either way (see DetectionQueue.clear_pending()'s docstring) --
+    // this only stops queued-but-not-yet-started work from piling up further, it doesn't abort
+    // GPU calls already in flight.
+    map.on('movestart', () => socket.send(DETECT_ZOOM, []))
 
     let debounceTimer: ReturnType<typeof setTimeout> | undefined
     map.on('sourcedata', (e) => {

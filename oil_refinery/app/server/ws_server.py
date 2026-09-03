@@ -47,7 +47,7 @@ class ExtentRequest(BaseModel):
 
 
 MAX_ZOOM_GAP = 6  # defensive cap on DETECT_ZOOM - reported_zoom -- the frontend's own trigger zoom
-# (15, kept below tile_server.DETECT_ZOOM=16) never reports anything more than 2 per axis (4
+# (15, kept below tile_server.DETECT_ZOOM=17) never reports anything more than 2 per axis (4
 # descendants) below DETECT_ZOOM, but this is a backstop against a malformed/absurd request (e.g.
 # zoom=1) trying to enumerate billions of tiles rather than actually falling back to that from the
 # frontend's own gate

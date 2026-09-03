@@ -38,10 +38,12 @@ import os
 import sys
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import torch
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from PIL import Image, ImageDraw, ImageFont
@@ -63,12 +65,17 @@ MIN_DETECT_ZOOM: int = model_router.MIN_DETECT_ZOOM  # the floor below which not
 # does anything at all -- enforced by the frontend (it never even reports a live view below this),
 # not by anything here
 
-DETECT_ZOOM = 16  # the *only* zoom real inference ever runs at -- was 17 (z16's ~2,912px
-# GSD-normalized resample used to exceed MAX_PREDICT_IMGSZ), moved down deliberately (2026-09-03) to
-# cover 4x the ground per tile at the cost of a much bigger, slower per-tile resample -- see
-# MAX_PREDICT_IMGSZ, raised alongside this to allow it. Both raster endpoints below only ever do
-# real work at exactly this zoom; ws_server.py is responsible for translating whatever zoom the user
-# is actually viewing into the DETECT_ZOOM tile(s) that cover the same ground before asking this
+DETECT_ZOOM = 17  # the *only* zoom real inference ever runs at -- moved back down from 16 to 17
+# (2026-09-03, same day it was raised) to cut the ~2,912px z16 GSD-normalized resample to z17's
+# ~1,456px, roughly a 4x cheaper per-tile inference cost -- reopens the earlier tradeoff (4x less
+# ground per tile means 4x more tiles for the same real-world area), accepted here in exchange for
+# lower per-tile latency. A viewport-coverage trim was tried as the mitigation for the resulting
+# tile-count increase and reverted -- Map.tsx's movestart handler (drop queued/pending work the
+# instant a new gesture starts, see its own comment) covers the same wasted-work concern instead,
+# without permanently losing coverage at the screen's edges.
+# Both raster endpoints below only ever do real work at exactly this zoom; ws_server.py is
+# responsible for translating whatever zoom the user is actually viewing into the DETECT_ZOOM
+# tile(s) that cover the same ground before asking this
 # module for anything.
 
 # Loaded here too, not shared with ws_server.py's own copy -- each module owns its own logic (see
@@ -113,6 +120,11 @@ WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "4"))  # concurrent _w
 # this machine's cores); now several, since extent batches at low zoom can mean dozens of tiles to
 # process before the classifier can even start (see ws_server.py). Each loop's inference still runs
 # via run_in_executor's thread pool, so PyTorch's own C++ tensor ops (which release the GIL) get
+
+# Shared pool _run_detection() uses to run one tile's models concurrently instead of sequentially
+# (see _run_detection's docstring) -- sized for every worker to have its own model-level pair of
+# threads in flight at once, not just one shared pair the whole app contends over.
+_MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=max(2, WORKER_POOL_SIZE * len(model_router.MODELS)))
 # real parallelism across OS threads -- not just Python-level concurrency. torch's own per-call
 # intra-op thread count is capped in lifespan() below so N workers each trying to use every core
 # don't thrash each other; still worth measuring on this machine rather than assuming a win.
@@ -340,6 +352,14 @@ def _run_detection(image_bytes: bytes, z: int, x: int, y: int) -> tuple[bytes, l
     cross-model duplicates before anything downstream sees them (see semantic_graph.md's "Pipeline:
     model router, fuser, classifier").
 
+    Every triggered model's predict() call is fired at once via _MODEL_EXECUTOR rather than one
+    after another -- on CUDA each also gets its own torch.cuda.Stream so the GPU can genuinely
+    overlap their kernels instead of only overlapping the host-side pre/postprocessing around a
+    shared default stream; on CPU there's no stream concept, but the thread-level concurrency still
+    gets real overlap since PyTorch's C++ ops release the GIL. This only shortens the "wait for
+    every model's raw detections" phase _run_detection itself represents -- fuser.fuse() below still
+    waits for all of them before deduplicating, unchanged either way.
+
     GSD-normalizes the tile before handing it to any model: every training crop in this repo goes
     through common.resample_to_target_gsd (see scripts/obb.py) before training, so a model expects
     a fixed real-world meters-per-pixel scale, not "whatever a raw tile at this zoom happens to be."
@@ -367,14 +387,29 @@ def _run_detection(image_bytes: bytes, z: int, x: int, y: int) -> tuple[bytes, l
     scale_back_y = native_h / resampled_h
     tile_id = common.tile_id(z, x, y)
 
-    raw_detections: list[dict] = []
-    for model_key in model_router.models_for_tile(z):
+    def _predict_one(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, object]:
         model = models[model_key]
-        results = model.predict(
-            source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz, device=INFERENCE_DEVICE,
-            verbose=False,
-        )
-        r = results[0]
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                results = model.predict(
+                    source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz,
+                    device=INFERENCE_DEVICE, half=True, verbose=False,
+                )
+        else:
+            results = model.predict(
+                source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz, device=INFERENCE_DEVICE,
+                half=(INFERENCE_DEVICE == "cuda"), verbose=False,
+            )
+        return model_key, results[0]
+
+    triggered_models = model_router.models_for_tile(z)
+    use_cuda = INFERENCE_DEVICE == "cuda"
+    streams = [torch.cuda.Stream() for _ in triggered_models] if use_cuda else [None] * len(triggered_models)
+    futures = [_MODEL_EXECUTOR.submit(_predict_one, mk, st) for mk, st in zip(triggered_models, streams)]
+
+    raw_detections: list[dict] = []
+    for future in futures:
+        model_key, r = future.result()
         if r.obb is None or len(r.obb) == 0:
             continue
         for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
@@ -459,7 +494,10 @@ async def lifespan():
         # delete what the first thread had already removed. Forcing it here, once, single-threaded,
         # before any worker touches the model, means every real request afterward hits an
         # already-fused model and just reads -- safe to share across worker threads at that point.
-        model.predict(source=Image.new("RGB", (32, 32)), verbose=False)
+        model.predict(
+            source=Image.new("RGB", (32, 32)), device=INFERENCE_DEVICE,
+            half=(INFERENCE_DEVICE == "cuda"), verbose=False,
+        )
         models[model_key] = model
     _state["models"] = models
     _state["queue"] = DetectionQueue(QUEUE_CAPACITY, QUEUE_TRIM_TO)
