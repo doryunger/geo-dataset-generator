@@ -100,6 +100,14 @@ def train_obb_class(
         results = model.train(
             data=str(data_yaml), epochs=epochs, imgsz=imgsz, patience=patience,
             project=str(common.MODELS_DIR), name=f"{slug}_obb_{version}_run", exist_ok=True,
+            # ultralytics defaults degrees=0.0/flipud=0.0 -- built for ground-level photography,
+            # where rotating or vertically flipping a training image produces an unnatural one
+            # (sky at the bottom). None of that holds for this repo's top-down aerial imagery: an
+            # object viewed from directly overhead is equally valid at any rotation, and a
+            # vertical flip is exactly as realistic as the horizontal flip ultralytics already
+            # enables by default (fliplr=0.5). At the sample counts every class here trains on,
+            # leaving this off throws away free, valid augmentation diversity.
+            degrees=180, flipud=0.5,
         )
     finally:
         stop_event.set()
