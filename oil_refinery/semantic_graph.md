@@ -274,8 +274,11 @@ first time it runs against real fused detections instead of a sketch.
   | chimney | -- | `chimney` (id 5) |
 
   (Each model also returns plenty of classes with no refinery relevance at all -- `plane`, `bridge`,
-  `tennis court`, `windmill`, etc. -- since nothing filters them out anymore; the classifier stage
-  below is what's responsible for ignoring those, not the router.) Only `chimney` is unique to one
+  `tennis court`, `windmill`, etc. -- since nothing filters them out anymore; `tile_server.py`
+  drops those right after the fuser runs, keeping only detections that are both a graph component
+  and above that component's confidence floor, so neither the rendered overlay nor the cache the
+  classifier reads from ever carries them -- not the router, and not the classifier either, in the
+  end.) Only `chimney` is unique to one
   checkpoint among the relevant ones. This is why **dedup/fusion is an immediate, active
   prerequisite for this slice**, not a deferred one -- see the fuser stage below, which handles it
   by combining spatial overlap with a fuzzy label match, rather than requiring exact-matching

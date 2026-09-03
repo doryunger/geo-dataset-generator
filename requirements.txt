@@ -9,5 +9,6 @@ opencv-python==5.0.0.93
 shapely==2.1.2
 fastapi==0.141.1
 uvicorn==0.52.1
+websockets==17.1
 boto3==1.43.78
 ruff==0.16.5

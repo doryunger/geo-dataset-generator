@@ -41,6 +41,5 @@ nohup "$REPO_ROOT/.venv/bin/uvicorn" server:app --app-dir server --host "$HOST" 
 echo $! > .server.pid
 echo "Backend started (pid $(cat .server.pid), port $PORT), logging to server.log / server.err.log"
 
-(cd web && nohup npm run dev >> ../web.log 2>> ../web.err.log &
- echo $! > ../.web.pid)
+(cd web && { nohup npm run dev >> ../web.log 2>> ../web.err.log & echo $! > ../.web.pid; })
 echo "Frontend started (pid $(cat .web.pid), port 5173), logging to web.log / web.err.log"

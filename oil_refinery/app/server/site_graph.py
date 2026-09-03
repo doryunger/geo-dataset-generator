@@ -129,6 +129,27 @@ def min_types_present(graph: dict, site: str) -> tuple[int, int]:
     return graph["nodes"][site]["min_types_present"], total
 
 
+def max_relevant_distance_m(graph: dict) -> float:
+    """The farthest apart two things can be anywhere in this graph and still plausibly matter to
+    some rule in it -- the largest of every site's default_max_distance_m/merge_distance_m and every
+    explicit proximity edge's max_distance_m. Not used by the classifier itself; ws_server.py uses it
+    as the radius beyond which a tile from an earlier report is no longer worth carrying forward as
+    "historical" (see classify_extent()'s docstring) -- a tile farther than this from anything in the
+    current view can't affect any site/merge decision the graph is capable of making, so there's no
+    reason to keep it around."""
+    distances = []
+    for cfg in graph["nodes"].values():
+        if cfg["kind"] != "site":
+            continue
+        distances.append(cfg["default_max_distance_m"])
+        if cfg.get("merge_distance_m") is not None:
+            distances.append(cfg["merge_distance_m"])
+    for edge in graph["edges"]:
+        if edge["relation"] == "proximity":
+            distances.append(edge["max_distance_m"])
+    return max(distances) if distances else 0.0
+
+
 def component_index(graph: dict) -> dict[str, list[str]]:
     """Reverse lookup: component type -> every site that "requires" it. Derived from the graph's
     own edges -- see semantic_graph.md's "Resolved: component-to-profile index"."""

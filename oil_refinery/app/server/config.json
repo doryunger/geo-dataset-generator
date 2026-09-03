@@ -1,6 +1,8 @@
 {
-  "min_detect_zoom": 14,
-  "targets": [
-    { "model": "models/yolo11n-obb.pt", "class_id": 2, "class_name": "storage tank" }
+  "min_detect_zoom": 16,
+  "canonical_model": "models/yolo11n-obb.pt",
+  "models": [
+    "models/yolo11n-obb.pt",
+    "models/DIOR_yolov8s_backbone.pt"
   ]
 }
