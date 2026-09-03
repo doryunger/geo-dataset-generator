@@ -45,6 +45,16 @@ HARD_NEGATIVE_TILES = [
     "19_312953_212894",
     "19_312954_212894",
     "19_312955_212893",
+    # Added for distillation-column, from oil_refinery/app POC testing at the Hamburg refinery
+    # site -- the model was firing on ~everything (roads, tanks, buildings) at full-tile scale
+    # despite 0.994 val precision, because it had never seen real backgrounds during training.
+    # Visually reviewed one by one; two ambiguous dense-process-unit tiles from the same batch
+    # were deliberately excluded (could plausibly contain a real column).
+    "17_69157_42405",  # storage tank farm
+    "17_69157_42406",  # storage tank farm
+    "17_69159_42405",  # buildings/warehouses/roads/rail
+    "17_69161_42405",  # water/harbor/docks
+    "17_69160_42405",  # rail yard/warehouses
 ]
 
 
