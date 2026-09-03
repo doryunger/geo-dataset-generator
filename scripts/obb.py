@@ -6,6 +6,7 @@ Usage:
 """
 import argparse
 import logging
+import math
 import random
 import shutil
 from collections import Counter
@@ -102,6 +103,53 @@ def _sample_hard_negative_crops(
 DEFAULT_MIN_PIECE_M = 2.0
 DEFAULT_MAX_PIECE_M = 5.0
 CONTEXT_TILE_PX = 224
+
+DEFAULT_NORMALIZE_SAMPLE_CROP = False  # off by default -- existing classes' training-image
+# framing doesn't change unless a class opts in via subclass_graph.json's per-node config (same
+# place min_piece_m/max_piece_m already live). See _normalized_sample_crop's docstring for why.
+
+SAMPLE_CROP_M = 80.0  # fixed real-world extent (per side) fetched around every sample's centroid
+SAMPLE_FETCH_ZOOM = 18  # fixed zoom for that fetch -- not whatever zoom the sample happened to be
+# drawn at. Together with the existing GSD-resample step below, every opted-in class's training
+# image ends up the same pixel size no matter how large or small the real object is (this class's
+# own samples ranged 5-49m across) -- label size within that fixed frame then honestly reflects
+# the object's real proportional size, instead of being an artifact of how tightly each sample
+# happened to be hand-cropped.
+
+
+def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
+    pts = ring[:-1] if ring[0] == ring[-1] else ring
+    lon = sum(p[0] for p in pts) / len(pts)
+    lat = sum(p[1] for p in pts) / len(pts)
+    return lon, lat
+
+
+def _bbox_around(lon: float, lat: float, extent_m: float) -> tuple[float, float, float, float]:
+    half = extent_m / 2
+    dlat = half / 111_320
+    dlon = half / (111_320 * math.cos(math.radians(lat)))
+    return lon - dlon, lat - dlat, lon + dlon, lat + dlat
+
+
+def _normalized_sample_crop(row: dict):
+    """Fetches a fixed real-world extent (SAMPLE_CROP_M) around a sample's polygon centroid, at a
+    fixed zoom (SAMPLE_FETCH_ZOOM) -- not the sample's own tight bounds (see web/manual.js's
+    polygonBbox, used verbatim as the fetch bounds in api.py's create_manual_sample) and not
+    whatever zoom it happened to be drawn at. That tight-crop convention was fine for this
+    project's primary embedding-similarity-search workflow, but for detector training it meant the
+    object filled nearly the whole training image, in a differently-sized frame per sample --
+    teaching classification of a pre-isolated crop, not localization of an object within a
+    consistently-framed scene. No re-labeling needed: the polygon is already real lon/lat and
+    re-projects correctly into whatever fixed bounds get fetched here. Reuses common.fetch_tile's
+    on-disk cache (via fetch_and_crop_bbox) -- usually a cheap re-composite of tiles already
+    fetched when the sample was first drawn, not a fresh network round-trip."""
+    lon, lat = _polygon_centroid(row["polygon"])
+    west, south, east, north = _bbox_around(lon, lat, SAMPLE_CROP_M)
+    out_path = common.SCRATCH_DIR / "obb_context_crops" / f"{row['id']}.jpg"
+    path = common.fetch_and_crop_bbox(
+        SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+    )
+    return Image.open(path), west, south, east, north
 
 
 def _axis_projection(pixel_ring: list[tuple[float, float]]):
@@ -270,6 +318,7 @@ def _generate_pieces_for_class(
     node_cfg = subclass_graph.node_config(class_name)
     min_piece_m = node_cfg.get("min_piece_m", DEFAULT_MIN_PIECE_M)
     max_piece_m = node_cfg.get("max_piece_m", DEFAULT_MAX_PIECE_M)
+    normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
 
     counts = {"train": 0, "val": 0}
     for i, row in enumerate(samples):
@@ -282,13 +331,17 @@ def _generate_pieces_for_class(
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']})...")
         if on_progress:
             on_progress(i + 1, len(samples), row["id"])
-        img = Image.open(src)
-        native_gsd_m = common.meters_per_pixel(row["zoom"], (row["south"] + row["north"]) / 2)
+        west, south, east, north = row["west"], row["south"], row["east"], row["north"]
+        fetch_zoom = row["zoom"]
+        if normalize_sample_crop:
+            img, west, south, east, north = _normalized_sample_crop(row)
+            fetch_zoom = SAMPLE_FETCH_ZOOM
+        else:
+            img = Image.open(src)
+        native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
         img = common.resample_to_target_gsd(img, native_gsd_m)
         w, h = img.size
-        normalized_ring = common.polygon_to_normalized(
-            row["polygon"], row["west"], row["south"], row["east"], row["north"],
-        )
+        normalized_ring = common.polygon_to_normalized(row["polygon"], west, south, east, north)
         pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
         gsd_m_per_px = common.TARGET_GSD_M
         rects = polygon_to_obb_corners(
