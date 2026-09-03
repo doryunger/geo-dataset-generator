@@ -6,6 +6,7 @@ Usage:
 """
 import argparse
 import logging
+import random
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -55,6 +56,14 @@ HARD_NEGATIVE_TILES = [
     "17_69159_42405",  # buildings/warehouses/roads/rail
     "17_69161_42405",  # water/harbor/docks
     "17_69160_42405",  # rail yard/warehouses
+    # Second pass, same batch/review process -- v3 (trained with the 5 above) still showed real
+    # false positives on tiles not yet covered by those negatives.
+    "17_69159_42406",  # buildings/warehouses/parking
+    "17_69159_42407",  # storage tanks (incl. the large tank that misfired in v3/v4)
+    "17_69160_42406",  # rail yard/warehouses/dock
+    "17_69160_42407",  # water/docks
+    "17_69161_42406",  # water + storage tanks
+    "17_69161_42407",  # water + tank farm
 ]
 
 
@@ -67,8 +76,27 @@ def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
     return common.draw_polygon_overlay(src, [row["label_polygon"]], dst)
 
 
-def _dataset_ext(src) -> str:
-    return ".jpg" if src.suffix.lower().startswith(".jpg") else ".png"
+def _sample_hard_negative_crops(
+    tile_path: Path, sizes: list[tuple[int, int]], rng: random.Random, n: int,
+) -> list[Image.Image]:
+    """n random crops from tile_path, sized by sampling from `sizes` (the *real* positive crop
+    dimensions for whatever class is currently being packaged -- see caller). A whole 512px tile
+    used as a "negative" taught a model a framing shortcut ("big image = no object") instead of
+    real content discrimination, regardless of class -- confirmed on distillation-column, where
+    real positive crops ran ~40-300px and 512px hard-negative tiles let the model tell them apart
+    by size alone. Matching the size distribution removes that shortcut for any class, not just
+    this one, since sizes are never hardcoded -- they come from that class's own samples."""
+    with Image.open(tile_path) as img:
+        img = img.convert("RGB")
+        w, h = img.size
+        crops = []
+        for _ in range(n):
+            cw, ch = rng.choice(sizes)
+            cw, ch = min(cw, w), min(ch, h)
+            left = rng.randint(0, w - cw) if w > cw else 0
+            top = rng.randint(0, h - ch) if h > ch else 0
+            crops.append(img.crop((left, top, left + cw, top + ch)).copy())
+        return crops
 
 
 DEFAULT_MIN_PIECE_M = 2.0
@@ -331,14 +359,27 @@ def generate_obb_package(
     counts = _generate_pieces_for_class(class_name, output_dir, embedder, val_ids=val_ids, on_progress=on_progress)
 
     if include_hard_negatives:
-        for tile_id in HARD_NEGATIVE_TILES:
-            src = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
-            if src is None:
-                continue
-            dst = output_dir / "images" / "train" / f"{tile_id}{_dataset_ext(src)}"
-            shutil.copy(src, dst)
-            (output_dir / "labels" / "train" / f"{tile_id}.txt").write_text("")
-            counts["negatives"] = counts.get("negatives", 0) + 1
+        # Crop sizes sampled from this class's own just-generated positive images -- not a fixed
+        # size, so a class with larger typical pieces automatically gets larger negative crops too.
+        positive_sizes = []
+        for img_path in (output_dir / "images" / "train").iterdir():
+            with Image.open(img_path) as im:
+                positive_sizes.append(im.size)
+
+        if positive_sizes:
+            rng = random.Random(42)  # deterministic -- same crops on every regeneration
+            crops_per_tile = 1  # conservative: keeps negatives well under positives in count,
+            # matching this repo's own caution that hard negatives destabilized training once at
+            # a much less favorable ratio than this produces -- raise once this is confirmed safe
+            for tile_id in HARD_NEGATIVE_TILES:
+                src = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
+                if src is None:
+                    continue
+                for i, crop in enumerate(_sample_hard_negative_crops(src, positive_sizes, rng, crops_per_tile)):
+                    name = f"{tile_id}_neg{i}"
+                    crop.save(output_dir / "images" / "train" / f"{name}.jpg", format="JPEG")
+                    (output_dir / "labels" / "train" / f"{name}.txt").write_text("")
+                    counts["negatives"] = counts.get("negatives", 0) + 1
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)
