@@ -112,8 +112,10 @@ MAX_PREDICT_IMGSZ = 3072  # safety cap on the GSD-normalized input size (see _ru
 # A remote host with no training contention can set INFERENCE_DEVICE=cuda without any code change.
 INFERENCE_DEVICE = os.environ.get("INFERENCE_DEVICE", "cpu")
 
-QUEUE_CAPACITY = 8
-QUEUE_TRIM_TO = 6
+QUEUE_CAPACITY = 150  # see DetectionQueue's docstring -- sized directly off the known ~75-tile
+QUEUE_TRIM_TO = 150   # extent-report load (2x it), not a guessed ratio; both equal on purpose, so
+# a normal single load doesn't get trimmed down at all -- eviction only kicks in genuinely past
+# double the expected size, not as a routine haircut on ordinary traffic
 
 WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "4"))  # concurrent _worker_loop()
 # instances sharing one DetectionQueue -- was 1 (serialized on purpose, to avoid oversubscribing
@@ -129,11 +131,16 @@ _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=max(2, WORKER_POOL_SIZE * len(m
 # intra-op thread count is capped in lifespan() below so N workers each trying to use every core
 # don't thrash each other; still worth measuring on this machine rather than assuming a win.
 
-TILE_CACHE_CAPACITY = 72  # last 72 processed tiles kept -- see TileCache; a performance detail, not
-# live-view state (semantic_graph.md's "Classifier scope: live map view, not per tile"). Raised from
-# 20, then 50, once low-zoom extent reports started needing many DETECT_ZOOM tiles per reported tile
-# (a single z14 tile alone is 8x8=64 descendants) -- worth revisiting again once that's exercised
-# against a real multi-tile viewport, not just one z14 tile at a time
+TILE_CACHE_CAPACITY = 300  # last 300 processed tiles kept -- see TileCache; a performance detail,
+# not live-view state (semantic_graph.md's "Classifier scope: live map view, not per tile"). Raised
+# from 20, then 50, then 72 as low-zoom extent reports needed more DETECT_ZOOM tiles per reported
+# tile -- 72 was already below the ~75 tiles one extent report now needs at the MIN_DETECT_ZOOM
+# floor (Map.tsx's viewportTrimFraction() cuts what used to be ~150 there down to ~75, still bigger
+# than 72), which would have meant a single report's own tiles evicting each other before it even
+# finished. 300 gives headroom for several such reports' worth of historical continuity (site_graph's
+# MAX_RELEVANT_DISTANCE_M-pruned historical_tiles, not just the current live view), not just barely
+# fitting one -- cheap to size generously since a cached entry is one small PNG overlay + a detection
+# list, not the source tile image itself.
 
 OUTLINE_COLOR = (255, 0, 170)  # magenta -- distinct from common.py's sample-review green, which
 # would blend into refinery scenes' own green/gray/beige
@@ -162,10 +169,22 @@ class Job:
 
 
 class DetectionQueue:
-    """Single global bounded queue feeding the one serialized inference worker. Capacity 8, trimmed
-    to the 6 most recent on overflow (a high/low-watermark drop, not a strict size-6 ring buffer) --
-    a backstop against pathological bursts; the primary staleness signal is the per-request
-    is_disconnected() check done just before a job actually starts (see _worker_loop).
+    """Single global bounded queue feeding the worker pool (WORKER_POOL_SIZE concurrent
+    _worker_loop() instances). Capacity and trim_to are both 150 -- not a high/low-watermark pair
+    like a smaller queue might use, deliberately equal so a normal single load never gets trimmed at
+    all; eviction only kicks in genuinely past double the expected size, not as a routine haircut on
+    ordinary traffic. The primary staleness signal is the per-request is_disconnected() check done
+    just before a job actually starts (see _worker_loop), not this capacity.
+
+    Sized directly off a known number, not a guessed ratio: an extent report at the
+    MIN_DETECT_ZOOM floor needs ~75 tiles (Map.tsx's viewportTrimFraction()), and this is 2x that --
+    the same relationship TILE_CACHE_CAPACITY uses for the same reason. The original capacity (8,
+    trim_to 6) was sized before this app moved to a bigger DETECT_ZOOM and was already too small for
+    perfectly ordinary interactive traffic alone: a single full-screen load or pan at native
+    DETECT_ZOOM (no zoom-gap multiplier, just MapLibre's raster tile loader requesting every visible
+    /api/detections tile) needs roughly 12-20 tiles by itself, meaning routine browsing could
+    already trigger eviction of tiles the user was actively looking at, not ones they'd scrolled
+    away from as the eviction rule below assumes.
 
     Eviction only ever targets interactive jobs (Job.request is not None) -- dropping one of those is
     a real, already-accepted UX tradeoff (the user has likely scrolled away from that tile anyway),
@@ -225,8 +244,10 @@ class TileCache:
     """Bounded LRU cache of recently processed tiles' fused results -- a performance detail, not
     live-view state (see semantic_graph.md's "Classifier scope: live map view, not per tile"): its
     only job is skipping re-inference on a tile the user scrolls back to, nothing here decides which
-    tiles currently belong to a site. `capacity` is 20 (TILE_CACHE_CAPACITY) -- still a placeholder
-    like every other number in that doc, not yet load-tested against a real browsing session."""
+    tiles currently belong to a site. `capacity` is TILE_CACHE_CAPACITY (see that constant, not
+    restated here since it's already drifted out of sync with a hardcoded number once before) --
+    still a placeholder like every other number in semantic_graph.md, not yet load-tested against a
+    real browsing session."""
 
     def __init__(self, capacity: int):
         self._items: OrderedDict[str, JobResult] = OrderedDict()
