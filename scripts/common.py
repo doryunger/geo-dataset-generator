@@ -15,8 +15,9 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 CLASSES_DIR = ROOT / "classes"
-MODELS_DIR = ROOT / "models"
-WEIGHTS_DIR = ROOT / "weights"  # pretrained/base checkpoints we fine-tune from (not our own trained output -- that's MODELS_DIR)
+MODELS_DIR = ROOT / "models"  # both pretrained/base checkpoints and this project's own trained
+# output live here together -- one directory, matching convention on other machines this repo
+# runs on (previously split into a separate weights/ for bases only; consolidated 2026-09-03).
 LOGS_DIR = ROOT / "logs"
 
 _logging_configured = False

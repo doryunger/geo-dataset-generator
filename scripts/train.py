@@ -28,7 +28,7 @@ def ensure_data_yaml(class_name: str):
     return data_yaml
 
 
-def train_class(class_name: str, version: str, base_model: str = str(common.WEIGHTS_DIR / "yolo11n-seg.pt"), epochs: int = 100, imgsz: int = 1280) -> dict:
+def train_class(class_name: str, version: str, base_model: str = str(common.MODELS_DIR / "yolo11n-seg.pt"), epochs: int = 100, imgsz: int = 1280) -> dict:
     """Trains and saves models/<class>_<version>.pt. The run itself (weights, curves, args.yaml)
     is written under models/ too, named after class+version, instead of Ultralytics' default
     top-level ./runs/segment/trainN/ (unlinked to which class/version it belongs to)."""
@@ -64,7 +64,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--class", dest="class_name", required=True, help="Object class name")
     parser.add_argument("--version", required=True, help="Version tag for the output file, e.g. v1")
-    parser.add_argument("--base-model", default=str(common.WEIGHTS_DIR / "yolo11n-seg.pt"), help="Pretrained checkpoint to fine-tune from")
+    parser.add_argument("--base-model", default=str(common.MODELS_DIR / "yolo11n-seg.pt"), help="Pretrained checkpoint to fine-tune from")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=1280)
     args = parser.parse_args()

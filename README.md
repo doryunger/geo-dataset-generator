@@ -12,7 +12,7 @@ set -a && source .env && set +a
 .venv/bin/uvicorn api:app --app-dir scripts            # serves the UI + API on :8000
 ```
 
-`ultralytics` auto-downloads its base checkpoint (`yolo11n-seg.pt`) into `weights/` the first time
+`ultralytics` auto-downloads its base checkpoint (`yolo11n-seg.pt`) into `models/` the first time
 `train.py` runs a fresh class — no manual step needed.
 
 # Directory layout
@@ -24,17 +24,18 @@ set -a && source .env && set +a
 - `tiles/manifest.jsonl` — geo bounds for every cached tile.
 - `embeddings/index.npy`, `embeddings/index_ids.json` — DINOv2 CLS-vector cache, parallel to the
   tile cache above (same reuse-across-classes reasoning).
-- `weights/` — pretrained/base checkpoints everything fine-tunes from or benchmarks against
-  (`yolo11n-obb.pt`, `yolo11n-seg.pt`, `yolo11x.pt`, `DIOR_yolov8s_backbone.pt`, ...). The single
-  place all of these live — every script resolves its base-model path here rather than a bare
-  filename, so nothing re-downloads a stray duplicate into whatever directory it happened to be
-  run from (this used to happen: a duplicate `yolo11n-obb.pt` accumulated under `scripts/`).
-  Distinct from `models/` below, which holds *this project's own* trained output, not bases.
-- `models/<class>_<version>.pt` — a trained model. `models/<class>_<version>_metrics.json` next to
-  it holds the training config + final metrics. `models/<class>_<version>_run/` holds the full
-  Ultralytics training run for that version (loss/PR curves, confusion matrix, `weights/last.pt`,
-  `args.yaml`) — everything you'd want to inspect training itself, separate from the two files
-  above that are the actual product of that run.
+- `models/` — pretrained/base checkpoints (`yolo11n-obb.pt`, `yolo11n-seg.pt`, `yolo11x.pt`,
+  `DIOR_yolov8s_backbone.pt`, ...) and this project's own trained output live together in one
+  directory (previously split into a separate `weights/` for bases only; consolidated 2026-09-03
+  to match convention on other machines this repo runs on). Every script resolves its base-model
+  path here rather than a bare filename, so nothing re-downloads a stray duplicate into whatever
+  directory it happened to be run from (this used to happen: a duplicate `yolo11n-obb.pt`
+  accumulated under `scripts/`).
+  - `models/<class>_<version>.pt` — a trained model. `models/<class>_<version>_metrics.json` next
+    to it holds the training config + final metrics. `models/<class>_<version>_run/` holds the
+    full Ultralytics training run for that version (loss/PR curves, confusion matrix,
+    `weights/last.pt`, `args.yaml`) — everything you'd want to inspect training itself, separate
+    from the two files above that are the actual product of that run.
 
 ## Per-class (`classes/<name>/`)
 

@@ -132,8 +132,8 @@ def run_axis_aligned_model(weights: str, model_title: str, conf: float = 0.15) -
 
 
 if __name__ == "__main__":
-    run_obb_model(str(REPO_ROOT / "weights" / "yolo11n-obb.pt"), "Ultralytics YOLO11-OBB (DOTAv1)")
-    run_axis_aligned_model(str(REPO_ROOT / "weights" / "yolo11x.pt"), "Ultralytics YOLO11x (COCO, generic baseline)")
+    run_obb_model(str(REPO_ROOT / "models" / "yolo11n-obb.pt"), "Ultralytics YOLO11-OBB (DOTAv1)")
+    run_axis_aligned_model(str(REPO_ROOT / "models" / "yolo11x.pt"), "Ultralytics YOLO11x (COCO, generic baseline)")
     # community fine-tune on DIOR (storage tank, chimney, harbor, ship, vehicle, ...)
     # unverified provenance/quality -- included for coverage, flag results accordingly
     # README calls this "oriented object detection" -- try OBB head first, fall

@@ -22,8 +22,8 @@ print(f"Test image: {composite_w}x{composite_h}px ({test_image_path})")
 from ultralytics import YOLO  # noqa: E402
 
 for weights, label in [
-    (str(REPO_ROOT / "weights" / "yolo11n-obb.pt"), "YOLO11n-OBB (nano, DOTAv1)"),
-    (str(REPO_ROOT / "weights" / "DIOR_yolov8s_backbone.pt"), "YOLOv8s-DIOR (small)"),
+    (str(REPO_ROOT / "models" / "yolo11n-obb.pt"), "YOLO11n-OBB (nano, DOTAv1)"),
+    (str(REPO_ROOT / "models" / "DIOR_yolov8s_backbone.pt"), "YOLOv8s-DIOR (small)"),
 ]:
     t0 = time.perf_counter()
     model = YOLO(weights)

@@ -1,6 +1,6 @@
 {
   "min_detect_zoom": 14,
   "targets": [
-    { "model": "weights/yolo11n-obb.pt", "class_id": 2, "class_name": "storage tank" }
+    { "model": "models/yolo11n-obb.pt", "class_id": 2, "class_name": "storage tank" }
   ]
 }
