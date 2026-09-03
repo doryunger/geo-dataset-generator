@@ -54,6 +54,23 @@ def upload_package(class_name: str) -> str | None:
     return key
 
 
+def list_remote_classes() -> list[str]:
+    """Every class name with at least one package in S3, discovered from the actual object keys
+    rather than a fixed prefix depth -- a sub-class (e.g. "fence/fence-face") packages under its
+    own nested "packages/<parent>/<sub>/" prefix, so a plain one-level listing would miss it."""
+    if not s3_configured():
+        return []
+    class_names = set()
+    paginator = _client().get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=_BUCKET, Prefix="packages/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith(".tar.gz"):
+                continue
+            class_names.add(key.removeprefix("packages/").rsplit("/", 1)[0])
+    return sorted(class_names)
+
+
 def latest_package_key(class_name: str) -> str | None:
     if not s3_configured():
         return None
