@@ -18,6 +18,7 @@ export async function fetchStats(): Promise<Stats> {
 }
 
 export interface SiteFeatureProperties {
+  id: string
   site: string
   matched_types: string[]
   type_coverage_ratio: number

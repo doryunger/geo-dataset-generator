@@ -20,6 +20,22 @@ const MIN_DETECT_ZOOM = 15
 // could include a lot of ground that's barely touching the edge of the viewport, not actually on it.
 const DETECT_ZOOM = 17
 
+// How much of the viewport's edge margin to skip, as a fraction of width/height -- scales with how
+// far below DETECT_ZOOM the map is currently displayed, not a fixed constant: full MAX_VIEWPORT_TRIM
+// right at the MIN_DETECT_ZOOM floor (where the tile count is worst, see MIN_DETECT_ZOOM's comment),
+// tapering linearly to 0 by the time the display zoom reaches DETECT_ZOOM itself (where the tile
+// count is already sane and trimming would just lose coverage for no benefit). A prior version of
+// this trim used one fixed fraction at every zoom; scaling it by zoom gap instead means it only
+// costs coverage where the tile count actually needs it.
+const MAX_VIEWPORT_TRIM = 0.3
+
+function viewportTrimFraction(displayedZoom: number): number {
+  const maxGap = DETECT_ZOOM - MIN_DETECT_ZOOM
+  if (maxGap <= 0) return 0
+  const gap = DETECT_ZOOM - displayedZoom
+  return Math.min(MAX_VIEWPORT_TRIM, Math.max(0, MAX_VIEWPORT_TRIM * (gap / maxGap)))
+}
+
 // Same Hamburg refinery site already used elsewhere in this repo's own probing
 // (oil_refinery/probe_pretrained.py) -- a known-good spot with real storage tanks to look at.
 // Deliberately *below* MIN_DETECT_ZOOM -- loading the page shouldn't immediately fire off a big
@@ -44,10 +60,22 @@ function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
 // from the screen bounds at DETECT_ZOOM, not by taking whatever tile the *displayed* zoom's grid
 // covers and expanding it to every descendant (which would include plenty of ground nowhere near
 // the screen whenever a displayed-zoom tile only partially overlaps the viewport's edge).
+//
+// Bounds are shrunk by viewportTrimFraction(map.getZoom()) first -- an even margin trimmed off
+// each side, not the whole box scaled from a corner -- so the skipped strip stays centered around
+// the edges the user is least likely to be looking directly at.
 function visibleDetectZoomTiles(map: maplibregl.Map): { x: number; y: number }[] {
   const bounds = map.getBounds()
-  const [xMin, yMin] = lonLatToTile(bounds.getWest(), bounds.getNorth(), DETECT_ZOOM)
-  const [xMax, yMax] = lonLatToTile(bounds.getEast(), bounds.getSouth(), DETECT_ZOOM)
+  const west = bounds.getWest()
+  const east = bounds.getEast()
+  const south = bounds.getSouth()
+  const north = bounds.getNorth()
+  const trim = viewportTrimFraction(map.getZoom()) / 2
+  const lonInset = (east - west) * trim
+  const latInset = (north - south) * trim
+
+  const [xMin, yMin] = lonLatToTile(west + lonInset, north - latInset, DETECT_ZOOM)
+  const [xMax, yMax] = lonLatToTile(east - lonInset, south + latInset, DETECT_ZOOM)
   const tiles: { x: number; y: number }[] = []
   for (let x = xMin; x <= xMax; x++) {
     for (let y = yMin; y <= yMax; y++) {
