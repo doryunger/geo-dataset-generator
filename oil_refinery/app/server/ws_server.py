@@ -25,6 +25,7 @@ import classifier  # noqa: E402
 import common  # noqa: E402
 import geometry  # noqa: E402
 import site_graph  # noqa: E402
+import site_tracker  # noqa: E402
 import tile_server  # noqa: E402
 
 GRAPH: dict = site_graph.load_graph()  # loaded once at import time, same pattern model_router.py
@@ -114,21 +115,33 @@ def _prune_far_tiles(
     return kept
 
 
-def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]]) -> dict:
-    """Classifies `detections_by_tile` into a GeoJSON FeatureCollection. Called once per
-    classify_extent() call below, against the full accumulated known_tiles set."""
-    if not detections_by_tile:
-        return {"type": "FeatureCollection", "features": []}
+def _ref_lat_from_detections(detections: list[dict], z: int) -> float:
+    lats = [geometry.global_pixel_to_lonlat(*d["centroid_px_global"], z)[1] for d in detections]
+    return sum(lats) / len(lats)
 
-    ref_lat = _ref_lat(detections_by_tile)
-    matches = classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH)
+
+def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker) -> dict:
+    """Classifies `detections_by_tile` into fresh candidate site matches, reconciles them into
+    `tracker`'s ever-growing tracked sites (see site_tracker.py for why -- this is the fix for
+    boundaries "dancing" between calls), and returns the *full* set of tracked sites as a GeoJSON
+    FeatureCollection -- not just the ones `detections_by_tile` touched this round. Called once per
+    classify_extent() call below, against that call's full accumulated known_tiles set."""
+    fresh_matches = []
+    if detections_by_tile:
+        ref_lat = _ref_lat(detections_by_tile)
+        fresh_matches = classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH)
+
+    tracked = tracker.reconcile(fresh_matches, GRAPH, tile_server.DETECT_ZOOM)
     features = []
-    for r in matches:
-        ring, label = classifier.polygon_for(r["detections"], tile_server.DETECT_ZOOM, ref_lat)
+    for r in tracked:
+        site_ref_lat = _ref_lat_from_detections(r["detections"], tile_server.DETECT_ZOOM)
+        ring, label = classifier.polygon_for(r["detections"], tile_server.DETECT_ZOOM, site_ref_lat)
         features.append({
             "type": "Feature",
+            "id": r["id"],
             "geometry": {"type": "Polygon", "coordinates": [[[lon, lat] for lon, lat in ring]]},
             "properties": {
+                "id": r["id"],
                 "site": r["site"],
                 "matched_types": r["matched_types"],
                 "type_coverage_ratio": r["type_coverage_ratio"],
@@ -154,6 +167,7 @@ def _center_out_order(keys: set[tuple[int, int, int]]) -> list[tuple[int, int, i
 
 async def classify_extent(
     current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
+    tracker: site_tracker.SiteTracker,
 ) -> dict:
     """Waits for every tile in `current_tiles` (this report's live view) to be either cached or
     freshly processed via tile_server.get_or_process_detections() -- the same serialized queue
@@ -168,10 +182,12 @@ async def classify_extent(
 
     Both sets ordered center-out (_center_out_order()) purely so a large batch's processing *order*
     still favors whatever's most central, even though nothing gets reported until `current_tiles`
-    is fully done."""
-    if not current_tiles and not historical_tiles:
-        return {"type": "FeatureCollection", "features": []}
+    is fully done.
 
+    Runs through `tracker`/_feature_collection() even when both tile sets are empty (e.g. an
+    empty-tiles cancel report, see Map.tsx's movestart handler) -- a tracked site already found
+    must keep being reported regardless of what's currently in view, not just dropped because this
+    particular report has nothing new to contribute."""
     current_keys = _center_out_order(current_tiles) if current_tiles else []
     results = await asyncio.gather(
         *(tile_server.get_or_process_detections(z, x, y) for z, x, y in current_keys)
@@ -183,7 +199,7 @@ async def classify_extent(
         if cached:
             detections_by_tile[(z, x, y)] = cached
 
-    return _feature_collection(detections_by_tile)
+    return _feature_collection(detections_by_tile, tracker)
 
 
 router = APIRouter()
@@ -191,8 +207,9 @@ router = APIRouter()
 
 async def _send_result(
     websocket: WebSocket, current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
+    tracker: site_tracker.SiteTracker,
 ) -> None:
-    await websocket.send_json(await classify_extent(current_tiles, historical_tiles))
+    await websocket.send_json(await classify_extent(current_tiles, historical_tiles, tracker))
 
 
 @router.websocket("/ws/extent")
@@ -219,6 +236,7 @@ async def ws_extent(websocket: WebSocket):
     connection at a time."""
     await websocket.accept()
     known_tiles: set[tuple[int, int, int]] = set()
+    tracker = site_tracker.SiteTracker()
     current_task: asyncio.Task | None = None
     try:
         while True:
@@ -238,7 +256,7 @@ async def ws_extent(websocket: WebSocket):
                     pass
 
             await tile_server.prune_pending()
-            current_task = asyncio.ensure_future(_send_result(websocket, current_tiles, historical_tiles))
+            current_task = asyncio.ensure_future(_send_result(websocket, current_tiles, historical_tiles, tracker))
     except WebSocketDisconnect:
         pass
     finally:

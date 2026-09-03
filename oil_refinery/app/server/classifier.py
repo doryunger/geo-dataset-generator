@@ -26,13 +26,10 @@ silently skipped.
 polygon_for() shapes an identified cluster into a boundary once classify() has already decided it's
 a site -- not part of deciding identity, just presentation for the frontend.
 """
-import logging
 import sys
 from pathlib import Path
 
 from shapely.geometry import MultiPoint
-
-logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "scripts"))
 
@@ -87,7 +84,7 @@ def _component_clusters_for_site(
 ) -> list[list[dict]]:
     """Connected clusters of `detections` under `site`'s own proximity rules. A detection whose
     class isn't one of `site`'s required components never has an edge to pair against, so it never
-    joins a cluster with anything -- it comes back as its own singleton, which _score() below then
+    joins a cluster with anything -- it comes back as its own singleton, which score() below then
     naturally fails to identify."""
     edges = site_graph.proximity_for(graph, site)
     edge_lookup = {frozenset((e["from"], e["to"])): e for e in edges}
@@ -109,7 +106,7 @@ def _component_clusters_for_site(
     return list(groups.values())
 
 
-def _score(cluster_dets: list[dict], site: str, graph: dict) -> dict:
+def score(cluster_dets: list[dict], site: str, graph: dict) -> dict:
     """Tier-1 prominence score only (type-coverage ratio) -- see module docstring."""
     requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
     matched_types = {
@@ -126,68 +123,18 @@ def _score(cluster_dets: list[dict], site: str, graph: dict) -> dict:
     }
 
 
-def _merge_nearby_results(results: list[dict], graph: dict, z: int, ref_lat: float) -> list[dict]:
-    """Merges same-site-type results into one when the closest pair of their components is within
-    that site's own merge_distance_m (a node field, e.g. oil_refinery's -- see "Proposed schema" in
-    semantic_graph.md) -- two facilities close enough together to arguably read as one bigger site,
-    or one real site whose components landed in two different tile-adjacency clusters (tile_clusters()
-    above) because the ground between them happened to be sparse. This is the "site could itself
-    become a node at a higher level" stacking flagged early in that doc, in its simplest form: not a
-    new node kind, just a same-type merge rule living on the site node itself. A site type with no
-    merge_distance_m configured, or with fewer than two results, is untouched."""
-    by_site: dict[str, list[int]] = {}
-    for i, r in enumerate(results):
-        by_site.setdefault(r["site"], []).append(i)
-
-    uf = _UnionFind(len(results))
-    for site, idxs in by_site.items():
-        merge_dist = graph["nodes"][site].get("merge_distance_m")
-        if merge_dist is None or len(idxs) < 2:
-            continue
-        for i in range(len(idxs)):
-            for j in range(i + 1, len(idxs)):
-                a, b = idxs[i], idxs[j]
-                closest_da, closest_db, nearest = min(
-                    (
-                        (da, db, geometry.distance_m(da["centroid_px_global"], db["centroid_px_global"], z, ref_lat))
-                        for da in results[a]["detections"] for db in results[b]["detections"]
-                    ),
-                    key=lambda t: t[2],
-                )
-                logger.info(
-                    "merge check %s: results[%d] vs results[%d] nearest=%.1fm (%s @ %s <-> %s @ %s) "
-                    "threshold=%.1fm -> %s",
-                    site, a, b, nearest,
-                    closest_da["class_name"], closest_da["centroid_px_global"],
-                    closest_db["class_name"], closest_db["centroid_px_global"],
-                    merge_dist, "merge" if nearest <= merge_dist else "no merge",
-                )
-                if nearest <= merge_dist:
-                    uf.union(a, b)
-
-    groups: dict[int, list[int]] = {}
-    for i in range(len(results)):
-        groups.setdefault(uf.find(i), []).append(i)
-
-    merged = []
-    for idxs in groups.values():
-        if len(idxs) == 1:
-            merged.append(results[idxs[0]])
-            continue
-        site = results[idxs[0]]["site"]
-        combined = [d for i in idxs for d in results[i]["detections"]]
-        merged.append({**_score(combined, site, graph), "site": site, "detections": combined})
-    return merged
-
-
 def classify(
     detections_by_tile: dict[tuple[int, int, int], list[dict]], z: int, ref_lat: float, graph: dict,
 ) -> list[dict]:
     """detections_by_tile: {(z, x, y): [fused detection dicts]} for exactly the tiles in the current
     live view, all at zoom `z` (already deduplicated by the fuser -- this never re-dedups). Returns
-    one entry per identified site: {"site", "detections", "matched_types", "type_coverage_ratio"} --
-    empty if nothing in the live view clears any site's min_types_present. Same-type results close
-    enough together get merged into one -- see _merge_nearby_results()."""
+    one entry per identified candidate cluster: {"site", "detections", "matched_types",
+    "type_coverage_ratio"} -- empty if nothing in the live view clears any site's min_types_present.
+    Deliberately does *not* merge same-site-type results close together into one here -- that's
+    site_tracker.SiteTracker.reconcile()'s job now, applied uniformly to these fresh candidates
+    together with whatever's already tracked from earlier rounds, not just within one round's own
+    results (see that module's docstring for why merging needs to span rounds, not just happen once
+    here)."""
     site_names = [name for name, cfg in graph["nodes"].items() if cfg["kind"] == "site"]
 
     results = []
@@ -197,10 +144,10 @@ def classify(
             continue
         for site in site_names:
             for comp_cluster in _component_clusters_for_site(pooled, site, graph, z, ref_lat):
-                scored = _score(comp_cluster, site, graph)
+                scored = score(comp_cluster, site, graph)
                 if scored["identified"]:
                     results.append({**scored, "site": site, "detections": comp_cluster})
-    return _merge_nearby_results(results, graph, z, ref_lat)
+    return results
 
 
 def polygon_for(
