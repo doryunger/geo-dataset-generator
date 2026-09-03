@@ -67,7 +67,7 @@ export default function Map() {
             borderRadius: 6, fontSize: 13, pointerEvents: 'none',
           }}
         >
-          Zoom in to zoom {MIN_DETECT_ZOOM}+ to run storage-tank detection
+          Zoom in to zoom {MIN_DETECT_ZOOM}+ to run detection
         </div>
       )}
     </div>

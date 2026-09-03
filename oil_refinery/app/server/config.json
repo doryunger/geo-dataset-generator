@@ -1,0 +1,6 @@
+{
+  "min_detect_zoom": 14,
+  "targets": [
+    { "model": "models/distillation-column_obb_v3.pt", "class_id": null, "class_name": "distillation column" }
+  ]
+}

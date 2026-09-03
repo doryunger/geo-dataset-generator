@@ -1,4 +1,13 @@
-"""Oil refinery storage-tank detection POC server.
+"""Oil refinery object-detection POC server.
+
+Model-agnostic by design: what to detect is driven entirely by config.json's "targets" array,
+not hardcoded to one model/class. Each target is {"model", "class_id", "class_name"} -- multiple
+targets can point at *different* model files, which is what makes this a real step toward the
+"fuse multiple models" roadmap discussed for this POC (e.g. xView's checkpoint alongside a
+custom-trained one), not just a single-model config knob. Every target's model runs against every
+detected tile (still behind the one serialized worker -- see concurrency notes below); their
+detections are merged before rendering. A model referenced by more than one target entry is only
+loaded once (see lifespan()).
 
 Two independent raster tile endpoints, stacked as two MapLibre sources on the frontend:
   - GET /api/tile/{z}/{x}/{y}        base satellite imagery, always fast, never waits on detection
@@ -19,7 +28,9 @@ Run with (mirrors the root run.bat/run.sh .env-parsing launch trick):
 """
 import asyncio
 import io
+import json
 import logging
+import math
 import os
 import sys
 import time
@@ -41,11 +52,23 @@ import geometry  # noqa: E402
 common.setup_logging()
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = common.WEIGHTS_DIR / "yolo11n-obb.pt"
-STORAGE_TANK_CLASS_ID = 2  # confirmed by loading the checkpoint: {0: 'plane', 1: 'ship', 2: 'storage tank', ...}
-CONF_THRESHOLD = 0.15  # matches the threshold already used for this exact checkpoint in probe_pretrained.py
-PREDICT_IMGSZ = 640
-MIN_DETECT_ZOOM = 14
+# What to detect -- read from config.json (see that file + the module docstring above), not
+# hardcoded. "targets" is a list of {"model", "class_id", "class_name"}: model paths are relative
+# to REPO_ROOT (e.g. "models/distillation-column_obb_v2.pt"); class_id is null when the model is
+# already single-class (no classes=[...] filter needed), or an int to pick one class out of a
+# multi-class checkpoint (e.g. 2 for "storage tank" on the pretrained DOTAv1 yolo11n-obb.pt).
+CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+_config = json.loads(CONFIG_PATH.read_text())
+MIN_DETECT_ZOOM: int = _config["min_detect_zoom"]
+TARGETS: list[dict] = _config["targets"]
+
+CONF_THRESHOLD = 0.15  # matches the threshold already used for the pretrained checkpoint in
+# probe_pretrained.py; not yet re-tuned for this repo's own (much higher precision/recall) models
+
+MAX_PREDICT_IMGSZ = 1536  # safety cap on the GSD-normalized input size (see _run_detection) --
+# below MIN_DETECT_ZOOM this doesn't matter, but a low zoom *above* the gate can still demand an
+# enormous upscale (z14 needs ~11,600px to hit this repo's TARGET_GSD_M for a 512px tile) that
+# would be impractically slow/memory-heavy on CPU; treated as "no detection" rather than attempted
 
 # GPU is reserved for training in this repo; this machine's inference stays on CPU by default.
 # A remote host with no training contention can set INFERENCE_DEVICE=cuda without any code change.
@@ -160,7 +183,7 @@ def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
     # Boxes are drawn supersampled-then-downsampled for smooth edges (Pillow's polygon/line drawing
     # has no anti-aliasing). Text is drawn *after* the downsample, directly at native resolution --
     # drawing it supersampled and shrinking it back down along with the boxes blurred small glyphs
-    # into illegibility (confirmed: "storage tank" rendered as visibly garbled at 14px after a 3x
+    # into illegibility (confirmed: label text rendered as visibly garbled at 14px after a 3x
     # downsample) even though the string itself was always correct.
     w, h = size
     big = Image.new("RGBA", (w * SUPERSAMPLE, h * SUPERSAMPLE), (0, 0, 0, 0))
@@ -173,7 +196,7 @@ def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
     draw = ImageDraw.Draw(final)
     font = _load_font(14)
     for det in detections:
-        label = f"storage tank {det['confidence']:.2f}"
+        label = f"{det['class_name']} {det['confidence']:.2f}"
         tx, ty = det["corners"][0]
         bbox = draw.textbbox((tx, ty), label, font=font)
         pad = 3
@@ -189,27 +212,63 @@ def _run_detection(image_bytes: bytes, z: int, x: int, y: int) -> tuple[bytes, l
     """Runs on a background thread (via run_in_executor) so the event loop stays free for other
     requests (e.g. /api/stats) while this CPU-bound call is in flight. Only the single worker loop
     ever has one of these in flight at a time -- that serialization is what keeps CPU inference
-    from oversubscribing this machine's cores (see plan's concurrency design)."""
-    model: YOLO = _state["model"]
+    from oversubscribing this machine's cores (see plan's concurrency design).
+
+    Runs *every* configured target's model against this tile and merges their detections -- one
+    tile, potentially several models, no cross-model dedup yet (see semantic_graph.md's "Prerequisite:
+    dedup" -- that's the next piece, not implemented here).
+
+    GSD-normalizes the tile before handing it to any model: every training crop in this repo goes
+    through common.resample_to_target_gsd (see scripts/obb.py) before training, so a model expects
+    a fixed real-world meters-per-pixel scale, not "whatever a raw tile at this zoom happens to be."
+    Feeding raw tile pixels straight in (an earlier version of this function did) is a genuine
+    train/inference scale mismatch, confirmed to produce false-positive-heavy garbage at low zoom --
+    not a threshold-tuning problem. Detected corners come back in the resampled image's pixel space
+    and are scaled back to the tile's native pixel space before use, so overlay rendering and
+    geometry.py's global-pixel-space centroids stay in native-tile coordinates throughout."""
+    models: dict[str, YOLO] = _state["models"]
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    results = model.predict(
-        source=img, conf=CONF_THRESHOLD, imgsz=PREDICT_IMGSZ, device=INFERENCE_DEVICE,
-        classes=[STORAGE_TANK_CLASS_ID], verbose=False,
-    )
-    r = results[0]
+    native_w, native_h = img.size
+
+    bounds = common.tile_bounds(z, x, y)
+    lat = (bounds["north"] + bounds["south"]) / 2
+    native_gsd_m = common.meters_per_pixel(z, lat)
+    resampled = common.resample_to_target_gsd(img, native_gsd_m)
+    resampled_w, resampled_h = resampled.size
+
+    if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
+        # Too coarse a zoom to GSD-normalize practically for this model -- see MAX_PREDICT_IMGSZ.
+        return TRANSPARENT_TILE_BYTES, []
+
+    predict_imgsz = max(32, math.ceil(max(resampled_w, resampled_h) / 32) * 32)
+    scale_back_x = native_w / resampled_w
+    scale_back_y = native_h / resampled_h
+
     detections: list[dict] = []
-    if r.obb is not None and len(r.obb) > 0:
-        for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
-            corners = [(p[0], p[1]) for p in xy]
+    for target in TARGETS:
+        model = models[target["model"]]
+        class_id = target.get("class_id")
+        predict_kwargs = {"classes": [class_id]} if class_id is not None else {}
+        results = model.predict(
+            source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz, device=INFERENCE_DEVICE,
+            verbose=False, **predict_kwargs,
+        )
+        r = results[0]
+        if r.obb is None or len(r.obb) == 0:
+            continue
+        for conf, xy in zip(r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
+            corners = [(p[0] * scale_back_x, p[1] * scale_back_y) for p in xy]
             cx = sum(p[0] for p in corners) / 4
             cy = sum(p[1] for p in corners) / 4
             detections.append({
                 "corners": corners,
                 "confidence": conf,
+                "class_name": target["class_name"],
                 # global pixel space, not lon/lat -- see geometry.py's module docstring
                 "centroid_px_global": geometry.global_pixel(x, y, cx, cy),
             })
-    overlay_bytes = _render_overlay(img.size, detections)
+
+    overlay_bytes = _render_overlay((native_w, native_h), detections)
     return overlay_bytes, detections
 
 
@@ -257,8 +316,13 @@ async def _worker_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Loading %s (device=%s)", MODEL_PATH.name, INFERENCE_DEVICE)
-    _state["model"] = YOLO(str(MODEL_PATH))
+    models: dict[str, YOLO] = {}
+    for target in TARGETS:
+        model_key = target["model"]
+        if model_key not in models:
+            logger.info("Loading %s for %r (device=%s)", model_key, target["class_name"], INFERENCE_DEVICE)
+            models[model_key] = YOLO(str(REPO_ROOT / model_key))
+    _state["models"] = models
     _state["queue"] = DetectionQueue(QUEUE_CAPACITY, QUEUE_TRIM_TO)
     _state["in_flight"] = {}
     _state["cache"] = {}
