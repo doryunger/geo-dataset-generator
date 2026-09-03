@@ -1,0 +1,22 @@
+{
+  "nodes": {
+    "oil_refinery": {
+      "kind": "site",
+      "min_types_present": 2,
+      "default_max_distance_m": 150,
+      "default_min_distance_m": 0,
+      "default_boost": 0.15
+    },
+
+    "storage tank": { "kind": "component" },
+    "chimney":      { "kind": "component" },
+    "harbor":       { "kind": "component" },
+    "ship":         { "kind": "component" }
+  },
+  "edges": [
+    { "relation": "requires", "from": "oil_refinery", "to": "storage tank", "min_confidence": 0.75 },
+    { "relation": "requires", "from": "oil_refinery", "to": "chimney",      "min_confidence": 0.75 },
+    { "relation": "requires", "from": "oil_refinery", "to": "harbor",       "min_confidence": 0.75 },
+    { "relation": "requires", "from": "oil_refinery", "to": "ship",         "min_confidence": 0.75 }
+  ]
+}

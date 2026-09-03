@@ -1,7 +1,10 @@
 # From detections to meaning: a semantic graph
 
-Status: roadmap/design draft, nothing here is implemented yet. The first concrete slice to build
-is scoped in "First slice: fuse the two pretrained checkpoints, no fixed component list" below.
+Status: the graph itself is implemented -- `oil_refinery/app/server/semantic_graph.json` (data) and
+`site_graph.py` (loader/validator) -- see "Proposed schema" below for its shape. The pipeline that
+consumes it (router/fuser/classifier, see "Pipeline" below) is still design-only. The first concrete
+slice to build next is scoped in "First slice: fuse the two pretrained checkpoints, no fixed
+component list" below.
 
 ## The problem with a flat cluster
 
@@ -91,82 +94,68 @@ classifier's proximity edges instead, not this step.
   not one graph-wide constant. A site profile's proximity rules should very likely reuse that same
   edge shape (component-type pairs -> distance range) rather than inventing a new schema.
 
-## Proposed schema: a site profile is one graph
+## Proposed schema: one graph, every node defined once
 
-Consolidating the above: counts, per-pair proximity, and the identification threshold shouldn't be
-three separate config surfaces (a table plus ad-hoc rules) — they're all properties of one graph,
-in the same shape `subclass_graph.json` already uses, just one level up (component types instead
-of sub-classes of one class) and with one new graph-level field:
+**Implemented** (`oil_refinery/app/server/semantic_graph.json` + `site_graph.py`). Superseded two
+earlier drafts of this section: first, one file per site type with counts on the component node
+itself (couldn't let two site types want different counts for the same shared component); then a
+single graph with counts moved onto the `requires` edge instead of the node -- **also dropped**,
+per direct correction: identification is presence-based, not "need N of this component." A site
+node's `min_types_present` (how many of its own `requires` edges must have at least one
+confident-enough detection) is what does the counting work now, at the type level, not per-instance.
 
 ```json
 {
-  "site_type": "oil_refinery",
-  "identification_threshold": { "min_types_present": 4, "of_total_types": 6 },
   "nodes": {
-    "storage-tank":         { "min_count": 6, "max_count": null, "min_confidence": 0.3 },
-    "flare-stack":          { "min_count": 1, "max_count": null, "min_confidence": 0.3 },
-    "distillation-column":  { "min_count": 1, "max_count": null, "min_confidence": 0.3 },
-    "cooling-tower":        { "min_count": 0, "max_count": null, "min_confidence": 0.3 },
-    "oil-tanker":           { "min_count": 0, "max_count": null, "min_confidence": 0.3 },
-    "tanker-truck":         { "min_count": 0, "max_count": null, "min_confidence": 0.3 }
+    "oil_refinery": {
+      "kind": "site",
+      "min_types_present": 2,
+      "default_min_distance_m": 0,
+      "default_max_distance_m": 150,
+      "default_boost": 0.15
+    },
+    "storage tank": { "kind": "component" },
+    "chimney":      { "kind": "component" },
+    "harbor":       { "kind": "component" },
+    "ship":         { "kind": "component" }
   },
   "edges": [
-    { "from": "storage-tank", "to": "storage-tank", "min_distance_m": 0, "max_distance_m": 150, "boost": 0.1 },
-    { "from": "storage-tank", "to": "distillation-column", "min_distance_m": 0, "max_distance_m": 400, "boost": 0.2 },
-    { "from": "distillation-column", "to": "flare-stack", "min_distance_m": 0, "max_distance_m": 300, "boost": 0.15 }
+    { "relation": "requires", "from": "oil_refinery", "to": "storage tank", "min_confidence": 0.3 },
+    { "relation": "requires", "from": "oil_refinery", "to": "chimney",      "min_confidence": 0.3 },
+    { "relation": "requires", "from": "oil_refinery", "to": "harbor",       "min_confidence": 0.3 },
+    { "relation": "requires", "from": "oil_refinery", "to": "ship",         "min_confidence": 0.3 }
   ]
 }
 ```
 
-Same graph, illustrated the way `/manual`'s graph tab already renders `subclass_graph.json` today
-(Mermaid, nodes as boxes, edges labeled with their distance range + boost):
+- **`kind: "site"` node** (e.g. `oil_refinery`) -- carries `min_types_present` (how many of its own
+  `requires` edges must be satisfied for this site type to be identified; `of_total_types` is never
+  stored, just the count of that site's own `requires` edges, derived on read so it can't drift), plus
+  `default_min_distance_m`/`default_max_distance_m`/`default_boost` -- the proximity rule applied to
+  *every* pair of this site's required components unless a specific pair overrides it (see `proximity`
+  edges below).
+- **`kind: "component"` node** (e.g. `storage tank`) -- no config of its own. It's shared: the same
+  `storage tank` node can be the target of `requires` edges from many different site types, each with
+  its own `min_confidence`, without the node itself needing to change or be duplicated.
+- **`requires` edge** (site -> component) -- just `min_confidence`: how confident a detection of this
+  component must be before it counts as "this component is present" for this site type. No count
+  range -- presence or absence, decided per component type, is the whole signal; how many distinct
+  required types clear that bar is what `min_types_present` then checks. `min_confidence` is a
+  different thing from the routing-level `CONF_THRESHOLD` in `server.py` (see "Open questions" below)
+  -- that one decides whether a detection exists at all; this one decides whether an existing
+  detection is trusted enough to count as this component being present for *this site type*. A
+  detection can fail a stricter `requires`-edge floor while still existing at the router's looser one.
+- **`proximity` edge** (component <-> component, tagged with `site`) -- only needed for a pair whose
+  distance rule actually differs from its site's defaults; most pairs need no edge at all. Use
+  `site_graph.proximity_for(graph, site)` to get the effective rule for every pair of a site's
+  required components (defaults filled in, overrides applied) rather than reading raw edges directly.
 
-```mermaid
-graph LR
-  tank["storage-tank (6+)"]
-  flare["flare-stack (1+)"]
-  column["distillation-column (1+)"]
-  cooling["cooling-tower (0+)"]
-  tanker["oil-tanker (0+)"]
-  truck["tanker-truck (0+)"]
+Every number above is still a placeholder pending calibration against real refineries, same caveat
+`README.md` already carries for its own table -- the point of this section is the *shape*.
 
-  tank -->|"0-150m +0.1"| tank
-  tank -->|"0-400m +0.2"| column
-  column -->|"0-300m +0.15"| flare
-```
-
-`cooling-tower`, `oil-tanker`, and `tanker-truck` sit in the graph as valid profile members with no
-edge yet in this sketch -- corroborating, per `README.md`'s original table, not proximity-defining.
-The `storage-tank -> storage-tank` edge is a same-type self-loop: tanks clustering near *other*
-tanks is itself a real proximity signal for this profile, not just tanks near a distillation column.
-
-- `nodes`: one entry per component type this profile cares about, with its expected count range
-  (`README.md`'s existing per-class table, just moved into the graph instead of sitting beside it)
-  plus a `min_confidence` floor -- a detection below it doesn't count toward that type's count at
-  all, as far as this profile is concerned. Per-node rather than one global constant, matching the
-  same reasoning `subclass_graph.json`'s per-node overrides already use: different component types
-  can warrant different confidence bars (a large, distinctive `storage-tank` detection is trustworthy
-  at a lower confidence than a `crane`, which is smaller and easier to confuse with clutter). This is
-  a different thing from the routing-level `CONF_THRESHOLD` in `server.py` (see "Open questions"
-  below) -- that one decides whether a detection exists at all; `min_confidence` decides whether an
-  existing detection is trusted enough to count toward *this profile's* composition check. A
-  detection can fail a stricter node-level floor while still existing at the router's looser one.
-- `edges`: per-type-pair proximity (`min/max_distance_m`) and a confidence weight (`boost`) --
-  identical shape to `subclass_graph.json`'s edges today, same field names on purpose.
-- `identification_threshold`: the graph-level type-coverage rule from the bridging mitigation above
-  -- e.g. "at least 4 of these 6 node types must be present, each within its own count range" for
-  this graph to signal "oil refinery" at all.
-
-Sketch only -- every number above is a placeholder, same caveat `README.md` already carries for its
-own table. The point of this section is the *shape* (one graph, not three separate config surfaces),
-not these specific values. It's also the target end-state node list -- see "First slice: fuse the
-two pretrained checkpoints, no fixed component list" below for what actually drives the first
-profile's node set.
-
-Because it's the same shape as `subclass_graph.json`, the existing `/manual` graph tab's Mermaid
-rendering (nodes as boxes, edges labeled with their distance range) should extend to this with
-comparatively little new code -- the "easier for a human to understand the relation" benefit isn't
-speculative, it's already-built tooling this would inherit.
+Because `requires`/`proximity` edges keep the same field names `subclass_graph.json`'s edges already
+use (`min_distance_m`/`max_distance_m`/`boost`), the existing `/manual` graph tab's Mermaid rendering
+should extend to this with comparatively little new code.
 
 ## Resolved: candidacy vs. affiliation
 
@@ -186,69 +175,52 @@ claim-by-prominence resolution, not weighted/fuzzy multi-membership.
 
 ## Resolved: component-to-profile index
 
-Confirmed: no new field on the component itself -- the site profile's own `nodes` array/dict (already
-in "Proposed schema" above) stays the single source of truth, and the reverse lookup below is built
-from it, not authored separately.
+**Implemented** (`site_graph.component_index()`). Candidacy (above) says a component type can be
+relevant to more than one site type. The classifier's own efficiency goal (see "Pipeline" below)
+needs a fast way to answer "which site(s) is *this* component type even plausibly relevant to"
+without scanning the whole graph's edges for every detected component. Concretely: a reverse index,
+component type -> every site that has a `requires` edge to it.
 
-Candidacy (above) says a component type can be relevant to more than one site profile. The
-classifier's own efficiency goal (see "Pipeline" below) needs a fast way to answer "which profile(s)
-is *this* component type even plausibly relevant to" without scanning every `site_profiles/*.json`
-file for every detected component. Concretely, this needs a reverse index: component type ->
-array of site profiles that list it as a node. In conversation this got called each component's
-"potential parents" -- not adopting that as an official term here, since "Proposed terminology"
-above already retired "parent" for the same reason (it implies exclusive tree ownership, which
-candidacy explicitly isn't) -- but it's the same idea as "site profile," already a named term.
+- **Derived, not hand-authored.** `component_index()` builds this by inverting the graph's own
+  `requires` edges (`to` -> `from`) -- one source of truth (the graph itself), same principle
+  `scripts/subclass_graph.py` already applies elsewhere (`node_names()` derives valid names from
+  `common.list_classes()` rather than a hand-maintained list). Nothing about a component node needs
+  to change as more sites reference it; the index just picks up more entries.
+- **Proximity and thresholds still live entirely on the `requires`/`proximity` edges, never on the
+  component node.** Already true of the schema above -- worth restating because it's exactly the
+  reasoning behind keeping components as bare, shared nodes: the same component can need a different
+  confidence floor or proximity rule depending on which site is doing the evaluating, so it can't own
+  a single number that would have to be right for every site it's a candidate for. The index above only
+  answers "which sites should even look at this component" -- it doesn't carry any of the
+  site-specific numbers itself.
+- **"Min number of children to identify the [site]" is `min_types_present`**, already on the site
+  node -- flagging this mapping explicitly in case the intent was something else: "if we have 6
+  children we can define that 3 is enough, or a stronger validation and it could be 5" reads as
+  tuning `min_types_present` between 3 and 5 against a site's own `requires`-edge count -- not a new
+  parameter.
 
-- **This index is derived, not hand-authored.** A component type's array of candidate site profiles
-  doesn't need its own field on the component -- it's just every `site_profiles/*.json` file whose
-  `nodes` dict happens to mention that type, inverted. Same principle `scripts/subclass_graph.py`
-  already applies elsewhere (`node_names()` derives valid names from `common.list_classes()` rather
-  than a hand-maintained list): one source of truth (the site profile files themselves), with the
-  reverse lookup built from it, not maintained as a second copy that can drift out of sync.
-- **Proximity and thresholds still live entirely on the site profile, never on the component.**
-  This was already true of the schema above (`edges`, `min_count`/`max_count`/`min_confidence` are
-  all fields inside a profile's `nodes`/`edges`, not the component type itself) -- worth restating
-  because it's exactly the reasoning behind it: the same pair of component types can need a
-  different proximity range depending on which profile is doing the evaluating (storage tanks might
-  legitimately sit closer together in one site type than another), so a component can't own a single
-  proximity value that would have to be right for every profile it's a candidate for. The index above
-  only answers "which profiles should even look at this component" -- it doesn't carry any of the
-  profile-specific numbers itself.
-- **"Min number of children to identify the parent" is `identification_threshold`, already
-  specified** -- flagging this mapping explicitly in case the intent was something else: "if we have
-  6 children we can define that 3 is enough, or a stronger validation and it could be 5" reads as
-  exactly `{"min_types_present": 3, "of_total_types": 6}` vs. `{"min_types_present": 5,
-  "of_total_types": 6}` from "Proposed schema" above -- tuning how many of a profile's distinct node
-  *types* must be present, not a new parameter. No schema change needed here unless this was meant
-  to describe something else (e.g. a per-type leniency separate from `min_count`).
+## Resolved: prominence scoring (tier 1); tie-break reopened
 
-## Resolved: prominence scoring
-
-Two-tier, evaluated in order -- not one blended number:
-
-1. **Type-coverage ratio** (primary key): distinct node types present within their count range,
-   divided by total node types in the profile -- the same ratio `identification_threshold` already
-   uses. Decides ranking whenever candidates differ on it.
-2. **Instance strength** (tie-break only, when two candidates have equal type-coverage ratio):
-   total component *instances*, not just which types were found -- a site with 12 storage tanks is
-   a stronger candidate than one with 6, even though both clear the "storage-tank present" bar.
-   Raw instance counts aren't comparable across different site profiles, though -- a profile with
-   larger expected counts would win on raw numbers regardless of fit. Normalize each matched type's
-   instance count against *that type's own* `min_count` before summing: `sum(actual_count /
-   min_count)` across matched types. A profile matched at exactly its minimums scores 1 per type
-   either way; a profile matched several multiples over its minimums scores higher -- comparable
-   across profiles with different expected magnitudes, per the point about each parent having
-   different components.
-
-Type-coverage decides first; instance strength only breaks a tie, matching "if both have the same
-score, multiply by the number of instances" from conversation directly.
+1. **Type-coverage ratio** (primary key, still holds): distinct required component types present
+   (each clearing its `requires` edge's `min_confidence`), divided by that site's total `requires`
+   edges -- the same ratio `min_types_present` already checks against. Decides ranking whenever
+   candidates differ on it.
+2. ~~Instance strength~~ **-- retired, not just superseded.** The original tie-break normalized each
+   matched type's instance count against its own `min_count` (`sum(actual_count / min_count)`). Once
+   `min_count` was dropped from the schema (see "Proposed schema" above -- identification is
+   presence-based, not "need N of this component"), that formula has nothing left to normalize
+   against. Moved to "Open questions" below rather than replaced with a guess at what should break a
+   tie instead -- an unprompted new formula here would be exactly the kind of assumption that's
+   already needed correcting twice on this schema.
 
 ## Open questions (still unresolved)
 
-- Whether two-tier (coverage, then instance-strength tie-break) is the right shape once tested
-  against real data, vs. some blended weighting -- untested, just specified.
-- What happens on a genuine tie even after the instance-strength tie-break (both ratio and
-  normalized instance strength equal) -- not specified; likely rare enough to defer.
+- **What breaks a tie between two candidate sites with equal type-coverage ratio -- reopened.** The
+  original tie-break (instance strength, `sum(actual_count / min_count)`) no longer has a basis now
+  that counts are gone from the schema (see "Resolved: prominence scoring" above). Genuinely
+  unresolved, not just untested -- needs a real proposal, not a guess baked into the doc unprompted.
+  Likely rare in practice (two candidates landing on the exact same coverage ratio), so worth
+  deferring until it actually shows up against real data rather than designing for it blind.
 - Whether a level above "site" (e.g. multi-site industrial complex) is actually needed for this
   project, or a speculative extension not worth building until a real case calls for it.
 - All distance thresholds, count ranges, and type-coverage minimums remain placeholders per
@@ -264,7 +236,7 @@ score, multiply by the number of instances" from conversation directly.
   (`server.py`) was tuned for one class requested at a time; with the router triggering every class a
   model knows about, that same low threshold now applies across ~15-20 classes per model at once,
   raising false-positive volume feeding the fuser/classifier. This is upstream of the graph's own
-  per-node `min_confidence` (see "Proposed schema" above, which settles *that* one) -- the router
+  per-`requires`-edge `min_confidence` (see "Proposed schema" above, which settles *that* one) -- the router
   floor decides whether a detection exists at all before either the fuser or classifier ever sees it,
   so a too-low value here still means noise floods in ahead of anything the graph's parameters can
   filter. Still needs a real value, same calibration-against-real-refineries caveat as everything
@@ -309,10 +281,10 @@ first time it runs against real fused detections instead of a sketch.
   by combining spatial overlap with a fuzzy label match, rather than requiring exact-matching
   class-name strings (two boxes can be the same real-world object even when the two models don't
   use identical class vocabularies).
-- The site profile's `nodes`/`edges` for this slice cover whatever canonical types the fuser (see
-  below) resolves overlapping detections down to -- not fixed to a specific list in this doc. The
-  full 6-node sketch earlier is still the target end-state as more classes (custom or pretrained)
-  become available.
+- `oil_refinery`'s `requires` edges for this slice cover whatever canonical types the fuser (see
+  below) resolves overlapping detections down to -- component nodes and their `requires` edges get
+  added to the graph as more classes (custom or pretrained) become available, not fixed to a
+  specific list in this doc.
 
 ## Pipeline: model router, fuser, classifier
 
@@ -356,14 +328,14 @@ shape the first slice above gets implemented as:
 3. **Classifier** (`classifier.py`) -- does not operate per tile; site identification runs against
    the map's live view, not one tile's contents in isolation. See "Classifier scope: live map view,
    not per tile" below for exactly what that means and how tile adjacency keeps unrelated facilities
-   from being lumped together. Given that data, it evaluates the site profile's `nodes` (type
-   coverage + count ranges) and `edges` (proximity between specific component pairs, via
-   `geometry.py`'s pixel-based centroid distance) as the two-tier prominence scoring already
-   specified in "Resolved: prominence scoring" above, ranks candidate site profiles by score, and
-   only accepts the top-ranked match if it clears a threshold (`identification_threshold`, already
-   specified above) -- data that doesn't clear the bar for *any* profile stays unclassified rather
-   than forced into whichever profile scored highest. This is where "candidacy vs. affiliation"
-   (above) actually gets resolved into a final answer.
+   from being lumped together. Given that data, it evaluates each candidate site's `requires` edges
+   (type coverage + count ranges) and `proximity_for()` (proximity between specific component pairs,
+   via `geometry.py`'s pixel-based centroid distance) as the two-tier prominence scoring already
+   specified in "Resolved: prominence scoring" above, ranks candidate sites by score, and only
+   accepts the top-ranked match if it clears its `min_types_present` threshold (already specified
+   above) -- data that doesn't clear the bar for *any* site stays unclassified rather than forced
+   into whichever site scored highest. This is where "candidacy vs. affiliation" (above) actually
+   gets resolved into a final answer.
 
 ## Classifier scope: live map view, not per tile
 
@@ -382,17 +354,18 @@ beyond that.
 - **Tile adjacency is what keeps two unrelated facilities from merging into one.** The live view's
   tiles are grouped into candidate site clusters by contiguity: only neighboring tiles belong to the
   same cluster. Two real facilities far enough apart to have a gap of irrelevant tiles between them
-  land in separate clusters automatically, each scored against the site profile independently -- no
+  land in separate clusters automatically, each scored against candidate sites independently -- no
   extra bridging logic needed beyond adjacency itself. If a genuinely huge contiguous span of tiles
-  all satisfy the profile, that reads as one very large site by design -- same stance "Two
-  refinements" above already takes for same-type adjacency: a proximity/scope threshold being too
-  loose for a specific case is a calibration issue, not a gap in the clustering logic.
+  all satisfies a site's `requires` edges, that reads as one very large site by design -- same stance
+  "Two refinements" above already takes for same-type adjacency: a proximity/scope threshold being
+  too loose for a specific case is a calibration issue, not a gap in the clustering logic.
 - **Per-component geometry survives into the classifier, not just counts.** Each tile's fused
   detections keep their centroid position (in global pixel space, via `geometry.py`'s `global_pixel`
   -- valid across tile boundaries at site scale without ever converting to lon/lat) so the classifier
-  can evaluate the site profile's `edges` directly, not just tally how many of each canonical type
-  showed up. This distance computation belongs entirely to the classifier -- the fuser never computes
-  centroid distance; its only job is spotting duplicate detections (see "Pipeline" above).
+  can evaluate `proximity_for()`'s effective distance rules directly, not just tally how many of each
+  canonical type showed up. This distance computation belongs entirely to the classifier -- the fuser
+  never computes centroid distance; its only job is spotting duplicate detections (see "Pipeline"
+  above).
 
 ## Sequencing
 
