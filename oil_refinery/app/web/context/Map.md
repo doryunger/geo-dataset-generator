@@ -14,28 +14,37 @@ below for why the data flow is split this way.
   site overlay at low zoom, not the whole map). Independent of `MIN_DETECT_ZOOM` below: this one is
   about when the site overlay looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is
   about when it's worth spending backend queue/worker time at all.
-- `MIN_DETECT_ZOOM = 15` — the floor below which nothing here does anything at all, not even
+- `MIN_DETECT_ZOOM = 16` — the floor below which nothing here does anything at all, not even
   reporting a live view. Deliberately below the server's `DETECT_ZOOM` (`tile_server.py`,
   currently 17), not equal to it: the live view still always resolves to `DETECT_ZOOM` tiles
   regardless of what zoom the user is actually at (see `visibleDetectZoomTiles()`), so starting the
   trigger a level earlier just means detection kicks in a little before the display zoom catches
-  up to `DETECT_ZOOM` itself. Kept 2 levels below `DETECT_ZOOM` rather than 1 (as when
-  `DETECT_ZOOM` was 16) because 2 would mean 16x the tiles per viewport report at this floor
-  (`2^(DETECT_ZOOM - MIN_DETECT_ZOOM)` per axis) — worth reconsidering if browsing right at this
-  floor turns out to feel slow with the queue this generates.
+  up to `DETECT_ZOOM` itself. Was 15 (3 levels below `DETECT_ZOOM`) until 2026-09-04, when a
+  timestamped `nvidia-smi`/`timing:` log burst at that floor showed ~300+ distinct z17 tiles and
+  `queue_wait` climbing to 28s for one ordinary viewport — confirmed by direct calculation to be
+  the expected consequence of the floor's 16x tile multiplier (`2^(DETECT_ZOOM - MIN_DETECT_ZOOM)`
+  per axis), not excess/duplicate requests from MapLibre or a bug in the two-stage load. Raised to
+  16 to cut that multiplier to 4x — matches `oil_refinery/app/server/config.json`'s
+  `min_detect_zoom`, which was already 16 (that config value gates which *tile*'s own zoom gets
+  models run on in `model_router.models_for_tile()`, not the *display* zoom the live view triggers
+  at, so it wasn't actually enforcing this same floor before the two were aligned). Worth
+  reconsidering again if browsing right at this floor still feels slow with the queue it
+  generates.
 - `DETECT_ZOOM = 17` — matches the server's `DETECT_ZOOM` (`tile_server.py`), the *only* zoom real
   detection ever runs at. The live-view report is always computed directly at this zoom, regardless
   of what zoom the map is actually displaying, so the tiles sent are exactly what intersects the
   current screen at `DETECT_ZOOM` resolution — not "whatever tile the current zoom's grid happens
   to cover," which could include a lot of ground that's barely touching the edge of the viewport,
   not actually on it.
-- `MAX_VIEWPORT_TRIM = 0.3` / `viewportTrimFraction()` — how much of the viewport's edge margin to
-  skip, as a fraction of width/height, scaling with how far below `DETECT_ZOOM` the map is
-  currently displayed: full `MAX_VIEWPORT_TRIM` right at the `MIN_DETECT_ZOOM` floor (where the
-  tile count is worst), tapering linearly to 0 by the time the display zoom reaches `DETECT_ZOOM`
-  itself (where the tile count is already sane and trimming would just lose coverage for no
-  benefit). A prior version used one fixed fraction at every zoom; scaling it by zoom gap instead
-  means it only costs coverage where the tile count actually needs it.
+- `MAX_AREA_TRIM = 0.3` / `centerWaveTrim()` — the two-stage load is meant to put ~70% of the
+  *tile count* in the center-first wave and the remaining ~30% (the peripheral ring) in the
+  follow-up, not a 70/30 split of the viewport's linear width/height. Since tile count scales with
+  *area*, trimming 15% off each edge (a 70% linear width/height) only keeps ~49% of the tiles
+  (0.7 × 0.7) — half, not 70%. `centerWaveTrim()` corrects for this: it treats `MAX_AREA_TRIM` as
+  the fraction of *area* to drop (scaling with how far below `DETECT_ZOOM` the map is displayed,
+  same taper-to-0-at-`DETECT_ZOOM` shape as before), then converts that to the correct per-side
+  linear inset via `1 - sqrt(1 - areaTrim)` so the *tile count* in the first wave actually comes out
+  to ~70% at the `MIN_DETECT_ZOOM` floor.
 - `INITIAL_CENTER` — the same Hamburg refinery site already used elsewhere in this repo's own
   probing (`oil_refinery/probe_pretrained.py`), a known-good spot with real storage tanks to look
   at.
@@ -126,14 +135,16 @@ site-boundaries/labels sources+layers would never get created.
 
 ## Two-stage load
 
-The trimmed request (`tilesForViewport(viewport)`, default trim, sent by the request effect) gets
-the fast, most-likely-relevant tiles drawn first; once that result is back, the follow-up effect
-sends the *untrimmed* full viewport (`tilesForViewport(viewport, 0)`) so the skipped edge margin
-still gets covered, just a little later rather than never. Cheap to do this way instead of
-computing just the missing outer ring — the inner tiles this re-requests are already in
-`tile_server`'s cache (`TILE_CACHE_CAPACITY`), so only the genuinely new margin tiles cost any real
-inference time. Both this result and the follow-up's own result each separately bump
-`readyGeneration` and get painted — neither is an echo of the other.
+The trimmed (center) request (`tilesForViewport(viewport)`, `centerWaveTrim` trim, sent by the
+request effect) gets the fast, most-likely-relevant ~70% of tiles drawn first; once that result is
+back, the follow-up effect computes the full untrimmed tile set (`tilesForViewport(viewport, 0)`),
+subtracts the center wave's own tile set from it, and sends only that peripheral-ring difference —
+not the whole viewport again. `ws_server.py`'s session already tracks `known_tiles` across
+messages, so the center tiles the peripheral wave leaves out still fold back into the result via
+its `historical_tiles`/`get_cached_only` path (already-cached from the first wave, no
+re-inference), while the peripheral tiles are the only ones actually gathered live. Both this
+result and the follow-up's own result each separately bump `readyGeneration` and get painted —
+neither is an echo of the other.
 
 `moveEndDebounceTimer` (mount effect, a plain local timer handle) — moveend fires once a single
 gesture (or its momentum) has fully settled, but several separate short gestures in a row (e.g. a

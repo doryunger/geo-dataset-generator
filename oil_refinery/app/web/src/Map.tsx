@@ -8,20 +8,21 @@ import {
   type Viewport, viewportSettled, zoomChanged,
 } from './store'
 
-const MIN_DETECT_ZOOM = 15
+const MIN_DETECT_ZOOM = 16
 const DETECT_ZOOM = 17
-const MAX_VIEWPORT_TRIM = 0.3
+const MAX_AREA_TRIM = 0.3
 const MIN_VISIBLE_ZOOM = 12
 
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
 }
 
-function viewportTrimFraction(displayedZoom: number): number {
+function centerWaveTrim(displayedZoom: number): number {
   const maxGap = DETECT_ZOOM - MIN_DETECT_ZOOM
   if (maxGap <= 0) return 0
   const gap = DETECT_ZOOM - displayedZoom
-  return Math.min(MAX_VIEWPORT_TRIM, Math.max(0, MAX_VIEWPORT_TRIM * (gap / maxGap)))
+  const areaTrim = Math.min(MAX_AREA_TRIM, Math.max(0, MAX_AREA_TRIM * (gap / maxGap)))
+  return 1 - Math.sqrt(1 - areaTrim)
 }
 
 const INITIAL_CENTER: [number, number] = [9.9517431, 53.4770211]
@@ -46,7 +47,7 @@ function currentViewport(map: maplibregl.Map): Viewport {
 }
 
 function tilesForViewport(
-  viewport: Viewport, trimFraction: number = viewportTrimFraction(viewport.zoom),
+  viewport: Viewport, trimFraction: number = centerWaveTrim(viewport.zoom),
 ): { x: number; y: number }[] {
   const { west, east, south, north } = viewport
   const trim = trimFraction / 2
@@ -223,8 +224,9 @@ export default function Map() {
     lastFollowUpGenRef.current = readyGeneration
     dispatch(fullFollowUpSent())
     if (viewport.zoom < MIN_DETECT_ZOOM) return
-    const fullTiles = tilesForViewport(viewport, 0)
-    if (fullTiles.length > 0) socket.send(DETECT_ZOOM, fullTiles)
+    const centerKeys = new Set(tilesForViewport(viewport).map(({ x, y }) => `${x},${y}`))
+    const peripheralTiles = tilesForViewport(viewport, 0).filter(({ x, y }) => !centerKeys.has(`${x},${y}`))
+    if (peripheralTiles.length > 0) socket.send(DETECT_ZOOM, peripheralTiles)
   }, [dispatch, readyGeneration, pendingFullFollowUp, viewport])
 
   useEffect(() => {
