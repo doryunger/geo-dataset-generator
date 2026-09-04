@@ -120,6 +120,16 @@ export default function Map() {
   useEffect(() => {
     if (!containerRef.current) return
 
+    // Temporary diagnostic instrumentation -- answers "does the detections layer populate on a
+    // static map, or only after a pan/zoom?" by timestamping every source/layer lifecycle event
+    // against map construction, so the sequence is readable straight from the console without
+    // cross-referencing the Network tab. tileDebug0 anchors every line to time-since-mount; tile
+    // ids in these logs (zoom_x_y) match tile_server.py's logged tile_id format directly, so a
+    // slow/stale tile seen here can be grepped for in logs/app.log by the same id.
+    const tileDebug0 = performance.now()
+    const tileDebug = (msg: string, extra?: Record<string, unknown>) =>
+      console.log(`[tile-debug +${(performance.now() - tileDebug0).toFixed(0)}ms] ${msg}`, extra ?? '')
+
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: {
@@ -169,8 +179,24 @@ export default function Map() {
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
     })
+    tileDebug('map constructed -- basemap/detections sources+layers declared in initial style')
     map.addControl(new maplibregl.NavigationControl())
     map.on('zoom', () => setZoom(map.getZoom()))
+
+    // One line per raw sourcedata event for both raster sources (not debounced/filtered, unlike
+    // the existing 'sourcedata' handler further down which only reacts to 'detections' finishing) --
+    // this is the actual "did this fire before or after any movestart/moveend line below" signal.
+    map.on('sourcedata', (e) => {
+      if (e.sourceId !== 'basemap' && e.sourceId !== 'detections') return
+      tileDebug(`sourcedata [${e.sourceId}]`, {
+        isSourceLoaded: e.isSourceLoaded,
+        dataType: e.dataType,
+        sourceDataType: (e as unknown as { sourceDataType?: string }).sourceDataType,
+      })
+    })
+    map.on('movestart', () => tileDebug('movestart'))
+    map.on('moveend', () => tileDebug('moveend'))
+    map.on('idle', () => tileDebug('idle'))
 
     // Dev/debug convenience -- direct console access to the live MapLibre instance (e.g.
     // `map.getSource('site-boundaries')._data`, `map.getZoom()`) without threading it through
@@ -178,6 +204,7 @@ export default function Map() {
     ;(window as typeof window & { map?: maplibregl.Map }).map = map
 
     map.on('load', () => {
+      tileDebug('map "load" fired')
       // Identified-site boundaries + labels -- a third, independent layer on top of the two raster
       // ones above. Fed by the websocket below, not by tile loading (see api.ts's ExtentSocket).
       map.addSource('site-boundaries', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
