@@ -243,6 +243,20 @@ a realistic-duration task (verified with a 0.3s stand-in) reliably spreads acros
 pool thread. A real `MAX_PREDICT_IMGSZ` predict() call is comfortably slow enough for this to hold
 in practice.
 
+**Readiness is already tied to full warm-up completion, not just process start**: `lifespan()` is
+an `async def` generator wired in as `FastAPI(lifespan=...)` (see `server.py`), and uvicorn doesn't
+open the port to real traffic until the code before its `yield` finishes — confirmed live earlier
+(`oil_refinery/app/web/context/App.md`: Vite's dev proxy answers `502` for the whole loading
+window, meaning the port genuinely isn't listening yet, not just slow to respond). Since every
+warm-up future is awaited with `future.result()` before that `yield`, no request can reach *any*
+endpoint until every `_MODEL_EXECUTOR` thread has finished its own warm-up predict — this was
+already true, just not directly observable. Two `logger.info` lines added 2026-09-04 make it
+so: one right after the warm-up futures all resolve (`"All %d model-executor thread(s) warmed
+up"`), one right before `yield` (`"Backend ready: %d model(s) loaded, %d worker(s) running"`) —
+a single greppable line in `server.log` for whatever external readiness-detection mechanism ends
+up watching for it (a log-tail wait was proposed for `restart.sh`/`restart.ps1`, then set aside in
+favor of a different mechanism the user wants to build — this log line is there either way).
+
 ## `_ensure_processed()`
 
 Cache hit → return it immediately. Cache miss → fetch + push through the one serialized queue and

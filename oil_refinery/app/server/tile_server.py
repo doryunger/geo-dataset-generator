@@ -426,6 +426,7 @@ async def lifespan():
         ]
         for future in warmup_futures:
             future.result()
+        logger.info("All %d model-executor thread(s) warmed up", _MODEL_EXECUTOR_SIZE)
 
     _state["models"] = models
     _state["queue"] = DetectionQueue(QUEUE_CAPACITY, QUEUE_TRIM_TO)
@@ -439,6 +440,7 @@ async def lifespan():
 
     logger.info("Starting %d parallel detection worker(s)", WORKER_POOL_SIZE)
     worker_tasks = [asyncio.create_task(_worker_loop()) for _ in range(WORKER_POOL_SIZE)]
+    logger.info("Backend ready: %d model(s) loaded, %d worker(s) running", len(models), WORKER_POOL_SIZE)
     yield
     for task in worker_tasks:
         task.cancel()
