@@ -1,15 +1,8 @@
-# Windows equivalent of restart.sh: kills any running instance of this app's two processes
-# (backend + frontend dev server), then starts fresh ones in the background.
-# Usage: .\restart.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $REPO_ROOT = Join-Path $PSScriptRoot "..\.."
 
-# Matched by port, not process name -- unlike the root restart.ps1 (which matches uvicorn.exe by
-# name, safe there since it's the only thing that ever runs uvicorn on this machine), this app is
-# meant to run *alongside* the main /manual app, which is also uvicorn.exe. Killing by whichever
-# process is actually listening on this app's own port avoids taking down the other app's server.
 function Stop-Port($port) {
     $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     foreach ($c in $conns) {

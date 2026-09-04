@@ -7,9 +7,10 @@ on it*, distilled from actual sessions rather than aspirational.
 docstrings, in any language (Python, TypeScript/TSX, etc.), in any part of the tree (`scripts/`,
 `oil_refinery/app/server/`, `oil_refinery/app/web/src/`, ...). For the "why" behind a non-obvious
 design choice, put it in that directory's own `context/<filename>.md` instead (one file per source
-file, not every file needs one) — `scripts/context/`, `oil_refinery/app/server/context/`, and
-`oil_refinery/app/web/context/` are the three that exist so far; a new area of the codebase gets
-its own `context/` sibling directory the same way. Applies to new code and existing code alike —
+file, not every file needs one) — `scripts/context/`, `oil_refinery/app/server/context/`,
+`oil_refinery/app/web/context/`, and `oil_refinery/app/context/` are the ones that exist so far; a
+new area of the codebase gets its own `context/` sibling directory the same way. Applies to new
+code and existing code alike —
 if you're editing a file that still has comments in it, or adding logic that would otherwise need
 one, strip/move them out as part of that edit rather than leaving or adding to them.
 

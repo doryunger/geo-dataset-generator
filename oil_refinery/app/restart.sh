@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
-# Kills any running instance of this app's two processes (backend + frontend dev server), then
-# starts fresh ones in the background.
-# Usage: ./restart.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 REPO_ROOT="$(cd ../.. && pwd)"
 
-# Matched by port, not process name -- unlike the root restart.sh (which matches "uvicorn api:app"
-# by cmdline, safe there since it's the only thing that runs that command on this machine), this
-# app is meant to run *alongside* the main /manual app, which is also a uvicorn process. Killing
-# whichever process is actually listening on this app's own port avoids taking down the other app.
 stop_port() {
     local port="$1"
     local pids
