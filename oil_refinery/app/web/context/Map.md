@@ -6,15 +6,14 @@ below for why the data flow is split this way.
 
 ## Zoom/viewport constants
 
-- `MIN_VISIBLE_ZOOM = 12` — every layer (`basemap`, `detections`, `site-fill`, `site-outline`,
-  `site-label`) carries this as its own `minzoom`, so nothing renders below it — a purely visual
-  floor (MapLibre's per-layer `minzoom`, not a source-level or network-level gate), independent of
-  `MIN_DETECT_ZOOM` below. The two are deliberately different numbers for different reasons: this
-  one is about when the page looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is
-  about when it's worth spending backend queue/worker time. `basemap`/`detections`'s tile *fetches*
-  still happen below this zoom if MapLibre would otherwise request them (the `minzoom` gate is
-  render-only) -- not worth adding a fetch-level gate too given `MIN_DETECT_ZOOM` already keeps
-  real detection work from starting this low regardless.
+- `MIN_VISIBLE_ZOOM = 12` — the three *site* layers (`site-fill`, `site-outline`, `site-label`)
+  carry this as their own `minzoom`, so the identified-site overlay doesn't render below it — a
+  purely visual floor (MapLibre's per-layer `minzoom`, not a source-level or network-level gate).
+  Deliberately scoped to just the site layers, not `basemap`/`detections` too (an earlier version
+  of this applied it to all five layers, which was wrong -- the ask was specifically to hide the
+  site overlay at low zoom, not the whole map). Independent of `MIN_DETECT_ZOOM` below: this one is
+  about when the site overlay looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is
+  about when it's worth spending backend queue/worker time at all.
 - `MIN_DETECT_ZOOM = 15` — the floor below which nothing here does anything at all, not even
   reporting a live view. Deliberately below the server's `DETECT_ZOOM` (`tile_server.py`,
   currently 17), not equal to it: the live view still always resolves to `DETECT_ZOOM` tiles

@@ -128,8 +128,8 @@ export default function Map() {
           },
         },
         layers: [
-          { id: 'basemap', type: 'raster', source: 'basemap', minzoom: MIN_VISIBLE_ZOOM },
-          { id: 'detections', type: 'raster', source: 'detections', minzoom: MIN_VISIBLE_ZOOM },
+          { id: 'basemap', type: 'raster', source: 'basemap' },
+          { id: 'detections', type: 'raster', source: 'detections' },
         ],
       },
       center: INITIAL_CENTER,
