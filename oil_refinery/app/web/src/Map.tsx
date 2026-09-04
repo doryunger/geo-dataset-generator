@@ -239,12 +239,43 @@ export default function Map() {
     // "the trimmed stage just finished, send the full one now."
     let pendingFullFollowUp = false
 
+    // Forcing a reload below (see onResult) makes the 'detections' source fire fresh 'sourcedata'
+    // events, which the existing sourcedata handler further down treats as "a batch just finished,"
+    // debounce-triggering another updateExtent() -- which reports the same tiles again, produces
+    // another onResult call, and would force another reload, ad infinitum, on a completely static
+    // map. This cooldown breaks that self-feedback loop: consecutive forced reloads are collapsed
+    // to at most one per window, so the bounce-back onResult call arriving within it is a no-op and
+    // the cycle dies there instead of polling forever.
+    let lastForcedDetectionsReload = 0
+    const FORCED_RELOAD_COOLDOWN_MS = 2000
+
     const socket = new ExtentSocket((result) => {
       setSites(result)
       const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
       const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
       boundariesSource?.setData(result)
       labelsSource?.setData(labelsFrom(result))
+
+      // Force the 'detections' raster tiles to reload now, rather than trusting MapLibre's own
+      // per-move tile bookkeeping to eventually reflect them. Confirmed via tile-debug console
+      // logs: after a fast multi-step zoom queued a big backend backlog, the map sat static for
+      // 20+ seconds with zero 'sourcedata [detections]' events even as the backend kept finishing
+      // tiles in the background -- MapLibre appears to silently drop a tile response that arrives
+      // long after the gesture that requested it, even when the viewport never moved again, so the
+      // boxes only ever appeared once a *later* pan/zoom issued a fresh, fast-enough batch. This
+      // result callback fires exactly when the backend confirms real detection data is ready for
+      // this extent (ws_server.py's classify_extent waits on every one of these tiles), so it's a
+      // reliable, backend-driven signal to force a reload from -- decoupled from whatever MapLibre
+      // decided internally. setTiles() with the same (unchanged) URL template is MapLibre's
+      // documented way to force this: it calls the source's load(sourceDataChanged=true)
+      // internally, marking already-loaded tiles 'expired' and re-fetching -- an up-to-date tile
+      // just gets a fast cache hit from tile_server's own TileCache, not a real recompute.
+      const now = performance.now()
+      if (now - lastForcedDetectionsReload > FORCED_RELOAD_COOLDOWN_MS) {
+        lastForcedDetectionsReload = now
+        const detectionsSource = map.getSource('detections') as maplibregl.RasterTileSource | undefined
+        detectionsSource?.setTiles(['/api/detections/{z}/{x}/{y}'])
+      }
 
       // Two-stage load: the trimmed request above gets the fast, most-likely-relevant tiles drawn
       // first; once that's back, follow up with the *untrimmed* full viewport so the skipped edge
