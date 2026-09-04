@@ -111,7 +111,7 @@ def _is_graph_relevant(det: dict) -> bool:
 CONF_THRESHOLD = 0.15  # matches the threshold already used for the pretrained checkpoint in
 # probe_pretrained.py; not yet re-tuned for this repo's own (much higher precision/recall) models
 
-MAX_PREDICT_IMGSZ = 3072  # safety cap on the GSD-normalized input size (see _run_detection) -- was
+MAX_PREDICT_IMGSZ = 3072  # safety cap on the GSD-normalized input size (see _run_detection_batch) -- was
 # 1536 (the ~1,456px z17 needed), raised to cover z16's ~2,912px resample (DETECT_ZOOM moved down to
 # 16, 2026-09-03; a deliberate slower-per-tile/fewer-tiles tradeoff). z15 and below still need more
 # than this (a ~5,823px resample at z15) and stay impractical. Still enforced here as a real safety
@@ -127,14 +127,29 @@ QUEUE_TRIM_TO = 150   # extent-report load (2x it), not a guessed ratio; both eq
 # a normal single load doesn't get trimmed down at all -- eviction only kicks in genuinely past
 # double the expected size, not as a routine haircut on ordinary traffic
 
-WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "4"))  # concurrent _worker_loop()
-# instances sharing one DetectionQueue -- was 1 (serialized on purpose, to avoid oversubscribing
-# this machine's cores); now several, since extent batches at low zoom can mean dozens of tiles to
-# process before the classifier can even start (see ws_server.py). Each loop's inference still runs
-# via run_in_executor's thread pool, so PyTorch's own C++ tensor ops (which release the GIL) get
+TILE_BATCH_SIZE = 8  # tiles grouped into one model.predict() call per model, instead of one
+# separate call per tile. Added 2026-09-04 after logged per-tile timing showed individual
+# inference calls ballooning to 1.5-5.7s under load even after startup warm-up ruled out a
+# one-time cold-start cost -- WORKER_POOL_SIZE(4) x len(MODELS)(2) meant up to 8 concurrent
+# full-resolution forward passes competing for one GPU (this deployment's EC2 instance: a single
+# T4, not a high-end card), which time-slices/contends rather than truly running them in parallel.
+# A single batched call over several tiles is far more GPU-efficient per image than that many
+# concurrent single-image calls. Not yet load-tested against a real T4 -- worth tuning against
+# actual measurements rather than treating 8 as anything but a reasonable starting point.
 
-# Shared pool _run_detection() uses to run one tile's models concurrently instead of sequentially
-# (see _run_detection's docstring) -- sized for every worker to have its own model-level pair of
+WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))  # concurrent _worker_loop()
+# instances sharing one DetectionQueue -- lowered from 4 to 2 alongside introducing TILE_BATCH_SIZE
+# above: each worker now claims up to TILE_BATCH_SIZE tiles per turn instead of 1, so fewer workers
+# are needed to keep the queue draining, and fewer workers means fewer *concurrent* batched
+# model.predict() calls competing for the same GPU (WORKER_POOL_SIZE x len(MODELS) concurrent calls
+# either way -- the lever that changed is how many tiles each one covers, not how many calls run at
+# once, though that dropped too, from 8 to 4, since contention was the actual problem being fixed).
+# Each loop's inference still runs via run_in_executor's thread pool, so PyTorch's own C++ tensor
+# ops (which release the GIL) get real parallelism across OS threads, not just Python-level
+# concurrency.
+
+# Shared pool _run_detection_batch() uses to run one batch's models concurrently instead of
+# sequentially (see its docstring) -- sized for every worker to have its own model-level pair of
 # threads in flight at once, not just one shared pair the whole app contends over.
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=max(2, WORKER_POOL_SIZE * len(model_router.MODELS)))
 # real parallelism across OS threads -- not just Python-level concurrency. torch's own per-call
@@ -180,7 +195,7 @@ class Job:
     # queue-wait and inference, since none of those three stages alone tells you which one is
     # actually responsible when a tile feels slow
     enqueued_at: float = field(repr=False)  # time.perf_counter() at push -- queue.pop() minus this
-    # is genuine queue-wait time, separate from and not covered by _run_detection's own inference_ms
+    # is genuine queue-wait time, separate from and not covered by _run_detection_batch's own inference_ms
     future: asyncio.Future = field(repr=False)
 
 
@@ -233,10 +248,16 @@ class DetectionQueue:
             self._condition.notify()
             return evicted
 
-    async def pop(self) -> Job:
+    async def pop_batch(self, max_size: int) -> list[Job]:
+        """Waits for at least one job, then returns up to max_size of whatever's already queued at
+        that moment -- never waits *longer* to fill out a full batch, so a lightly loaded queue
+        still gets a job processed immediately instead of stalling for more jobs that may not
+        arrive soon. Used by _worker_loop to group several tiles into one model.predict() call
+        (see TILE_BATCH_SIZE) instead of one call per tile."""
         async with self._condition:
             await self._condition.wait_for(lambda: len(self._items) > 0)
-            return self._items.pop(0)
+            batch, self._items = self._items[:max_size], self._items[max_size:]
+            return batch
 
     async def clear_pending(self) -> list[Job]:
         """Atomically removes every not-yet-started job (whatever's still sitting in the queue, not
@@ -377,121 +398,154 @@ def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def _run_detection(image_bytes: bytes, z: int, x: int, y: int) -> tuple[bytes, list[dict]]:
+def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
     """Runs on a background thread (via run_in_executor) so the event loop stays free for other
-    requests (e.g. /api/stats) while this CPU-bound call is in flight. Only the single worker loop
-    ever has one of these in flight at a time -- that serialization is what keeps CPU inference
-    from oversubscribing this machine's cores (see plan's concurrency design).
+    requests (e.g. /api/stats) while this CPU-bound call is in flight.
+
+    Batches every job's GSD-normalized tile into one model.predict() call per model, instead of one
+    call per tile (see TILE_BATCH_SIZE) -- WORKER_POOL_SIZE x len(MODELS) concurrent *single-tile*
+    calls meant up to 8 full-resolution forward passes competing for one GPU at once, which
+    time-slices/contends rather than truly overlapping (confirmed live: individual inference calls
+    ballooning to 1.5-5.7s under a real load burst, unaffected by ruling out a cold-start cause).
+    A single batched call over several tiles uses the GPU far more efficiently per image than that
+    many concurrent single-image calls. All jobs are assumed to share the same z (true by
+    construction -- see get_or_process_detections and get_detections, the only two producers of a
+    queued Job, both of which only ever queue a DETECT_ZOOM tile), so model_router.models_for_tile()
+    and GSD math only need to run once per distinguishing input, not once per job.
 
     Runs every model model_router.models_for_tile(z) says is worth triggering, each completely
     unfiltered (every class it knows about, not just the ones relevant to a refinery -- see
-    model_router.py's docstring), then hands the pooled raw detections to fuser.fuse() to collapse
-    cross-model duplicates before anything downstream sees them (see semantic_graph.md's "Pipeline:
-    model router, fuser, classifier").
+    model_router.py's docstring), then hands each tile's own pooled raw detections to fuser.fuse()
+    to collapse cross-model duplicates before anything downstream sees them (see
+    semantic_graph.md's "Pipeline: model router, fuser, classifier") -- fusion still happens
+    per tile, same as before batching; only the model calls themselves are now shared across tiles.
 
     Every triggered model's predict() call is fired at once via _MODEL_EXECUTOR rather than one
     after another -- on CUDA each also gets its own torch.cuda.Stream so the GPU can genuinely
     overlap their kernels instead of only overlapping the host-side pre/postprocessing around a
     shared default stream; on CPU there's no stream concept, but the thread-level concurrency still
-    gets real overlap since PyTorch's C++ ops release the GIL. This only shortens the "wait for
-    every model's raw detections" phase _run_detection itself represents -- fuser.fuse() below still
-    waits for all of them before deduplicating, unchanged either way.
+    gets real overlap since PyTorch's C++ ops release the GIL.
 
-    GSD-normalizes the tile before handing it to any model: every training crop in this repo goes
+    GSD-normalizes each tile before handing it to any model: every training crop in this repo goes
     through common.resample_to_target_gsd (see scripts/obb.py) before training, so a model expects
     a fixed real-world meters-per-pixel scale, not "whatever a raw tile at this zoom happens to be."
     Feeding raw tile pixels straight in (an earlier version of this function did) is a genuine
     train/inference scale mismatch, confirmed to produce false-positive-heavy garbage at low zoom --
     not a threshold-tuning problem. Detected corners come back in the resampled image's pixel space
-    and are scaled back to the tile's native pixel space before use, so overlay rendering and
-    geometry.py's global-pixel-space centroids stay in native-tile coordinates throughout."""
+    and are scaled back to each tile's own native pixel space before use, so overlay rendering and
+    geometry.py's global-pixel-space centroids stay in native-tile coordinates throughout. Tiles in
+    a batch can each need a *slightly* different resample size (native_gsd_m depends on latitude,
+    which varies tile to tile even at a fixed zoom), so predict_imgsz is computed once as the max
+    needed across the whole batch and every image is letterboxed to that common size by
+    model.predict() itself -- standard behavior for a list `source`, not something this function
+    does manually.
+
+    Returns one (overlay_bytes, detections) tuple per input job, in the same order as `jobs`."""
     models: dict[str, YOLO] = _state["models"]
-    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    native_w, native_h = img.size
 
-    bounds = common.tile_bounds(z, x, y)
-    lat = (bounds["north"] + bounds["south"]) / 2
-    native_gsd_m = common.meters_per_pixel(z, lat)
-    resampled = common.resample_to_target_gsd(img, native_gsd_m)
-    resampled_w, resampled_h = resampled.size
+    # Per-tile prep: decode + GSD-normalize. A tile whose normalized size still exceeds
+    # MAX_PREDICT_IMGSZ is skipped individually (same safety net as before batching), not the whole
+    # batch -- its result is filled in directly, bypassing the model calls below.
+    prepped: list[dict] = []
+    results_by_index: dict[int, tuple[bytes, list[dict]]] = {}
+    for i, job in enumerate(jobs):
+        img = Image.open(io.BytesIO(job.image_bytes)).convert("RGB")
+        native_w, native_h = img.size
+        bounds = common.tile_bounds(job.z, job.x, job.y)
+        lat = (bounds["north"] + bounds["south"]) / 2
+        native_gsd_m = common.meters_per_pixel(job.z, lat)
+        resampled = common.resample_to_target_gsd(img, native_gsd_m)
+        resampled_w, resampled_h = resampled.size
+        if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
+            # Too coarse a zoom to GSD-normalize practically for this model -- see MAX_PREDICT_IMGSZ.
+            results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
+            continue
+        prepped.append({
+            "index": i, "job": job, "native_w": native_w, "native_h": native_h,
+            "resampled": resampled,
+            "scale_back_x": native_w / resampled_w, "scale_back_y": native_h / resampled_h,
+        })
 
-    if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
-        # Too coarse a zoom to GSD-normalize practically for this model -- see MAX_PREDICT_IMGSZ.
-        return TRANSPARENT_TILE_BYTES, []
+    if not prepped:
+        return [results_by_index[i] for i in range(len(jobs))]
 
-    predict_imgsz = max(32, math.ceil(max(resampled_w, resampled_h) / 32) * 32)
-    scale_back_x = native_w / resampled_w
-    scale_back_y = native_h / resampled_h
-    tile_id = common.tile_id(z, x, y)
+    batch_imgsz = max(32, math.ceil(max(p["resampled"].size[d] for p in prepped for d in (0, 1)) / 32) * 32)
+    triggered_models = model_router.models_for_tile(jobs[0].z)
+    source_images = [p["resampled"] for p in prepped]
 
-    def _predict_one(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, object]:
+    def _predict_batch(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, list]:
         model = models[model_key]
         if stream is not None:
             with torch.cuda.stream(stream):
                 results = model.predict(
-                    source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz,
-                    device=INFERENCE_DEVICE, half=True, verbose=False,
+                    source=source_images, conf=CONF_THRESHOLD, imgsz=batch_imgsz,
+                    device=INFERENCE_DEVICE, quantize=16, verbose=False,
                 )
         else:
             results = model.predict(
-                source=resampled, conf=CONF_THRESHOLD, imgsz=predict_imgsz, device=INFERENCE_DEVICE,
-                half=(INFERENCE_DEVICE == "cuda"), verbose=False,
+                source=source_images, conf=CONF_THRESHOLD, imgsz=batch_imgsz, device=INFERENCE_DEVICE,
+                quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
             )
-        return model_key, results[0]
+        return model_key, results  # one Results per source image, index-aligned with `prepped`
 
-    triggered_models = model_router.models_for_tile(z)
     use_cuda = INFERENCE_DEVICE == "cuda"
     streams = [torch.cuda.Stream() for _ in triggered_models] if use_cuda else [None] * len(triggered_models)
-    futures = [_MODEL_EXECUTOR.submit(_predict_one, mk, st) for mk, st in zip(triggered_models, streams)]
+    futures = [_MODEL_EXECUTOR.submit(_predict_batch, mk, st) for mk, st in zip(triggered_models, streams)]
+    per_model_results: dict[str, list] = dict(future.result() for future in futures)
 
-    raw_detections: list[dict] = []
-    per_model_counts: dict[str, dict[str, int]] = {}
-    for future in futures:
-        model_key, r = future.result()
-        if r.obb is None or len(r.obb) == 0:
-            per_model_counts[model_key] = {}
-            continue
-        model_counts: dict[str, int] = {}
-        for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
-            class_name = r.names[int(cls_id)]
-            model_counts[class_name] = model_counts.get(class_name, 0) + 1
-            corners = [(p[0] * scale_back_x, p[1] * scale_back_y) for p in xy]
-            cx = sum(p[0] for p in corners) / 4
-            cy = sum(p[1] for p in corners) / 4
-            raw_detections.append({
-                "tile_id": tile_id,
-                "model": model_key,
-                "class_name": class_name,
-                "corners": corners,
-                "confidence": conf,
-                # global pixel space, not lon/lat -- see geometry.py's module docstring
-                "centroid_px_global": geometry.global_pixel(x, y, cx, cy),
-            })
-        per_model_counts[model_key] = model_counts
+    for tile_idx, p in enumerate(prepped):
+        job = p["job"]
+        tile_id = job.tile_id
+        raw_detections: list[dict] = []
+        per_model_counts: dict[str, dict[str, int]] = {}
+        for model_key in triggered_models:
+            r = per_model_results[model_key][tile_idx]
+            if r.obb is None or len(r.obb) == 0:
+                per_model_counts[model_key] = {}
+                continue
+            model_counts: dict[str, int] = {}
+            for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
+                class_name = r.names[int(cls_id)]
+                model_counts[class_name] = model_counts.get(class_name, 0) + 1
+                corners = [(pt[0] * p["scale_back_x"], pt[1] * p["scale_back_y"]) for pt in xy]
+                cx = sum(pt[0] for pt in corners) / 4
+                cy = sum(pt[1] for pt in corners) / 4
+                raw_detections.append({
+                    "tile_id": tile_id,
+                    "model": model_key,
+                    "class_name": class_name,
+                    "corners": corners,
+                    "confidence": conf,
+                    # global pixel space, not lon/lat -- see geometry.py's module docstring
+                    "centroid_px_global": geometry.global_pixel(job.x, job.y, cx, cy),
+                })
+            per_model_counts[model_key] = model_counts
 
-    # Logged unconditionally (one line per processed tile, INFO level) so a model that's silently
-    # never contributing anything -- as opposed to contributing but getting fused away or filtered
-    # below -- shows up directly in logs/app.log instead of only being inferrable indirectly from
-    # the final rendered overlay. "none" (rather than an empty {}) makes a zero-detection model
-    # grep-able on its own (`grep 'DIOR.*none' logs/app.log`) without parsing the dict shape.
-    logger.info(
-        "Tile %s raw detections by model: %s", tile_id,
-        {mk: (counts or "none") for mk, counts in per_model_counts.items()},
-    )
-
-    fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
-    detections = [d for d in fused if _is_graph_relevant(d)]
-    if len(detections) != len(fused):
-        dropped = [d for d in fused if not _is_graph_relevant(d)]
+        # Logged unconditionally (one line per processed tile, INFO level) so a model that's silently
+        # never contributing anything -- as opposed to contributing but getting fused away or filtered
+        # below -- shows up directly in logs/app.log instead of only being inferrable indirectly from
+        # the final rendered overlay. "none" (rather than an empty {}) makes a zero-detection model
+        # grep-able on its own (`grep 'DIOR.*none' logs/app.log`) without parsing the dict shape.
         logger.info(
-            "Tile %s dropped %d fused detection(s) as graph-irrelevant (class not in semantic "
-            "graph, or below its required-edge confidence floor): %s",
-            tile_id, len(dropped),
-            [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
+            "Tile %s raw detections by model: %s", tile_id,
+            {mk: (counts or "none") for mk, counts in per_model_counts.items()},
         )
 
-    overlay_bytes = _render_overlay((native_w, native_h), detections)
-    return overlay_bytes, detections
+        fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
+        detections = [d for d in fused if _is_graph_relevant(d)]
+        if len(detections) != len(fused):
+            dropped = [d for d in fused if not _is_graph_relevant(d)]
+            logger.info(
+                "Tile %s dropped %d fused detection(s) as graph-irrelevant (class not in semantic "
+                "graph, or below its required-edge confidence floor): %s",
+                tile_id, len(dropped),
+                [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
+            )
+
+        overlay_bytes = _render_overlay((p["native_w"], p["native_h"]), detections)
+        results_by_index[p["index"]] = (overlay_bytes, detections)
+
+    return [results_by_index[i] for i in range(len(jobs))]
 
 
 async def _job_stale(job: Job) -> bool:
@@ -510,55 +564,67 @@ async def _worker_loop() -> None:
     stats: Stats = _state["stats"]
 
     while True:
-        job = await queue.pop()
-        queue_wait_ms = (time.perf_counter() - job.enqueued_at) * 1000
+        jobs = await queue.pop_batch(TILE_BATCH_SIZE)
+        queue_wait_ms_by_tile = {job.tile_id: (time.perf_counter() - job.enqueued_at) * 1000 for job in jobs}
 
-        if await _job_stale(job):
-            # Skipped before ever reaching _run_detection -- no inference happens and nothing gets
-            # cached, so this tile stays blank in the client's raster layer (a MapLibre raster
-            # source fetches a given tile URL once and keeps whatever it got back, even an empty
-            # response) until a *new* pan/zoom issues a fresh request for it. Logged so a long
-            # queue_wait (see the timing line below, which this job never reaches) can be directly
-            # tied to "and here's a tile that got thrown away because of it," rather than inferred.
-            logger.info(
-                "Tile %s dropped as stale after %.0fms queue_wait (client disconnected before a "
-                "worker reached it -- no inference ran, nothing cached)", job.tile_id, queue_wait_ms,
-            )
-            if not job.future.done():
-                job.future.set_result(JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False))
-            in_flight.pop(job.tile_id, None)
+        live_jobs = []
+        for job in jobs:
+            if await _job_stale(job):
+                # Skipped before ever reaching _run_detection_batch -- no inference happens and
+                # nothing gets cached, so this tile stays blank in the client's raster layer (a
+                # MapLibre raster source fetches a given tile URL once and keeps whatever it got
+                # back, even an empty response) until a *new* pan/zoom issues a fresh request for
+                # it. Logged so a long queue_wait can be directly tied to "and here's a tile that
+                # got thrown away because of it," rather than inferred.
+                logger.info(
+                    "Tile %s dropped as stale after %.0fms queue_wait (client disconnected before "
+                    "a worker reached it -- no inference ran, nothing cached)",
+                    job.tile_id, queue_wait_ms_by_tile[job.tile_id],
+                )
+                if not job.future.done():
+                    job.future.set_result(JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False))
+                in_flight.pop(job.tile_id, None)
+            else:
+                live_jobs.append(job)
+
+        if not live_jobs:
             continue
 
         loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
         try:
-            overlay_bytes, detections = await loop.run_in_executor(
-                None, _run_detection, job.image_bytes, job.z, job.x, job.y,
-            )
-            inference_ms = (time.perf_counter() - t0) * 1000
-            stats.record_processed(inference_ms)
-            result = JobResult(image_bytes=overlay_bytes, cacheable=True, detections=detections)
+            batch_results = await loop.run_in_executor(None, _run_detection_batch, live_jobs)
+            inference_ms_total = (time.perf_counter() - t0) * 1000
+            stats.record_processed(inference_ms_total / len(live_jobs))
+            job_results = [
+                JobResult(image_bytes=overlay_bytes, cacheable=True, detections=detections)
+                for overlay_bytes, detections in batch_results
+            ]
         except Exception:
-            logger.exception("Detection failed for tile %s", job.tile_id)
-            inference_ms = (time.perf_counter() - t0) * 1000
-            result = JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False)
+            logger.exception("Batched detection failed for tiles %s", [job.tile_id for job in live_jobs])
+            inference_ms_total = (time.perf_counter() - t0) * 1000
+            job_results = [JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False) for _ in live_jobs]
 
-        # Split out so a slow tile can be traced to its actual stage -- fetch (Mapbox network
-        # round-trip, 0 if the tile was already cached to disk), queue_wait (time sitting behind
-        # other jobs once WORKER_POOL_SIZE workers are all busy), or inference (_run_detection
-        # itself: GSD resample + both models + fuse + render). avg_inference_ms in /api/stats only
-        # ever covered the last of these, so a fetch- or queue-bound slowdown was invisible there.
-        logger.info(
-            "Tile %s timing: fetch=%.0fms queue_wait=%.0fms inference=%.0fms total=%.0fms",
-            job.tile_id, job.fetch_ms, queue_wait_ms, inference_ms,
-            job.fetch_ms + queue_wait_ms + inference_ms,
-        )
-
-        if result.cacheable:
-            cache[job.tile_id] = result
-        if not job.future.done():
-            job.future.set_result(result)
-        in_flight.pop(job.tile_id, None)
+        # inference_ms is this batch's total wall time divided evenly across its tiles -- an
+        # approximation (individual tiles within one batched model.predict() call aren't separately
+        # timed), good enough to spot a slow *batch* in the logs, not a claim that each tile
+        # individually took exactly this long. Split out from fetch/queue_wait so a slow tile can
+        # still be traced to its actual stage -- fetch (Mapbox network round-trip, 0 if the tile was
+        # already cached to disk), queue_wait (time sitting behind other jobs), or inference. batch
+        # of N in the log line is a reminder this inference figure is an average, not a per-tile
+        # measurement.
+        inference_ms_each = inference_ms_total / len(live_jobs)
+        for job, result in zip(live_jobs, job_results):
+            logger.info(
+                "Tile %s timing: fetch=%.0fms queue_wait=%.0fms inference=%.0fms(batch of %d) total=%.0fms",
+                job.tile_id, job.fetch_ms, queue_wait_ms_by_tile[job.tile_id], inference_ms_each,
+                len(live_jobs), job.fetch_ms + queue_wait_ms_by_tile[job.tile_id] + inference_ms_each,
+            )
+            if result.cacheable:
+                cache[job.tile_id] = result
+            if not job.future.done():
+                job.future.set_result(result)
+            in_flight.pop(job.tile_id, None)
 
 
 @asynccontextmanager
@@ -580,7 +646,7 @@ async def lifespan():
         # already-fused model and just reads -- safe to share across worker threads at that point.
         #
         # Warmed at MAX_PREDICT_IMGSZ, not a small placeholder size -- a real request's GSD-resampled
-        # tile runs at up to that size (see _run_detection's predict_imgsz), and the *first* call CUDA
+        # tile runs at up to that size (see _run_detection_batch's predict_imgsz), and the *first* call CUDA
         # ever sees at a given size pays for kernel selection and growing the caching allocator's
         # memory pool to fit it. A tiny warm-up image doesn't reserve that memory, so the pool still
         # had to grow live -- and under WORKER_POOL_SIZE concurrent threads x len(MODELS) models all
@@ -591,7 +657,7 @@ async def lifespan():
         # pays that cost up front instead of against a live user's first pan.
         model.predict(
             source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
-            device=INFERENCE_DEVICE, half=(INFERENCE_DEVICE == "cuda"), verbose=False,
+            device=INFERENCE_DEVICE, quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
         )
         models[model_key] = model
     _state["models"] = models
