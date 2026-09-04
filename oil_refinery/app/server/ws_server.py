@@ -192,6 +192,11 @@ async def ws_extent(websocket: WebSocket):
             session.known_tiles = current_tiles | historical_tiles
             session.last_active = time.monotonic()
 
+            await tile_server.prune_pending()
+
+            if not current_tiles and current_task is not None and not current_task.done():
+                continue
+
             if current_task is not None:
                 current_task.cancel()
                 try:
@@ -199,7 +204,6 @@ async def ws_extent(websocket: WebSocket):
                 except (asyncio.CancelledError, Exception):
                     pass
 
-            await tile_server.prune_pending()
             current_task = asyncio.ensure_future(
                 _send_result(websocket, current_tiles, historical_tiles, session.tracker)
             )

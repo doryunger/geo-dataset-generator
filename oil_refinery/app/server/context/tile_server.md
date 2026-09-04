@@ -240,12 +240,41 @@ now only ever updates `has_interactive_request`.
 
 ## `get_detections()`
 
-Only ever does real work at exactly `DETECT_ZOOM` — every other zoom returns empty immediately,
-including zooms *above* `DETECT_ZOOM`: showing a blown-up `DETECT_ZOOM` box next to
-native-resolution imagery would misrepresent where the box actually is, and showing nothing is a
-more honest "you're not at the zoom this was detected at" than a stretched, misaligned one. The
-site-level layer (`ws_server.py`) is what still shows a match at any zoom — this endpoint is just
-the per-tile visual boxes, a different concern.
+Only ever does real work at exactly `DETECT_ZOOM` — every other zoom returns the transparent
+placeholder immediately, including zooms *above* `DETECT_ZOOM`: showing a blown-up `DETECT_ZOOM`
+box next to native-resolution imagery would misrepresent where the box actually is, and showing
+nothing is a more honest "you're not at the zoom this was detected at" than a stretched,
+misaligned one. The site-level layer (`ws_server.py`) is what still shows a match at any zoom —
+this endpoint is just the per-tile visual boxes, a different concern.
+
+**Never blocks on inference (fixed 2026-09-04).** A cache hit returns the real overlay instantly,
+same as always; a cache miss now *also* returns instantly (the transparent placeholder) and kicks
+off processing via `get_or_process_detections()` without awaiting it — it used to `await
+_ensure_processed(...)`, holding the HTTP connection open for the tile's *entire* inference
+duration, sometimes 10-40+ seconds under load.
+
+This was the real cause of "the detections layer only updates after panning" surviving every
+earlier fix (the queue-pruning bug, the join-race fix, the client-side forced-reload/repaint
+attempts) — none of those were wrong exactly, they just weren't the bottleneck. The actual
+mechanism: MapLibre caps itself at `MAX_PARALLEL_IMAGE_REQUESTS = 16` concurrent tile fetches, but
+the browser's own HTTP/1.1 stack caps *real* concurrent connections to one origin at 6 regardless
+of what MapLibre asks for — and `basemap`/`detections` share that one origin. With this endpoint
+holding a connection open for the full inference time, a handful of slow tiles could occupy every
+available connection slot for the whole page, so *every other* tile request — including ones whose
+answer was already sitting ready in `TileCache` — physically couldn't reach the network until a
+slot freed up. None of this showed up in any server-side log, since the requests never left the
+browser. A `movestart` aborts some in-flight fetches (freeing slots), which is why panning always
+"fixed" it: not by triggering anything, but by finally letting the backlog through, which then
+resolved in the fast burst seen after every pan in this app's own logs all along.
+
+Now nothing ever holds a connection open past an instant cache check, so there's no longer
+anything to starve the pool. The real result still gets delivered the same way it already was for
+the site-polygon layer: once `get_or_process_detections()`'s background job finishes and caches
+the tile, `ws_server.py`'s `classify_extent()` (which is *also* waiting on that same job, having
+joined it via the same `in_flight` dict) eventually reports it over the websocket, the frontend's
+paint effect (`Map.tsx`) forces the `detections` raster source to reload, and *that* reload is now
+a cache hit — instant, real content, no connection starvation possible since the retry is the one
+holding nothing open either.
 
 ## Rendering (`_render_overlay`)
 

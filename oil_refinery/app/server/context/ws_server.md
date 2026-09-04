@@ -108,10 +108,30 @@ the connection. Only *this* message's tiles are worth spending queue/worker time
 else kept is passed to `classify_extent()` as best-effort "historical" tiles (cache-only, see
 `get_cached_only()`), not reprocessed.
 
-A new incoming message doesn't wait for the previous one's `classify_extent()` call to finish — it
-cancels it first (superseded: the previous report's still-unprocessed tiles are no longer the
-priority, though they're still part of `known_tiles` and will get requested again below) and
-prunes `tile_server`'s pending queue (throwing out not-yet-started *batch* work from the stale
-run — see `tile_server.DetectionQueue.clear_pending()` for why interactive/HTTP-backed jobs are
-deliberately spared from this prune) before starting a fresh task. There's always at most one
-classify task actively running/sending on this connection at a time.
+A genuinely new (non-empty) incoming message doesn't wait for the previous one's
+`classify_extent()` call to finish — it cancels it first (superseded: the previous report's
+still-unprocessed tiles are no longer the priority, though they're still part of `known_tiles` and
+will get requested again below) and prunes `tile_server`'s pending queue (throwing out
+not-yet-started *batch* work from the stale run — see `tile_server.DetectionQueue.clear_pending()`
+for why interactive/HTTP-backed jobs are deliberately spared from this prune) before starting a
+fresh task. There's always at most one classify task actively running/sending on this connection
+at a time.
+
+**An *empty*-tiles message (Map.tsx's movestart cancel) does not cancel a still-running task
+(fixed 2026-09-04).** `prune_pending()` still runs — that's the actual "stop wasting queue time on
+stale tiles" goal — but the loop then just `continue`s back to waiting for the next message,
+leaving the in-flight `classify_extent()`/`_send_result()` alone. Before this fix, the empty-tiles
+message went through the exact same cancel-then-restart path as a real report: it cancelled
+whatever was running (even if it was seconds away from finishing) and started a new, fast,
+essentially-empty `_send_result()` in its place. Since `SiteTracker` always re-reports *every*
+already-tracked site regardless of what a given round's fresh candidates were, that fast empty
+report could still carry a non-zero `siteCount` — just stale data from an earlier successful
+round, not the result of whatever the user was actually now looking at. Confirmed live: the
+backend really was finishing the work (the underlying per-tile jobs aren't affected by cancelling
+the *classify_extent* task that was awaiting them — see `tile_server.py`'s `_run_detection_batch`
+docs), it just never got a chance to report it, because an incidental `movestart` (which fires on
+almost any interaction, not just a deliberate "I'm done waiting" gesture) kept discarding the
+result moments before it would have been sent. This was the actual cause of "the site-boundary
+layer only updates after panning" — a separate bug from (and this fix predates) the raster-tile
+connection-starvation issue described in `tile_server.md`, which affected only the per-tile boxes,
+not the site polygon.

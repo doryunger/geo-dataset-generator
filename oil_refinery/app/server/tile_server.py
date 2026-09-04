@@ -499,11 +499,16 @@ async def prune_pending() -> None:
 
 
 @router.get("/api/detections/{z}/{x}/{y}")
-async def get_detections(z: int, x: int, y: int, request: Request):
+async def get_detections(z: int, x: int, y: int):
     if z != DETECT_ZOOM:
         return Response(content=TRANSPARENT_TILE_BYTES, media_type="image/png", headers={"Cache-Control": "no-store"})
-    result = await _ensure_processed(z, x, y, request)
-    return Response(content=result.image_bytes, media_type="image/png", headers={"Cache-Control": "no-store"})
+    tile_id = common.tile_id(z, x, y)
+    cached = _state["cache"].get(tile_id)
+    if cached is not None:
+        _state["stats"].cache_hits += 1
+        return Response(content=cached.image_bytes, media_type="image/png", headers={"Cache-Control": "no-store"})
+    get_or_process_detections(z, x, y)
+    return Response(content=TRANSPARENT_TILE_BYTES, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/stats")
