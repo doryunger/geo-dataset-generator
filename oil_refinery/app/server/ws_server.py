@@ -156,9 +156,20 @@ async def classify_extent(
     tracker: site_tracker.SiteTracker,
 ) -> dict:
     current_keys = _center_out_order(current_tiles) if current_tiles else []
+    t0 = time.monotonic()
+    if current_keys:
+        logger.info(
+            "classify_extent: waiting on %d tile(s): %s",
+            len(current_keys), [common.tile_id(z, x, y) for z, x, y in current_keys],
+        )
     results = await asyncio.gather(
         *(tile_server.get_or_process_detections(z, x, y) for z, x, y in current_keys)
     )
+    if current_keys:
+        logger.info(
+            "classify_extent: gather done, %d tile(s) in %.0fms",
+            len(current_keys), (time.monotonic() - t0) * 1000,
+        )
     detections_by_tile = {key: dets for key, dets in zip(current_keys, results) if dets}
 
     for z, x, y in historical_tiles:
@@ -176,7 +187,9 @@ async def _send_result(
     websocket: WebSocket, current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
     tracker: site_tracker.SiteTracker,
 ) -> None:
-    await websocket.send_json(await classify_extent(current_tiles, historical_tiles, tracker))
+    result = await classify_extent(current_tiles, historical_tiles, tracker)
+    await websocket.send_json(result)
+    logger.info("_send_result: sent %d site feature(s) to client", len(result["features"]))
 
 
 @router.websocket("/ws/extent")
