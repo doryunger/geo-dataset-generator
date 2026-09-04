@@ -15,15 +15,16 @@ expand only for something that genuinely needs the space (a real tradeoff, a bug
 
 ## The one thing that matters most right now: dataset size
 
-Every class here (fence especially) is trained on a tiny number of hand-labeled samples (fence
-was at 20, then 29, then 43 pieces as of 2026-08-16 — see `classes/<class>/samples.jsonl` for the
-current count). At this scale:
+Every class here is trained on a tiny number of hand-labeled samples (`distillation-column` at 50,
+`chimney` at 34 as of 2026-09-04 — see `classes/<class>/samples.jsonl` for the current count). At
+this scale:
 
 - Validation metrics (precision/recall/mAP50/mAP50-95) are **noisy, not signal**. A val split of
   4-9 images means one flipped detection swings a metric by 10-25 percentage points. Two training
-  runs on the same data can land far apart purely from random init/augmentation — this has
-  actually happened here (`fence_obb_v2` vs `fence_obb_v3`, same 20/29 samples, precision 0.32 vs
-  0.045).
+  runs on the same data can land far apart purely from random init/augmentation — this happened
+  during the now-discontinued `fence-face` work (`fence_obb_v2` vs `fence_obb_v3`, same 20/29
+  samples, precision 0.32 vs 0.045) and should be assumed possible for any class here until proven
+  otherwise.
 - Don't declare a technique "worked" or "failed" off one run's metrics at this sample count.
   Look for a consistent direction across 2+ runs, or just say plainly that it's inconclusive.
 - The highest-leverage thing to improve detection quality is still **more real labeled samples**,
@@ -33,6 +34,17 @@ current count). At this scale:
   it's obvious how much to trust the numbers.
 
 ## OBB training workflow (`scripts/obb.py`, `scripts/train_obb.py`)
+
+**Status (2026-09-04): `fence-face` is discontinued — no longer pursued, and no longer present
+under `classes/`.** Active custom-trained classes are the "compact/tactical" oil-refinery
+components: `distillation-column` and (newly added) `fan-unit`. `chimney` has a working
+custom-trained model (`classes/chimney/`, see the bug-fix note below), but the `oil_refinery`
+pipeline deliberately detects chimneys via DIOR's pretrained checkpoint instead, despite DIOR's
+chimney detections being far from perfect — see `oil_refinery/README.md`. The steps below (and
+the bend-splitting
+mechanism in step 2 specifically) were built out against fence's elongated-ribbon shapes; they
+still apply verbatim to any future elongated class, but none of the currently active classes are
+elongated, so step 2's bend/occlusion judgment call is currently moot in practice.
 
 1. New/edited samples go into `classes/<class>/samples.jsonl` via the `/manual` UI (`scripts/api.py`).
    Every create/edit/promote automatically renders a polygon-overlay image into
@@ -70,18 +82,20 @@ current count). At this scale:
 6. **Optional**: `python scripts/train_obb_kfold.py --class <class> --version vN --folds 5` trains
    N models, each with a different 1/N of *original samples* (not pieces) held out as val, and
    reports mean±std across folds instead of one run's number — a single split's number can be
-   meaningfully optimistic (`fence_obb_v6`: single-run mAP50-95 0.455, true k-fold mean 0.33±0.08,
-   confirmed 2026-08-16). Off by default (a 5-fold run is ~5x the cost of one training run) —
-   reach for it when a result needs to be trustworthy
+   meaningfully optimistic (seen on the now-discontinued `fence-face` class, `fence_obb_v6`:
+   single-run mAP50-95 0.455, true k-fold mean 0.33±0.08, confirmed 2026-08-16 — treat this as a
+   general warning that applies to any class here, not just that one). Off by default (a 5-fold
+   run is ~5x the cost of one training run) — reach for it when a result needs to be trustworthy
    enough to act on, not for every routine iteration. Folds split by original sample id
    specifically because `dataset_obb/` pieces of the same sample aren't independent — see
    `generate_obb_package`'s `val_ids` param and the module docstring on why the *pieces* count
    (hundreds) isn't the number that matters for generalization confidence, the *original sample*
-   count is (currently 29, ~27 of which are geographically distinct locations).
+   count is.
 
 Hard negatives (`--hard-negatives` flag / `HARD_NEGATIVE_TILES` in `obb.py`) are off by default —
-tried once at 13 positives + 6 negatives and it destabilized training (cls_loss spiked, real
-confidence collapsed). Revisit only once positives comfortably outnumber any negatives added.
+tried once on `fence-face` at 13 positives + 6 negatives and it destabilized training (cls_loss
+spiked, real confidence collapsed). Revisit only once positives comfortably outnumber any
+negatives added.
 
 **Compact/"tactical" classes (not elongated ribbons like fence)** — e.g. `distillation-column`,
 `chimney`, added 2026-09-02 for the `oil_refinery/` exploration — need a `subclass_graph.json`

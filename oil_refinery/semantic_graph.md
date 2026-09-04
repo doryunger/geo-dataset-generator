@@ -227,8 +227,8 @@ component type -> every site that has a `requires` edge to it.
   `README.md` — need calibration against real, known refineries before any of this is trustworthy,
   not just structurally sound. **This is an accepted, deliberate risk of the chosen approach, not
   a gap to patch by pulling in outside data sources** -- the point of this phase is to see what's
-  achievable with exactly the pretrained models actually available (DOTAv1 + DIOR for the first
-  slice below, and xView once trained), not to fuse in additional external data to
+  achievable with exactly the pretrained models actually available (DOTAv1 + DIOR), not to fuse
+  in additional external data to
   compensate. Calibration still means testing against known real refineries as ground truth (as
   already planned) -- that's validating the available models' own output against reality, not
   adding a third data source.
@@ -244,10 +244,21 @@ component type -> every site that has a `requires` edge to it.
 
 ## First slice: fuse the two pretrained checkpoints, no fixed component list
 
+**Update (2026-09-04): the "no custom-trained model" premise below is reversed.** No public
+pretrained model covers distillation columns or fan units, so this project now custom-labels and
+trains those two via `classes/<class>/` + `scripts/obb.py`/`train_obb.py` (see root `CLAUDE.md`
+and `oil_refinery/README.md`'s "Detection sourcing"). `chimney` stays the one exception in the
+other direction — a working custom-trained `classes/chimney/` model exists, but production
+detection deliberately uses DIOR's pretrained `chimney` class instead. The router/fuser/classifier
+design below was written against pretrained-only sourcing; wiring the new custom models into it
+(the router triggering them, the graph's `nodes` gaining `distillation-column`/`fan-unit` entries)
+hasn't been designed yet — read everything below as the pretrained-only baseline, not yet updated
+for the custom classes.
+
 What changed from the original plan is narrower than it might sound: **no custom-trained model at
 all**, not "only look for two specific components." This project doesn't label or train its own
 detection classes for oil-refinery components — it works entirely off pretrained checkpoints
-(DOTAv1, DIOR, and xView once trained), whatever component vocabulary those happen to cover. The
+(DOTAv1 and DIOR), whatever component vocabulary those happen to cover. The
 first slice runs the two pretrained checkpoints already in this repo (DOTAv1's
 `models/yolo11n-obb.pt`, DIOR's `models/DIOR_yolov8s_backbone.pt`), each triggered **unfiltered** —
 every class either model knows about, not a config-picked subset (see "Pipeline" below:
@@ -262,9 +273,8 @@ instead of a sketch.
 
 - **Any component neither pretrained checkpoint covers simply isn't part of the profile** — not a
   gap to fill with a custom-trained model, since that's not this project's approach. The profile's
-  `nodes` generalize to whatever classes the available pretrained models (currently DOTAv1 and
-  DIOR, xView once trained) actually produce; a component with no pretrained coverage anywhere just
-  doesn't exist for the graph.
+  `nodes` generalize to whatever classes the available pretrained models (DOTAv1 and DIOR) actually
+  produce; a component with no pretrained coverage anywhere just doesn't exist for the graph.
 - **The two checkpoints' full class lists overlap heavily on the refinery-relevant subset**, checked
   directly against each model's own `model.names`:
   | Concept | DOTAv1 (`yolo11n-obb.pt`) | DIOR (`DIOR_yolov8s_backbone.pt`) |
@@ -374,8 +384,10 @@ beyond that.
 
 ## Sequencing
 
-Nothing here waits on custom training -- this project doesn't label or train its own classes, so
-whatever DOTAv1/DIOR/xView don't cover simply isn't part of the profile, not a queued-up gap. The
+This section predates the 2026-09-04 reversal above (distillation-column/fan-unit are now
+custom-trained) and hasn't been revisited for it. As originally written: nothing here waits on
+custom training -- this project doesn't label or train its own classes, so whatever DOTAv1/DIOR
+don't cover simply isn't part of the profile, not a queued-up gap. The
 first slice above needs only the two pretrained checkpoints, which already exist -- so the three
 pipeline modules above (router, fuser, classifier) are the next concrete thing to build, in that
 order: the router's job is small and mostly already exists in
