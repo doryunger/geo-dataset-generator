@@ -175,6 +175,12 @@ class Job:
     request: Request | None  # None for a job queued on ws_server.py's behalf (see
     # get_or_process_detections) -- there's no per-tile HTTP request to go stale there, only the
     # websocket connection as a whole, which is a coarser concern this doesn't try to track
+    fetch_ms: float  # time common.fetch_tile took to return (0 if the tile was already on local
+    # disk) -- kept on the Job so _worker_loop can fold it into one end-to-end timing log alongside
+    # queue-wait and inference, since none of those three stages alone tells you which one is
+    # actually responsible when a tile feels slow
+    enqueued_at: float = field(repr=False)  # time.perf_counter() at push -- queue.pop() minus this
+    # is genuine queue-wait time, separate from and not covered by _run_detection's own inference_ms
     future: asyncio.Future = field(repr=False)
 
 
@@ -505,6 +511,7 @@ async def _worker_loop() -> None:
 
     while True:
         job = await queue.pop()
+        queue_wait_ms = (time.perf_counter() - job.enqueued_at) * 1000
 
         if await _job_stale(job):
             if not job.future.done():
@@ -523,7 +530,19 @@ async def _worker_loop() -> None:
             result = JobResult(image_bytes=overlay_bytes, cacheable=True, detections=detections)
         except Exception:
             logger.exception("Detection failed for tile %s", job.tile_id)
+            inference_ms = (time.perf_counter() - t0) * 1000
             result = JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False)
+
+        # Split out so a slow tile can be traced to its actual stage -- fetch (Mapbox network
+        # round-trip, 0 if the tile was already cached to disk), queue_wait (time sitting behind
+        # other jobs once WORKER_POOL_SIZE workers are all busy), or inference (_run_detection
+        # itself: GSD resample + both models + fuse + render). avg_inference_ms in /api/stats only
+        # ever covered the last of these, so a fetch- or queue-bound slowdown was invisible there.
+        logger.info(
+            "Tile %s timing: fetch=%.0fms queue_wait=%.0fms inference=%.0fms total=%.0fms",
+            job.tile_id, job.fetch_ms, queue_wait_ms, inference_ms,
+            job.fetch_ms + queue_wait_ms + inference_ms,
+        )
 
         if result.cacheable:
             cache[job.tile_id] = result
@@ -606,9 +625,14 @@ async def _ensure_processed(z: int, x: int, y: int, request: Request | None = No
     in_flight: dict = _state["in_flight"]
     job = in_flight.get(tile_id)
     if job is None:
+        t_fetch0 = time.perf_counter()
         tile_path = await loop.run_in_executor(None, common.fetch_tile, z, x, y)
+        fetch_ms = (time.perf_counter() - t_fetch0) * 1000
         image_bytes = tile_path.read_bytes()
-        job = Job(tile_id=tile_id, z=z, x=x, y=y, image_bytes=image_bytes, request=request, future=loop.create_future())
+        job = Job(
+            tile_id=tile_id, z=z, x=x, y=y, image_bytes=image_bytes, request=request,
+            fetch_ms=fetch_ms, enqueued_at=time.perf_counter(), future=loop.create_future(),
+        )
         in_flight[tile_id] = job
         evicted = await _state["queue"].push(job)
         stats: Stats = _state["stats"]
