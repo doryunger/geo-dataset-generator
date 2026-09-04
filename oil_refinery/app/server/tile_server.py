@@ -514,6 +514,16 @@ async def _worker_loop() -> None:
         queue_wait_ms = (time.perf_counter() - job.enqueued_at) * 1000
 
         if await _job_stale(job):
+            # Skipped before ever reaching _run_detection -- no inference happens and nothing gets
+            # cached, so this tile stays blank in the client's raster layer (a MapLibre raster
+            # source fetches a given tile URL once and keeps whatever it got back, even an empty
+            # response) until a *new* pan/zoom issues a fresh request for it. Logged so a long
+            # queue_wait (see the timing line below, which this job never reaches) can be directly
+            # tied to "and here's a tile that got thrown away because of it," rather than inferred.
+            logger.info(
+                "Tile %s dropped as stale after %.0fms queue_wait (client disconnected before a "
+                "worker reached it -- no inference ran, nothing cached)", job.tile_id, queue_wait_ms,
+            )
             if not job.future.done():
                 job.future.set_result(JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False))
             in_flight.pop(job.tile_id, None)
@@ -568,9 +578,20 @@ async def lifespan():
         # delete what the first thread had already removed. Forcing it here, once, single-threaded,
         # before any worker touches the model, means every real request afterward hits an
         # already-fused model and just reads -- safe to share across worker threads at that point.
+        #
+        # Warmed at MAX_PREDICT_IMGSZ, not a small placeholder size -- a real request's GSD-resampled
+        # tile runs at up to that size (see _run_detection's predict_imgsz), and the *first* call CUDA
+        # ever sees at a given size pays for kernel selection and growing the caching allocator's
+        # memory pool to fit it. A tiny warm-up image doesn't reserve that memory, so the pool still
+        # had to grow live -- and under WORKER_POOL_SIZE concurrent threads x len(MODELS) models all
+        # hitting that growth at once on first real traffic, allocator contention serializes badly.
+        # Confirmed live: logged per-tile timing on a fresh burst showed the first ~8 tiles at
+        # 1.6-5.8s inference each, dropping to 250-550ms by the rest of the same burst once the pool
+        # had already grown to fit. Warming once here, single-threaded, before any worker starts,
+        # pays that cost up front instead of against a live user's first pan.
         model.predict(
-            source=Image.new("RGB", (32, 32)), device=INFERENCE_DEVICE,
-            half=(INFERENCE_DEVICE == "cuda"), verbose=False,
+            source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
+            device=INFERENCE_DEVICE, half=(INFERENCE_DEVICE == "cuda"), verbose=False,
         )
         models[model_key] = model
     _state["models"] = models
