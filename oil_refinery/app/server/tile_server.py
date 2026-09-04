@@ -62,7 +62,8 @@ TILE_BATCH_SIZE = 8
 
 WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))
 
-_MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=max(2, WORKER_POOL_SIZE * len(model_router.MODELS)))
+_MODEL_EXECUTOR_SIZE = max(2, WORKER_POOL_SIZE * len(model_router.MODELS))
+_MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=_MODEL_EXECUTOR_SIZE)
 
 TILE_CACHE_CAPACITY = 300
 
@@ -409,6 +410,22 @@ async def lifespan():
             device=INFERENCE_DEVICE, quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
         )
         models[model_key] = model
+
+    if INFERENCE_DEVICE == "cuda":
+        warmup_image = Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ))
+        model_keys = list(model_router.MODELS)
+        logger.info("Warming up %d model-executor thread(s) on CUDA", _MODEL_EXECUTOR_SIZE)
+        warmup_futures = [
+            _MODEL_EXECUTOR.submit(
+                models[model_keys[i % len(model_keys)]].predict,
+                source=warmup_image, imgsz=MAX_PREDICT_IMGSZ, device=INFERENCE_DEVICE,
+                quantize=16, verbose=False,
+            )
+            for i in range(_MODEL_EXECUTOR_SIZE)
+        ]
+        for future in warmup_futures:
+            future.result()
+
     _state["models"] = models
     _state["queue"] = DetectionQueue(QUEUE_CAPACITY, QUEUE_TRIM_TO)
     _state["in_flight"] = {}

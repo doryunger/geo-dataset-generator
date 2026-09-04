@@ -223,6 +223,26 @@ On CPU, each worker's own inference call otherwise defaults to using every core 
 `torch.set_num_threads` by `WORKER_POOL_SIZE` gives each worker a fair share instead — still a
 placeholder split, worth measuring against a given machine's real core count.
 
+**A second, distinct warm-up gap, fixed 2026-09-04**: the warm-up call above runs directly on the
+main event-loop thread (inside this `async def lifespan()`), but every *real* inference call goes
+through `_MODEL_EXECUTOR.submit(...)` — its own separate pool of worker OS threads, created lazily
+and never touched by the main-thread warm-up at all. CUDA's driver does real, non-trivial
+per-host-thread setup the first time a given thread makes a CUDA call, even within an
+already-initialized process — so on CUDA, each of `_MODEL_EXECUTOR`'s worker threads independently
+paid that cost the first time it happened to pick up a real task, which is exactly the "first
+several tiles slow, then fast" pattern seen even after the single-threaded warm-up above was
+already in place. Fixed by additionally submitting `_MODEL_EXECUTOR_SIZE` warm-up predict() calls
+through `_MODEL_EXECUTOR` itself (cycling across `model_router.MODELS`), forcing every thread slot
+the pool will ever use to make its first CUDA call before real traffic arrives, gated to
+`INFERENCE_DEVICE == "cuda"` only (CPU has no equivalent per-thread driver handshake). This relies
+on each warm-up call taking long enough that `ThreadPoolExecutor` is forced to spin up a new thread
+for the next submission rather than reusing one that already went idle — confirmed directly: a
+trivial near-instant warm-up task gets absorbed by a single reused thread (`submit()`'s internal
+idle-semaphore check finds an idle thread available by the time the next task is submitted), while
+a realistic-duration task (verified with a 0.3s stand-in) reliably spreads across every distinct
+pool thread. A real `MAX_PREDICT_IMGSZ` predict() call is comfortably slow enough for this to hold
+in practice.
+
 ## `_ensure_processed()`
 
 Cache hit → return it immediately. Cache miss → fetch + push through the one serialized queue and
