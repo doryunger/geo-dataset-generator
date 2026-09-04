@@ -6,7 +6,7 @@
       "default_max_distance_m": 600,
       "default_min_distance_m": 0,
       "default_boost": 0.1,
-      "merge_distance_m": 200
+      "merge_distance_m": 600
     },
 
     "storage tank": { "kind": "component" },
