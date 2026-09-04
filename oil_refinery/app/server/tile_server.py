@@ -429,26 +429,50 @@ def _run_detection(image_bytes: bytes, z: int, x: int, y: int) -> tuple[bytes, l
     futures = [_MODEL_EXECUTOR.submit(_predict_one, mk, st) for mk, st in zip(triggered_models, streams)]
 
     raw_detections: list[dict] = []
+    per_model_counts: dict[str, dict[str, int]] = {}
     for future in futures:
         model_key, r = future.result()
         if r.obb is None or len(r.obb) == 0:
+            per_model_counts[model_key] = {}
             continue
+        model_counts: dict[str, int] = {}
         for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
+            class_name = r.names[int(cls_id)]
+            model_counts[class_name] = model_counts.get(class_name, 0) + 1
             corners = [(p[0] * scale_back_x, p[1] * scale_back_y) for p in xy]
             cx = sum(p[0] for p in corners) / 4
             cy = sum(p[1] for p in corners) / 4
             raw_detections.append({
                 "tile_id": tile_id,
                 "model": model_key,
-                "class_name": r.names[int(cls_id)],
+                "class_name": class_name,
                 "corners": corners,
                 "confidence": conf,
                 # global pixel space, not lon/lat -- see geometry.py's module docstring
                 "centroid_px_global": geometry.global_pixel(x, y, cx, cy),
             })
+        per_model_counts[model_key] = model_counts
 
-    detections = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
-    detections = [d for d in detections if _is_graph_relevant(d)]
+    # Logged unconditionally (one line per processed tile, INFO level) so a model that's silently
+    # never contributing anything -- as opposed to contributing but getting fused away or filtered
+    # below -- shows up directly in logs/app.log instead of only being inferrable indirectly from
+    # the final rendered overlay. "none" (rather than an empty {}) makes a zero-detection model
+    # grep-able on its own (`grep 'DIOR.*none' logs/app.log`) without parsing the dict shape.
+    logger.info(
+        "Tile %s raw detections by model: %s", tile_id,
+        {mk: (counts or "none") for mk, counts in per_model_counts.items()},
+    )
+
+    fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
+    detections = [d for d in fused if _is_graph_relevant(d)]
+    if len(detections) != len(fused):
+        dropped = [d for d in fused if not _is_graph_relevant(d)]
+        logger.info(
+            "Tile %s dropped %d fused detection(s) as graph-irrelevant (class not in semantic "
+            "graph, or below its required-edge confidence floor): %s",
+            tile_id, len(dropped),
+            [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
+        )
 
     overlay_bytes = _render_overlay((native_w, native_h), detections)
     return overlay_bytes, detections

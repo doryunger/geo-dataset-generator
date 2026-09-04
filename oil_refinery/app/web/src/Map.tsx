@@ -140,12 +140,25 @@ export default function Map() {
             type: 'raster',
             tiles: ['/api/tile/{z}/{x}/{y}'],
             tileSize: 512,
+            // Capped at DETECT_ZOOM so MapLibre stops requesting new tiles past it and instead
+            // scales up the last-fetched DETECT_ZOOM tile (standard TileJSON overzoom behavior) --
+            // matches the 'detections' source's cap below so the two layers stay pixel-aligned at
+            // every zoom, and specifically avoids ever fetching a native-resolution tile above
+            // DETECT_ZOOM that the (capped) detections overlay can no longer line boxes up against.
+            maxzoom: DETECT_ZOOM,
             attribution: '© Mapbox',
           },
           detections: {
             type: 'raster',
             tiles: ['/api/detections/{z}/{x}/{y}'],
             tileSize: 512,
+            // Same cap as 'basemap' above -- without it, MapLibre requests /api/detections tiles
+            // above DETECT_ZOOM, which the server always answers transparent (tile_server.py's
+            // get_detections), so zooming in past DETECT_ZOOM used to make every detection box
+            // silently disappear. Capping here means MapLibre instead upscales the last real
+            // DETECT_ZOOM overlay it already has, so the boxes stay visible (just blockier) instead
+            // of vanishing.
+            maxzoom: DETECT_ZOOM,
           },
         },
         layers: [
