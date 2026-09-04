@@ -61,16 +61,20 @@ function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
 // covers and expanding it to every descendant (which would include plenty of ground nowhere near
 // the screen whenever a displayed-zoom tile only partially overlaps the viewport's edge).
 //
-// Bounds are shrunk by viewportTrimFraction(map.getZoom()) first -- an even margin trimmed off
-// each side, not the whole box scaled from a corner -- so the skipped strip stays centered around
-// the edges the user is least likely to be looking directly at.
-function visibleDetectZoomTiles(map: maplibregl.Map): { x: number; y: number }[] {
+// Bounds are shrunk by `trimFraction` first (defaults to viewportTrimFraction(map.getZoom()) when
+// not given explicitly) -- an even margin trimmed off each side, not the whole box scaled from a
+// corner -- so the skipped strip stays centered around the edges the user is least likely to be
+// looking directly at. Passing 0 explicitly gets the untrimmed full viewport -- see the two-stage
+// send in the component below (trimmed first, then a full-coverage follow-up).
+function visibleDetectZoomTiles(
+  map: maplibregl.Map, trimFraction: number = viewportTrimFraction(map.getZoom()),
+): { x: number; y: number }[] {
   const bounds = map.getBounds()
   const west = bounds.getWest()
   const east = bounds.getEast()
   const south = bounds.getSouth()
   const north = bounds.getNorth()
-  const trim = viewportTrimFraction(map.getZoom()) / 2
+  const trim = trimFraction / 2
   const lonInset = (east - west) * trim
   const latInset = (north - south) * trim
 
@@ -189,22 +193,52 @@ export default function Map() {
     // fail to fire at all even once every tile request has genuinely completed (reproduced in headless
     // Chromium -- 'load' and every network request settled, 'idle' never did) -- too fragile a signal
     // to be the only thing keeping the live view in sync with what's actually been detected.
+    // Set right before sending the *trimmed* tile list below, cleared either by the matching
+    // follow-up firing (see onResult below) or by movestart (see its own handler) -- guards against
+    // treating some later, unrelated result (e.g. movestart's own empty-tiles cancel response) as
+    // "the trimmed stage just finished, send the full one now."
+    let pendingFullFollowUp = false
+
     const socket = new ExtentSocket((result) => {
       setSites(result)
       const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
       const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
       boundariesSource?.setData(result)
       labelsSource?.setData(labelsFrom(result))
+
+      // Two-stage load: the trimmed request above gets the fast, most-likely-relevant tiles drawn
+      // first; once that's back, follow up with the *untrimmed* full viewport so the skipped edge
+      // margin still gets covered, just a little later rather than never. Cheap to do this way
+      // instead of computing just the missing outer ring -- the inner tiles this re-requests are
+      // already in tile_server's cache (TILE_CACHE_CAPACITY), so only the genuinely new margin
+      // tiles cost any real inference time.
+      if (pendingFullFollowUp) {
+        pendingFullFollowUp = false
+        const fullTiles = visibleDetectZoomTiles(map, 0)
+        if (fullTiles.length > 0) socket.send(DETECT_ZOOM, fullTiles)
+      }
     })
 
     const updateExtent = () => {
       if (map.getZoom() < MIN_DETECT_ZOOM) return
       const tiles = visibleDetectZoomTiles(map)
       if (tiles.length === 0) return
+      pendingFullFollowUp = true
       socket.send(DETECT_ZOOM, tiles)
     }
-    map.on('load', updateExtent)
-    map.on('moveend', updateExtent)
+
+    // moveend fires once a single gesture (or its momentum) has fully settled, but several
+    // separate short gestures in a row (e.g. a few quick individual pans) each fire their own --
+    // a short debounce here means only the last one in a quick burst actually triggers a request,
+    // instead of firing (and then immediately cancelling, via movestart on the next one) a full
+    // two-stage load for a view the user was never actually going to stay on.
+    let moveEndDebounceTimer: ReturnType<typeof setTimeout> | undefined
+    let sourcedataDebounceTimer: ReturnType<typeof setTimeout> | undefined
+    map.on('load', updateExtent) // first load: no burst to debounce, fire immediately
+    map.on('moveend', () => {
+      clearTimeout(moveEndDebounceTimer)
+      moveEndDebounceTimer = setTimeout(updateExtent, 300)
+    })
 
     // As soon as a new gesture starts, tell the server to drop whatever it queued for the view
     // we're about to leave -- ws_server.py already cancels the in-flight classify task and prunes
@@ -216,18 +250,28 @@ export default function Map() {
     // cancel-then-prune sequence still runs immediately. Jobs a worker had *already* started
     // can't be cheaply cancelled either way (see DetectionQueue.clear_pending()'s docstring) --
     // this only stops queued-but-not-yet-started work from piling up further, it doesn't abort
-    // GPU calls already in flight.
-    map.on('movestart', () => socket.send(DETECT_ZOOM, []))
+    // GPU calls already in flight. Also clears pendingFullFollowUp -- this message's own response
+    // will reach onResult like any other, and without clearing the flag first it would be
+    // misread as "the trimmed stage just finished," firing a full-coverage follow-up for a view
+    // the user is already leaving. Also clears both debounce timers below -- a gesture starting
+    // means any not-yet-fired debounced updateExtent() call is for a view already being left, same
+    // reasoning as the empty-tiles send itself.
+    map.on('movestart', () => {
+      pendingFullFollowUp = false
+      clearTimeout(moveEndDebounceTimer)
+      clearTimeout(sourcedataDebounceTimer)
+      socket.send(DETECT_ZOOM, [])
+    })
 
-    let debounceTimer: ReturnType<typeof setTimeout> | undefined
     map.on('sourcedata', (e) => {
       if (e.sourceId !== 'detections' || !e.isSourceLoaded) return
-      clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(updateExtent, 300)
+      clearTimeout(sourcedataDebounceTimer)
+      sourcedataDebounceTimer = setTimeout(updateExtent, 300)
     })
 
     return () => {
-      clearTimeout(debounceTimer)
+      clearTimeout(moveEndDebounceTimer)
+      clearTimeout(sourcedataDebounceTimer)
       socket.close()
       map.remove()
     }
