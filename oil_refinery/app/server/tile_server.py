@@ -187,9 +187,22 @@ class Job:
     x: int
     y: int
     image_bytes: bytes
-    request: Request | None  # None for a job queued on ws_server.py's behalf (see
-    # get_or_process_detections) -- there's no per-tile HTTP request to go stale there, only the
-    # websocket connection as a whole, which is a coarser concern this doesn't try to track
+    request: Request | None  # the *original* creator's request -- None if that was ws_server.py
+    # (see get_or_process_detections), a real Request if it was an HTTP /api/detections caller.
+    # Only ever used for _job_stale's is_disconnected() check against that one original caller --
+    # NOT a reliable signal for "does any live HTTP request depend on this job" once a second
+    # caller can join the same in-flight job afterward (see _ensure_processed and
+    # has_interactive_request below); a websocket connection as a whole is a coarser staleness
+    # concern this doesn't try to track per-job either way.
+    has_interactive_request: bool  # True if *any* caller of this job -- the original creator or a
+    # later one joining the same in-flight job (_ensure_processed) -- had a real HTTP request. The
+    # websocket flow (get_or_process_detections) and MapLibre's own /api/detections fetch for the
+    # same tile are typically triggered by the same moveend and often race to create this Job; if
+    # the websocket call happens to win, `request` alone would misreport this job as having no live
+    # HTTP interest even though one joins moments later. DetectionQueue.clear_pending() must key off
+    # this field, not `request`, or it can still prune a tile a real browser connection is waiting
+    # on -- confirmed live: this was the remaining cause of "detections layer only updates after
+    # panning" surviving the first prune fix (which filtered on `request is None` directly).
     fetch_ms: float  # time common.fetch_tile took to return (0 if the tile was already on local
     # disk) -- kept on the Job so _worker_loop can fold it into one end-to-end timing log alongside
     # queue-wait and inference, since none of those three stages alone tells you which one is
@@ -240,7 +253,7 @@ class DetectionQueue:
                 n_to_drop = len(self._items) - self._trim_to
                 kept: list[Job] = []
                 for j in self._items:
-                    if len(evicted) < n_to_drop and j.request is not None:
+                    if len(evicted) < n_to_drop and j.has_interactive_request:
                         evicted.append(j)
                     else:
                         kept.append(j)
@@ -260,28 +273,37 @@ class DetectionQueue:
             return batch
 
     async def clear_pending(self) -> list[Job]:
-        """Atomically removes every not-yet-started *batch* job (Job.request is None -- queued on
-        ws_server.py's behalf, see get_or_process_detections) still sitting in the queue. Returns
-        what was removed, so the caller can resolve those jobs' futures and clean up in_flight --
-        this is a deliberate, wholesale supersession (see tile_server.prune_pending(), called once
-        per new extent report in ws_server.py, including a movestart's empty-tiles cancel message),
-        mirroring push()'s blind capacity eviction above but in the opposite direction: that one
-        only ever evicts *interactive* jobs (a live HTTP request) because dropping a batch job there
-        would be arbitrary; this one only ever removes batch jobs, because those are what a newer
-        live-view report actually supersedes -- a still-queued *interactive* job (Job.request is not
-        None) is a live browser's own /api/detections fetch for a tile MapLibre may still be
-        displaying, regardless of what the site-classification websocket state does, and dropping it
-        used to resolve that fetch with a permanent, non-cacheable blank PNG. Since MapLibre only
-        ever fetches a given tile URL once and keeps whatever response it got (even an empty one),
-        that tile then stayed blank until a *later* pan/zoom happened to re-request it -- confirmed
-        live as the actual cause of "the detections layer only updates after panning": the pan
-        wasn't triggering the layer, it was destroying the pending work for the still-static view and
-        replacing it with a fresh, smaller batch that happened to finish before the next gesture
-        pruned it too. A job already popped and actively running in the executor is untouched either
-        way -- it can't be cheaply cancelled."""
+        """Atomically removes every not-yet-started *batch* job (not has_interactive_request --
+        queued on ws_server.py's behalf, see get_or_process_detections, and never joined by a real
+        HTTP caller either) still sitting in the queue. Returns what was removed, so the caller can
+        resolve those jobs' futures and clean up in_flight -- this is a deliberate, wholesale
+        supersession (see tile_server.prune_pending(), called once per new extent report in
+        ws_server.py, including a movestart's empty-tiles cancel message), mirroring push()'s blind
+        capacity eviction above but in the opposite direction: that one only ever evicts
+        *interactive* jobs (a live HTTP request) because dropping a batch job there would be
+        arbitrary; this one only ever removes batch jobs, because those are what a newer live-view
+        report actually supersedes -- a still-queued interactive job is a live browser's own
+        /api/detections fetch for a tile MapLibre may still be displaying, regardless of what the
+        site-classification websocket state does, and dropping it used to resolve that fetch with a
+        permanent, non-cacheable blank PNG. Since MapLibre only ever fetches a given tile URL once
+        and keeps whatever response it got (even an empty one), that tile then stayed blank until a
+        *later* pan/zoom happened to re-request it -- confirmed live as the actual cause of "the
+        detections layer only updates after panning": the pan wasn't triggering the layer, it was
+        destroying the pending work for the still-static view and replacing it with a fresh, smaller
+        batch that happened to finish before the next gesture pruned it too.
+
+        Filters on has_interactive_request specifically, not Job.request is None -- the websocket
+        flow and MapLibre's own tile fetch for the same tile typically race to create this Job
+        (both stem from the same moveend), and if the websocket call wins that race, Job.request
+        alone would still misreport this job as batch-only even though an HTTP caller joins moments
+        later. Confirmed live: this was the gap that let the "layer only updates after panning"
+        symptom survive the first version of this fix, which filtered on Job.request directly.
+
+        A job already popped and actively running in the executor is untouched either way -- it
+        can't be cheaply cancelled."""
         async with self._condition:
-            removed = [job for job in self._items if job.request is None]
-            self._items = [job for job in self._items if job.request is not None]
+            removed = [job for job in self._items if not job.has_interactive_request]
+            self._items = [job for job in self._items if job.has_interactive_request]
             return removed
 
     def __len__(self) -> int:
@@ -729,9 +751,17 @@ async def _ensure_processed(z: int, x: int, y: int, request: Request | None = No
         image_bytes = tile_path.read_bytes()
         job = Job(
             tile_id=tile_id, z=z, x=x, y=y, image_bytes=image_bytes, request=request,
+            has_interactive_request=(request is not None),
             fetch_ms=fetch_ms, enqueued_at=time.perf_counter(), future=loop.create_future(),
         )
         in_flight[tile_id] = job
+    elif request is not None:
+        # A second caller joining an already-in-flight job -- typically MapLibre's own HTTP tile
+        # fetch arriving moments after ws_server.py's websocket flow already created this Job for
+        # the same tile (or vice versa). Widen has_interactive_request rather than leaving it as
+        # whatever the *original* creator happened to be -- see Job's own docstring for why this
+        # matters to clear_pending().
+        job.has_interactive_request = True
         evicted = await _state["queue"].push(job)
         stats: Stats = _state["stats"]
         for ev_job in evicted:
