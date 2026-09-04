@@ -6,6 +6,15 @@ below for why the data flow is split this way.
 
 ## Zoom/viewport constants
 
+- `MIN_VISIBLE_ZOOM = 12` — every layer (`basemap`, `detections`, `site-fill`, `site-outline`,
+  `site-label`) carries this as its own `minzoom`, so nothing renders below it — a purely visual
+  floor (MapLibre's per-layer `minzoom`, not a source-level or network-level gate), independent of
+  `MIN_DETECT_ZOOM` below. The two are deliberately different numbers for different reasons: this
+  one is about when the page looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is
+  about when it's worth spending backend queue/worker time. `basemap`/`detections`'s tile *fetches*
+  still happen below this zoom if MapLibre would otherwise request them (the `minzoom` gate is
+  render-only) -- not worth adding a fetch-level gate too given `MIN_DETECT_ZOOM` already keeps
+  real detection work from starting this low regardless.
 - `MIN_DETECT_ZOOM = 15` — the floor below which nothing here does anything at all, not even
   reporting a live view. Deliberately below the server's `DETECT_ZOOM` (`tile_server.py`,
   currently 17), not equal to it: the live view still always resolves to `DETECT_ZOOM` tiles
@@ -197,4 +206,10 @@ label text ever appeared until this was added).
 
 One Point feature per site (at its label point) derived from the polygon FeatureCollection the
 server sends — a symbol layer needs its own point source, it can't place text from a Polygon
-source's vertices.
+source's vertices. Also where `formatSiteName()` is applied (underscore-to-space, e.g.
+`"oil_refinery"` -> `"oil refinery"`) for the map's own label text -- the info panel applies the
+same function separately at render time, since it reads `properties.site` directly off the raw
+`sites` FeatureCollection rather than through `labelsFrom()`. The underlying `site` value itself is
+never reformatted in the Redux store or sent back to the server anywhere, since it's also used as
+an identifier (matched against `semantic_graph.json` node names) -- this is purely a display-time
+transform, applied at the two places text actually reaches the screen.

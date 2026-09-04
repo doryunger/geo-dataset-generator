@@ -11,6 +11,11 @@ import {
 const MIN_DETECT_ZOOM = 15
 const DETECT_ZOOM = 17
 const MAX_VIEWPORT_TRIM = 0.3
+const MIN_VISIBLE_ZOOM = 12
+
+function formatSiteName(site: string): string {
+  return site.replace(/_/g, ' ')
+}
 
 function viewportTrimFraction(displayedZoom: number): number {
   const maxGap = DETECT_ZOOM - MIN_DETECT_ZOOM
@@ -74,7 +79,7 @@ function labelsFrom(fc: SiteFeatureCollection): LabelFeatureCollection {
     features: fc.features.map((f) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [f.properties.label_lon, f.properties.label_lat] },
-      properties: f.properties,
+      properties: { ...f.properties, site: formatSiteName(f.properties.site) },
     })),
   }
 }
@@ -123,8 +128,8 @@ export default function Map() {
           },
         },
         layers: [
-          { id: 'basemap', type: 'raster', source: 'basemap' },
-          { id: 'detections', type: 'raster', source: 'detections' },
+          { id: 'basemap', type: 'raster', source: 'basemap', minzoom: MIN_VISIBLE_ZOOM },
+          { id: 'detections', type: 'raster', source: 'detections', minzoom: MIN_VISIBLE_ZOOM },
         ],
       },
       center: INITIAL_CENTER,
@@ -227,16 +232,16 @@ export default function Map() {
     if (!isMapLoaded || !map) return
     map.addSource('site-boundaries', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
     map.addLayer({
-      id: 'site-fill', type: 'fill', source: 'site-boundaries',
-      paint: { 'fill-color': '#ffee00', 'fill-opacity': 0.55 },
+      id: 'site-fill', type: 'fill', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
+      paint: { 'fill-color': '#ffee00', 'fill-opacity': 0.15 },
     })
     map.addLayer({
-      id: 'site-outline', type: 'line', source: 'site-boundaries',
+      id: 'site-outline', type: 'line', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
       paint: { 'line-color': '#ff00aa', 'line-width': 4 },
     })
     map.addSource('site-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })
     map.addLayer({
-      id: 'site-label', type: 'symbol', source: 'site-labels',
+      id: 'site-label', type: 'symbol', source: 'site-labels', minzoom: MIN_VISIBLE_ZOOM,
       layout: { 'text-field': ['get', 'site'], 'text-size': 16, 'text-font': ['Open Sans Semibold'] },
       paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.5 },
     })
@@ -284,7 +289,7 @@ export default function Map() {
         >
           {sites.features.map((f, i) => (
             <div key={i} style={{ marginBottom: i < sites.features.length - 1 ? 8 : 0 }}>
-              <div style={{ fontWeight: 'bold' }}>{f.properties.site}</div>
+              <div style={{ fontWeight: 'bold' }}>{formatSiteName(f.properties.site)}</div>
               <div>coverage: {(f.properties.type_coverage_ratio * 100).toFixed(0)}%</div>
               <div>components: {f.properties.component_count}</div>
               <div style={{ opacity: 0.8 }}>{f.properties.matched_types.join(', ')}</div>
