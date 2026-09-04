@@ -1,28 +1,8 @@
-"""Fuses one tile's raw per-model detections into one deduplicated list -- see
-oil_refinery/semantic_graph.md's "Pipeline: model router, fuser, classifier". Dedup only: this
-module never computes centroid distance or evaluates proximity -- that's the classifier's job
-against the semantic graph (site_graph.py). All this does is spot two detections (possibly from
-different models) that describe the same real-world object and collapse them to one.
-
-Two overlapping detections are only collapsed when their labels also read as the same underlying
-concept (a fuzzy substring match, see same_concept) -- overlap alone isn't evidence of duplication,
-since a class describing a large area (e.g. "harbor") will legitimately contain many distinct
-smaller objects. When they are collapsed: the higher-confidence detection's geometry/confidence
-survives (ties go to CANONICAL_MODEL), and -- independently -- the merged detection is always
-labeled with CANONICAL_MODEL's own class name for that concept when one exists in the group,
-regardless of which detection actually had the higher confidence. Without that fixed canonical
-label, the same real concept could surface under two different label strings on different tiles
-(whichever model happened to win that particular instance) and fragment the classifier's per-type
-counts. A concept with no CANONICAL_MODEL detection in the group at all keeps whichever label did
-survive -- there's no canonical convention to defer to.
-"""
 import re
 
 from shapely.geometry import Polygon
 
-IOU_MERGE_THRESHOLD = 0.3  # placeholder pending calibration, same caveat as every other number in
-# oil_refinery/semantic_graph.md -- two detections overlapping at least this much (on their oriented
-# boxes) are candidates for being the same real-world object, subject to same_concept() too
+IOU_MERGE_THRESHOLD = 0.3
 
 
 def _normalize(label: str) -> str:
@@ -30,14 +10,6 @@ def _normalize(label: str) -> str:
 
 
 def same_concept(a: str, b: str) -> bool:
-    """Fuzzy "same real-world concept" check -- whitespace/hyphen-insensitive substring match, so
-    e.g. a model's raw "storagetank" and another's "storage tank" read as the same thing. Public
-    (not `_`-prefixed) because tile_server.py's _is_graph_relevant also needs it: the semantic
-    graph's node names only match a *canonical* model's own label exactly, so a class this same
-    function already treats as a duplicate during fusion must be treated as a match there too --
-    otherwise a detection that never got IoU-merged with a canonically-labeled one (nothing nearby
-    to merge with) keeps its own model's raw spelling and an exact-string graph lookup silently
-    drops it even at high confidence."""
     na, nb = _normalize(a), _normalize(b)
     return na in nb or nb in na
 
@@ -70,15 +42,6 @@ class _UnionFind:
 
 
 def fuse(detections: list[dict], canonical_model: str) -> list[dict]:
-    """detections: each a dict with "tile_id", "model", "class_name", "confidence", "corners"
-    (a list of 4 (x, y) tile-pixel points). Every detection must share the same "tile_id" -- refuses
-    to mix detections from different tiles (a correctness guard for a future concurrent worker, not
-    expected to trip today since tiles are processed one at a time serially).
-
-    Returns a same-shaped list with overlapping same-concept detections collapsed to one -- fewer
-    entries than went in whenever a duplicate was found, same entries otherwise. Every field from
-    the surviving detection passes through unchanged except "class_name", which may be swapped for
-    canonical_model's own label (see module docstring)."""
     if not detections:
         return []
 

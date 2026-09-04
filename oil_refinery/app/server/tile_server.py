@@ -1,35 +1,3 @@
-"""Raster tile serving + detection inference -- the request/response half of this app. Owns the
-one serialized CPU-bound inference queue and the tile-result cache; server.py mounts this module's
-router alongside ws_server.py's, but the two don't share internals -- ws_server.py only ever calls
-get_or_process_detections() below, never reaches into this module's own state directly. Kept
-separate on purpose (see semantic_graph.md's "Pipeline"): this module is what actually talks to the
-models and the queue; ws_server.py just asks it for a tile's detections (processing it on demand if
-they aren't already cached) and does its own thing with the result over a long-lived websocket
-connection -- different enough operating models that mixing them into one file was making both
-harder to follow.
-
-Model-agnostic by design: what to detect is driven entirely by config.json's "models" list (see
-model_router.py), not hardcoded to one model/class. Every configured model runs against every
-detected tile, completely unfiltered -- no per-model class restriction, model_router.py only ever
-decides *which models* run, never which classes within them. Their raw detections are pooled and
-deduplicated by fuser.py, then narrowed to whatever's actually relevant to the semantic graph
-(_is_graph_relevant() below) before rendering *or* caching -- a class the graph doesn't care about
-at all (a stray "dam" or "vehicle"), or one below every site's confidence floor for it, is dropped
-rather than drawn as clutter or carried into what the classifier later reads back out of the cache.
-
-Two independent raster tile endpoints, stacked as two MapLibre sources on the frontend:
-  - GET /api/tile/{z}/{x}/{y}        base satellite imagery, always fast, never waits on detection
-  - GET /api/detections/{z}/{x}/{y}  transparent-background PNG with just the boxes+labels baked
-                                      in (empty/see-through where there's nothing to show), so the
-                                      base layer is never held up by how long detection takes --
-                                      it's always visible immediately, and boxes pop in on top
-                                      once each tile's detection finishes.
-Baked-image output (rather than structured GeoJSON) is still a deliberate first-iteration
-simplicity tradeoff -- see oil_refinery/app's plan for why.
-
-MapLibre's own raster tile loading (fetch tiles covering the viewport, cache them, abort in-flight
-fetches for tiles that scroll out of view) is the entire trigger mechanism for both sources.
-"""
 import asyncio
 import io
 import logging
@@ -61,30 +29,10 @@ import site_graph  # noqa: E402
 common.setup_logging()
 logger = logging.getLogger(__name__)
 
-MIN_DETECT_ZOOM: int = model_router.MIN_DETECT_ZOOM  # the floor below which nothing in this app
-# does anything at all -- enforced by the frontend (it never even reports a live view below this),
-# not by anything here
+MIN_DETECT_ZOOM: int = model_router.MIN_DETECT_ZOOM
 
-DETECT_ZOOM = 17  # the *only* zoom real inference ever runs at -- moved back down from 16 to 17
-# (2026-09-03, same day it was raised) to cut the ~2,912px z16 GSD-normalized resample to z17's
-# ~1,456px, roughly a 4x cheaper per-tile inference cost -- reopens the earlier tradeoff (4x less
-# ground per tile means 4x more tiles for the same real-world area), accepted here in exchange for
-# lower per-tile latency. A viewport-coverage trim was tried as the mitigation for the resulting
-# tile-count increase and reverted -- Map.tsx's movestart handler (drop queued/pending work the
-# instant a new gesture starts, see its own comment) covers the same wasted-work concern instead,
-# without permanently losing coverage at the screen's edges.
-# Both raster endpoints below only ever do real work at exactly this zoom; ws_server.py is
-# responsible for translating whatever zoom the user is actually viewing into the DETECT_ZOOM
-# tile(s) that cover the same ground before asking this
-# module for anything.
+DETECT_ZOOM = 17
 
-# Loaded here too, not shared with ws_server.py's own copy -- each module owns its own logic (see
-# this module's docstring), and this is only ever used to decide what's worth keeping after the
-# fuser runs, never for actual site classification (that stays entirely ws_server.py's job). Any
-# fused detection whose class isn't one of the graph's own components, or whose confidence doesn't
-# clear that component's own requires-edge floor at every site that references it, is dropped before
-# it's drawn *or* cached -- it was never going to contribute to a match, so there's no reason to draw
-# it as clutter or carry it into the cache classify() later reads from.
 _GRAPH: dict = site_graph.load_graph()
 _COMPONENT_MIN_CONFIDENCE: dict[str, float] = {}
 for _edge in _GRAPH["edges"]:
@@ -95,82 +43,31 @@ for _edge in _GRAPH["edges"]:
 
 
 def _is_graph_relevant(det: dict) -> bool:
-    """Fuzzy-matches det's class_name against the graph's component names (fuser.same_concept,
-    the same whitespace/hyphen-insensitive check fuser.py itself uses to dedup), not an exact
-    dict-key lookup -- a detection only ever gets fuser's canonical-model label rewrite when it
-    gets IoU-merged with a canonically-labeled detection; a standalone same-concept detection (e.g.
-    a solo DIOR "storagetank" with nothing nearby to merge with) otherwise keeps its own model's
-    raw spelling, and an exact lookup against the graph's "storage tank" node would silently drop
-    it regardless of confidence. Confirmed live: a solo DIOR "storagetank" at 0.879 confidence,
-    well above its component's 0.75 floor, was being dropped this way before this fix."""
     return any(
         fuser.same_concept(det["class_name"], component) and det["confidence"] >= floor
         for component, floor in _COMPONENT_MIN_CONFIDENCE.items()
     )
 
-CONF_THRESHOLD = 0.15  # matches the threshold already used for the pretrained checkpoint in
-# probe_pretrained.py; not yet re-tuned for this repo's own (much higher precision/recall) models
 
-MAX_PREDICT_IMGSZ = 3072  # safety cap on the GSD-normalized input size (see _run_detection_batch) -- was
-# 1536 (the ~1,456px z17 needed), raised to cover z16's ~2,912px resample (DETECT_ZOOM moved down to
-# 16, 2026-09-03; a deliberate slower-per-tile/fewer-tiles tradeoff). z15 and below still need more
-# than this (a ~5,823px resample at z15) and stay impractical. Still enforced here as a real safety
-# net, not just documentation, in case DETECT_ZOOM above is ever changed without checking this math
-# again
+CONF_THRESHOLD = 0.15
 
-# GPU is reserved for training in this repo; this machine's inference stays on CPU by default.
-# A remote host with no training contention can set INFERENCE_DEVICE=cuda without any code change.
+MAX_PREDICT_IMGSZ = 3072
+
 INFERENCE_DEVICE = os.environ.get("INFERENCE_DEVICE", "cpu")
 
-QUEUE_CAPACITY = 150  # see DetectionQueue's docstring -- sized directly off the known ~75-tile
-QUEUE_TRIM_TO = 150   # extent-report load (2x it), not a guessed ratio; both equal on purpose, so
-# a normal single load doesn't get trimmed down at all -- eviction only kicks in genuinely past
-# double the expected size, not as a routine haircut on ordinary traffic
+QUEUE_CAPACITY = 150
+QUEUE_TRIM_TO = 150
 
-TILE_BATCH_SIZE = 8  # tiles grouped into one model.predict() call per model, instead of one
-# separate call per tile. Added 2026-09-04 after logged per-tile timing showed individual
-# inference calls ballooning to 1.5-5.7s under load even after startup warm-up ruled out a
-# one-time cold-start cost -- WORKER_POOL_SIZE(4) x len(MODELS)(2) meant up to 8 concurrent
-# full-resolution forward passes competing for one GPU (this deployment's EC2 instance: a single
-# T4, not a high-end card), which time-slices/contends rather than truly running them in parallel.
-# A single batched call over several tiles is far more GPU-efficient per image than that many
-# concurrent single-image calls. Not yet load-tested against a real T4 -- worth tuning against
-# actual measurements rather than treating 8 as anything but a reasonable starting point.
+TILE_BATCH_SIZE = 8
 
-WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))  # concurrent _worker_loop()
-# instances sharing one DetectionQueue -- lowered from 4 to 2 alongside introducing TILE_BATCH_SIZE
-# above: each worker now claims up to TILE_BATCH_SIZE tiles per turn instead of 1, so fewer workers
-# are needed to keep the queue draining, and fewer workers means fewer *concurrent* batched
-# model.predict() calls competing for the same GPU (WORKER_POOL_SIZE x len(MODELS) concurrent calls
-# either way -- the lever that changed is how many tiles each one covers, not how many calls run at
-# once, though that dropped too, from 8 to 4, since contention was the actual problem being fixed).
-# Each loop's inference still runs via run_in_executor's thread pool, so PyTorch's own C++ tensor
-# ops (which release the GIL) get real parallelism across OS threads, not just Python-level
-# concurrency.
+WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))
 
-# Shared pool _run_detection_batch() uses to run one batch's models concurrently instead of
-# sequentially (see its docstring) -- sized for every worker to have its own model-level pair of
-# threads in flight at once, not just one shared pair the whole app contends over.
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=max(2, WORKER_POOL_SIZE * len(model_router.MODELS)))
-# real parallelism across OS threads -- not just Python-level concurrency. torch's own per-call
-# intra-op thread count is capped in lifespan() below so N workers each trying to use every core
-# don't thrash each other; still worth measuring on this machine rather than assuming a win.
 
-TILE_CACHE_CAPACITY = 300  # last 300 processed tiles kept -- see TileCache; a performance detail,
-# not live-view state (semantic_graph.md's "Classifier scope: live map view, not per tile"). Raised
-# from 20, then 50, then 72 as low-zoom extent reports needed more DETECT_ZOOM tiles per reported
-# tile -- 72 was already below the ~75 tiles one extent report now needs at the MIN_DETECT_ZOOM
-# floor (Map.tsx's viewportTrimFraction() cuts what used to be ~150 there down to ~75, still bigger
-# than 72), which would have meant a single report's own tiles evicting each other before it even
-# finished. 300 gives headroom for several such reports' worth of historical continuity (site_graph's
-# MAX_RELEVANT_DISTANCE_M-pruned historical_tiles, not just the current live view), not just barely
-# fitting one -- cheap to size generously since a cached entry is one small PNG overlay + a detection
-# list, not the source tile image itself.
+TILE_CACHE_CAPACITY = 300
 
-OUTLINE_COLOR = (255, 0, 170)  # magenta -- distinct from common.py's sample-review green, which
-# would blend into refinery scenes' own green/gray/beige
-SUPERSAMPLE = 3  # Pillow's polygon/line drawing has no built-in anti-aliasing; draw at this
-# multiple of the tile's native resolution, then LANCZOS-downsample back down for clean edges
+OUTLINE_COLOR = (255, 0, 170)
+SUPERSAMPLE = 3
 
 
 @dataclass
@@ -187,58 +84,14 @@ class Job:
     x: int
     y: int
     image_bytes: bytes
-    request: Request | None  # the *original* creator's request -- None if that was ws_server.py
-    # (see get_or_process_detections), a real Request if it was an HTTP /api/detections caller.
-    # Only ever used for _job_stale's is_disconnected() check against that one original caller --
-    # NOT a reliable signal for "does any live HTTP request depend on this job" once a second
-    # caller can join the same in-flight job afterward (see _ensure_processed and
-    # has_interactive_request below); a websocket connection as a whole is a coarser staleness
-    # concern this doesn't try to track per-job either way.
-    has_interactive_request: bool  # True if *any* caller of this job -- the original creator or a
-    # later one joining the same in-flight job (_ensure_processed) -- had a real HTTP request. The
-    # websocket flow (get_or_process_detections) and MapLibre's own /api/detections fetch for the
-    # same tile are typically triggered by the same moveend and often race to create this Job; if
-    # the websocket call happens to win, `request` alone would misreport this job as having no live
-    # HTTP interest even though one joins moments later. DetectionQueue.clear_pending() must key off
-    # this field, not `request`, or it can still prune a tile a real browser connection is waiting
-    # on -- confirmed live: this was the remaining cause of "detections layer only updates after
-    # panning" surviving the first prune fix (which filtered on `request is None` directly).
-    fetch_ms: float  # time common.fetch_tile took to return (0 if the tile was already on local
-    # disk) -- kept on the Job so _worker_loop can fold it into one end-to-end timing log alongside
-    # queue-wait and inference, since none of those three stages alone tells you which one is
-    # actually responsible when a tile feels slow
-    enqueued_at: float = field(repr=False)  # time.perf_counter() at push -- queue.pop() minus this
-    # is genuine queue-wait time, separate from and not covered by _run_detection_batch's own inference_ms
+    request: Request | None
+    has_interactive_request: bool
+    fetch_ms: float
+    enqueued_at: float = field(repr=False)
     future: asyncio.Future = field(repr=False)
 
 
 class DetectionQueue:
-    """Single global bounded queue feeding the worker pool (WORKER_POOL_SIZE concurrent
-    _worker_loop() instances). Capacity and trim_to are both 150 -- not a high/low-watermark pair
-    like a smaller queue might use, deliberately equal so a normal single load never gets trimmed at
-    all; eviction only kicks in genuinely past double the expected size, not as a routine haircut on
-    ordinary traffic. The primary staleness signal is the per-request is_disconnected() check done
-    just before a job actually starts (see _worker_loop), not this capacity.
-
-    Sized directly off a known number, not a guessed ratio: an extent report at the
-    MIN_DETECT_ZOOM floor needs ~75 tiles (Map.tsx's viewportTrimFraction()), and this is 2x that --
-    the same relationship TILE_CACHE_CAPACITY uses for the same reason. The original capacity (8,
-    trim_to 6) was sized before this app moved to a bigger DETECT_ZOOM and was already too small for
-    perfectly ordinary interactive traffic alone: a single full-screen load or pan at native
-    DETECT_ZOOM (no zoom-gap multiplier, just MapLibre's raster tile loader requesting every visible
-    /api/detections tile) needs roughly 12-20 tiles by itself, meaning routine browsing could
-    already trigger eviction of tiles the user was actively looking at, not ones they'd scrolled
-    away from as the eviction rule below assumes.
-
-    Eviction only ever targets interactive jobs (Job.request is not None) -- dropping one of those is
-    a real, already-accepted UX tradeoff (the user has likely scrolled away from that tile anyway),
-    but a batch job queued on ws_server.py's behalf (Job.request is None, see
-    get_or_process_detections) has no such excuse: it was explicitly asked for and is being awaited,
-    so silently dropping it just means classify_extent() gets less data than it asked for, for no
-    good reason. Confirmed live: a single z14 tile's 64-descendant batch against the original
-    capacity=8 dropped 57 of them. If every job in the queue is a batch job, the queue is allowed to
-    run over capacity rather than ever drop one -- slower, not incorrect."""
-
     def __init__(self, capacity: int, trim_to: int):
         self._items: list[Job] = []
         self._capacity = capacity
@@ -262,45 +115,12 @@ class DetectionQueue:
             return evicted
 
     async def pop_batch(self, max_size: int) -> list[Job]:
-        """Waits for at least one job, then returns up to max_size of whatever's already queued at
-        that moment -- never waits *longer* to fill out a full batch, so a lightly loaded queue
-        still gets a job processed immediately instead of stalling for more jobs that may not
-        arrive soon. Used by _worker_loop to group several tiles into one model.predict() call
-        (see TILE_BATCH_SIZE) instead of one call per tile."""
         async with self._condition:
             await self._condition.wait_for(lambda: len(self._items) > 0)
             batch, self._items = self._items[:max_size], self._items[max_size:]
             return batch
 
     async def clear_pending(self) -> list[Job]:
-        """Atomically removes every not-yet-started *batch* job (not has_interactive_request --
-        queued on ws_server.py's behalf, see get_or_process_detections, and never joined by a real
-        HTTP caller either) still sitting in the queue. Returns what was removed, so the caller can
-        resolve those jobs' futures and clean up in_flight -- this is a deliberate, wholesale
-        supersession (see tile_server.prune_pending(), called once per new extent report in
-        ws_server.py, including a movestart's empty-tiles cancel message), mirroring push()'s blind
-        capacity eviction above but in the opposite direction: that one only ever evicts
-        *interactive* jobs (a live HTTP request) because dropping a batch job there would be
-        arbitrary; this one only ever removes batch jobs, because those are what a newer live-view
-        report actually supersedes -- a still-queued interactive job is a live browser's own
-        /api/detections fetch for a tile MapLibre may still be displaying, regardless of what the
-        site-classification websocket state does, and dropping it used to resolve that fetch with a
-        permanent, non-cacheable blank PNG. Since MapLibre only ever fetches a given tile URL once
-        and keeps whatever response it got (even an empty one), that tile then stayed blank until a
-        *later* pan/zoom happened to re-request it -- confirmed live as the actual cause of "the
-        detections layer only updates after panning": the pan wasn't triggering the layer, it was
-        destroying the pending work for the still-static view and replacing it with a fresh, smaller
-        batch that happened to finish before the next gesture pruned it too.
-
-        Filters on has_interactive_request specifically, not Job.request is None -- the websocket
-        flow and MapLibre's own tile fetch for the same tile typically race to create this Job
-        (both stem from the same moveend), and if the websocket call wins that race, Job.request
-        alone would still misreport this job as batch-only even though an HTTP caller joins moments
-        later. Confirmed live: this was the gap that let the "layer only updates after panning"
-        symptom survive the first version of this fix, which filtered on Job.request directly.
-
-        A job already popped and actively running in the executor is untouched either way -- it
-        can't be cheaply cancelled."""
         async with self._condition:
             removed = [job for job in self._items if not job.has_interactive_request]
             self._items = [job for job in self._items if job.has_interactive_request]
@@ -311,14 +131,6 @@ class DetectionQueue:
 
 
 class TileCache:
-    """Bounded LRU cache of recently processed tiles' fused results -- a performance detail, not
-    live-view state (see semantic_graph.md's "Classifier scope: live map view, not per tile"): its
-    only job is skipping re-inference on a tile the user scrolls back to, nothing here decides which
-    tiles currently belong to a site. `capacity` is TILE_CACHE_CAPACITY (see that constant, not
-    restated here since it's already drifted out of sync with a hardcoded number once before) --
-    still a placeholder like every other number in semantic_graph.md, not yet load-tested against a
-    real browsing session."""
-
     def __init__(self, capacity: int):
         self._items: OrderedDict[str, JobResult] = OrderedDict()
         self._capacity = capacity
@@ -393,21 +205,13 @@ def _transparent_tile_bytes() -> bytes:
     return buf.getvalue()
 
 
-TRANSPARENT_TILE_BYTES = _transparent_tile_bytes()  # constant -- computed once, reused for every
-# "nothing to show here" case: below MIN_DETECT_ZOOM, a real result with zero detections, a
-# dropped/stale/failed job. PNG (not JPEG) specifically because this needs an alpha channel --
-# it's stacked as a transparent overlay on top of the separate /api/tile base-imagery layer.
+TRANSPARENT_TILE_BYTES = _transparent_tile_bytes()
 
 
 def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
     if not detections:
         return TRANSPARENT_TILE_BYTES
 
-    # Boxes are drawn supersampled-then-downsampled for smooth edges (Pillow's polygon/line drawing
-    # has no anti-aliasing). Text is drawn *after* the downsample, directly at native resolution --
-    # drawing it supersampled and shrinking it back down along with the boxes blurred small glyphs
-    # into illegibility (confirmed: label text rendered as visibly garbled at 14px after a 3x
-    # downsample) even though the string itself was always correct.
     w, h = size
     big = Image.new("RGBA", (w * SUPERSAMPLE, h * SUPERSAMPLE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(big)
@@ -432,53 +236,8 @@ def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
 
 
 def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
-    """Runs on a background thread (via run_in_executor) so the event loop stays free for other
-    requests (e.g. /api/stats) while this CPU-bound call is in flight.
-
-    Batches every job's GSD-normalized tile into one model.predict() call per model, instead of one
-    call per tile (see TILE_BATCH_SIZE) -- WORKER_POOL_SIZE x len(MODELS) concurrent *single-tile*
-    calls meant up to 8 full-resolution forward passes competing for one GPU at once, which
-    time-slices/contends rather than truly overlapping (confirmed live: individual inference calls
-    ballooning to 1.5-5.7s under a real load burst, unaffected by ruling out a cold-start cause).
-    A single batched call over several tiles uses the GPU far more efficiently per image than that
-    many concurrent single-image calls. All jobs are assumed to share the same z (true by
-    construction -- see get_or_process_detections and get_detections, the only two producers of a
-    queued Job, both of which only ever queue a DETECT_ZOOM tile), so model_router.models_for_tile()
-    and GSD math only need to run once per distinguishing input, not once per job.
-
-    Runs every model model_router.models_for_tile(z) says is worth triggering, each completely
-    unfiltered (every class it knows about, not just the ones relevant to a refinery -- see
-    model_router.py's docstring), then hands each tile's own pooled raw detections to fuser.fuse()
-    to collapse cross-model duplicates before anything downstream sees them (see
-    semantic_graph.md's "Pipeline: model router, fuser, classifier") -- fusion still happens
-    per tile, same as before batching; only the model calls themselves are now shared across tiles.
-
-    Every triggered model's predict() call is fired at once via _MODEL_EXECUTOR rather than one
-    after another -- on CUDA each also gets its own torch.cuda.Stream so the GPU can genuinely
-    overlap their kernels instead of only overlapping the host-side pre/postprocessing around a
-    shared default stream; on CPU there's no stream concept, but the thread-level concurrency still
-    gets real overlap since PyTorch's C++ ops release the GIL.
-
-    GSD-normalizes each tile before handing it to any model: every training crop in this repo goes
-    through common.resample_to_target_gsd (see scripts/obb.py) before training, so a model expects
-    a fixed real-world meters-per-pixel scale, not "whatever a raw tile at this zoom happens to be."
-    Feeding raw tile pixels straight in (an earlier version of this function did) is a genuine
-    train/inference scale mismatch, confirmed to produce false-positive-heavy garbage at low zoom --
-    not a threshold-tuning problem. Detected corners come back in the resampled image's pixel space
-    and are scaled back to each tile's own native pixel space before use, so overlay rendering and
-    geometry.py's global-pixel-space centroids stay in native-tile coordinates throughout. Tiles in
-    a batch can each need a *slightly* different resample size (native_gsd_m depends on latitude,
-    which varies tile to tile even at a fixed zoom), so predict_imgsz is computed once as the max
-    needed across the whole batch and every image is letterboxed to that common size by
-    model.predict() itself -- standard behavior for a list `source`, not something this function
-    does manually.
-
-    Returns one (overlay_bytes, detections) tuple per input job, in the same order as `jobs`."""
     models: dict[str, YOLO] = _state["models"]
 
-    # Per-tile prep: decode + GSD-normalize. A tile whose normalized size still exceeds
-    # MAX_PREDICT_IMGSZ is skipped individually (same safety net as before batching), not the whole
-    # batch -- its result is filled in directly, bypassing the model calls below.
     prepped: list[dict] = []
     results_by_index: dict[int, tuple[bytes, list[dict]]] = {}
     for i, job in enumerate(jobs):
@@ -490,7 +249,6 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
         resampled = common.resample_to_target_gsd(img, native_gsd_m)
         resampled_w, resampled_h = resampled.size
         if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
-            # Too coarse a zoom to GSD-normalize practically for this model -- see MAX_PREDICT_IMGSZ.
             results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
             continue
         prepped.append({
@@ -519,7 +277,7 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
                 source=source_images, conf=CONF_THRESHOLD, imgsz=batch_imgsz, device=INFERENCE_DEVICE,
                 quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
             )
-        return model_key, results  # one Results per source image, index-aligned with `prepped`
+        return model_key, results
 
     use_cuda = INFERENCE_DEVICE == "cuda"
     streams = [torch.cuda.Stream() for _ in triggered_models] if use_cuda else [None] * len(triggered_models)
@@ -549,16 +307,10 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
                     "class_name": class_name,
                     "corners": corners,
                     "confidence": conf,
-                    # global pixel space, not lon/lat -- see geometry.py's module docstring
                     "centroid_px_global": geometry.global_pixel(job.x, job.y, cx, cy),
                 })
             per_model_counts[model_key] = model_counts
 
-        # Logged unconditionally (one line per processed tile, INFO level) so a model that's silently
-        # never contributing anything -- as opposed to contributing but getting fused away or filtered
-        # below -- shows up directly in logs/app.log instead of only being inferrable indirectly from
-        # the final rendered overlay. "none" (rather than an empty {}) makes a zero-detection model
-        # grep-able on its own (`grep 'DIOR.*none' logs/app.log`) without parsing the dict shape.
         logger.info(
             "Tile %s raw detections by model: %s", tile_id,
             {mk: (counts or "none") for mk, counts in per_model_counts.items()},
@@ -582,7 +334,7 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
 
 
 async def _job_stale(job: Job) -> bool:
-    if job.request is None:  # queued on ws_server.py's behalf -- no per-tile request to go stale
+    if job.request is None:
         return False
     try:
         return await job.request.is_disconnected()
@@ -603,12 +355,6 @@ async def _worker_loop() -> None:
         live_jobs = []
         for job in jobs:
             if await _job_stale(job):
-                # Skipped before ever reaching _run_detection_batch -- no inference happens and
-                # nothing gets cached, so this tile stays blank in the client's raster layer (a
-                # MapLibre raster source fetches a given tile URL once and keeps whatever it got
-                # back, even an empty response) until a *new* pan/zoom issues a fresh request for
-                # it. Logged so a long queue_wait can be directly tied to "and here's a tile that
-                # got thrown away because of it," rather than inferred.
                 logger.info(
                     "Tile %s dropped as stale after %.0fms queue_wait (client disconnected before "
                     "a worker reached it -- no inference ran, nothing cached)",
@@ -638,14 +384,6 @@ async def _worker_loop() -> None:
             inference_ms_total = (time.perf_counter() - t0) * 1000
             job_results = [JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False) for _ in live_jobs]
 
-        # inference_ms is this batch's total wall time divided evenly across its tiles -- an
-        # approximation (individual tiles within one batched model.predict() call aren't separately
-        # timed), good enough to spot a slow *batch* in the logs, not a claim that each tile
-        # individually took exactly this long. Split out from fetch/queue_wait so a slow tile can
-        # still be traced to its actual stage -- fetch (Mapbox network round-trip, 0 if the tile was
-        # already cached to disk), queue_wait (time sitting behind other jobs), or inference. batch
-        # of N in the log line is a reminder this inference figure is an average, not a per-tile
-        # measurement.
         inference_ms_each = inference_ms_total / len(live_jobs)
         for job, result in zip(live_jobs, job_results):
             logger.info(
@@ -662,32 +400,10 @@ async def _worker_loop() -> None:
 
 @asynccontextmanager
 async def lifespan():
-    """Not a FastAPI lifespan itself (takes no `app` argument) -- server.py's own lifespan nests
-    `async with tile_server.lifespan():` inside it, so this module's startup/shutdown stays entirely
-    its own concern regardless of what else server.py ends up composing alongside it."""
     models: dict[str, YOLO] = {}
     for model_key in model_router.MODELS:
         logger.info("Loading %s (device=%s)", model_key, INFERENCE_DEVICE)
         model = YOLO(str(REPO_ROOT / model_key))
-        # A YOLO object's *first* .predict() call lazily builds its internal AutoBackend predictor,
-        # which mutates the model in place (layer fusion -- deletes each Conv's .bn attribute after
-        # folding it into the conv weights). With WORKER_POOL_SIZE > 1, two threads racing to do
-        # that fusion on their first concurrent predict() call corrupts it -- confirmed live:
-        # "AttributeError: 'Conv' object has no attribute 'bn'" from a second thread trying to
-        # delete what the first thread had already removed. Forcing it here, once, single-threaded,
-        # before any worker touches the model, means every real request afterward hits an
-        # already-fused model and just reads -- safe to share across worker threads at that point.
-        #
-        # Warmed at MAX_PREDICT_IMGSZ, not a small placeholder size -- a real request's GSD-resampled
-        # tile runs at up to that size (see _run_detection_batch's predict_imgsz), and the *first* call CUDA
-        # ever sees at a given size pays for kernel selection and growing the caching allocator's
-        # memory pool to fit it. A tiny warm-up image doesn't reserve that memory, so the pool still
-        # had to grow live -- and under WORKER_POOL_SIZE concurrent threads x len(MODELS) models all
-        # hitting that growth at once on first real traffic, allocator contention serializes badly.
-        # Confirmed live: logged per-tile timing on a fresh burst showed the first ~8 tiles at
-        # 1.6-5.8s inference each, dropping to 250-550ms by the rest of the same burst once the pool
-        # had already grown to fit. Warming once here, single-threaded, before any worker starts,
-        # pays that cost up front instead of against a live user's first pan.
         model.predict(
             source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
             device=INFERENCE_DEVICE, quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
@@ -700,10 +416,6 @@ async def lifespan():
     _state["stats"] = Stats()
 
     if INFERENCE_DEVICE == "cpu":
-        # Each worker's own inference call otherwise defaults to using every core it can find;
-        # with WORKER_POOL_SIZE of them running concurrently that's straightforward oversubscription
-        # (N workers x "use all cores" each). Give each worker a fair share instead -- still a
-        # placeholder split, worth measuring against this machine's real core count.
         import torch
         torch.set_num_threads(max(1, (os.cpu_count() or 1) // WORKER_POOL_SIZE))
 
@@ -720,20 +432,12 @@ router = APIRouter()
 
 @router.get("/api/tile/{z}/{x}/{y}")
 async def get_tile(z: int, x: int, y: int):
-    """Base satellite imagery only -- never touches the detection queue, so this is always fast
-    regardless of zoom or whether detection has finished for this tile. Same underlying
-    common.fetch_tile call /api/detections/{z}/{x}/{y} uses to run inference, so the two layers
-    are pixel-identical -- the overlay never looks like it's sitting on a different image."""
     loop = asyncio.get_running_loop()
     tile_path = await loop.run_in_executor(None, common.fetch_tile, z, x, y)
     return Response(content=tile_path.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 async def _ensure_processed(z: int, x: int, y: int, request: Request | None = None) -> JobResult:
-    """Cache hit -> return it immediately. Cache miss -> fetch + push through the one serialized
-    queue, same as always, and wait for it to actually finish -- shared by get_detections() below
-    (a real HTTP request driving it) and get_or_process_detections() (ws_server.py driving it with
-    no per-tile request of its own, see Job.request)."""
     tile_id = common.tile_id(z, x, y)
     cache: TileCache = _state["cache"]
     cached = cache.get(tile_id)
@@ -755,34 +459,20 @@ async def _ensure_processed(z: int, x: int, y: int, request: Request | None = No
             fetch_ms=fetch_ms, enqueued_at=time.perf_counter(), future=loop.create_future(),
         )
         in_flight[tile_id] = job
-    elif request is not None:
-        # A second caller joining an already-in-flight job -- typically MapLibre's own HTTP tile
-        # fetch arriving moments after ws_server.py's websocket flow already created this Job for
-        # the same tile (or vice versa). Widen has_interactive_request rather than leaving it as
-        # whatever the *original* creator happened to be -- see Job's own docstring for why this
-        # matters to clear_pending().
-        job.has_interactive_request = True
         evicted = await _state["queue"].push(job)
         stats: Stats = _state["stats"]
         for ev_job in evicted:
-            # overflow eviction, not disconnection -- whoever's waiting on ev_job (a live HTTP
-            # request, or ws_server.py) must still get an answer, not be left hanging
             if not ev_job.future.done():
                 ev_job.future.set_result(JobResult(image_bytes=TRANSPARENT_TILE_BYTES, cacheable=False))
             in_flight.pop(ev_job.tile_id, None)
             stats.dropped_total += 1
+    elif request is not None:
+        job.has_interactive_request = True
 
     return await job.future
 
 
 def get_or_process_detections(z: int, x: int, y: int) -> "asyncio.Future[list[dict]]":
-    """Awaitable: this tile's fused detections, processing it through the same serialized queue
-    /api/detections uses if it isn't already cached -- so a tile currently in someone's live view
-    but evicted from the cache (or never requested at all) still contributes real data to
-    classification, instead of silently being treated as empty. Only ever does real work at exactly
-    DETECT_ZOOM -- ws_server.py is responsible for only ever calling this with a DETECT_ZOOM tile in
-    the first place, this is just the same invariant enforced on this end too. This is the only
-    thing ws_server.py is allowed to call into this module."""
     async def _run() -> list[dict]:
         if z != DETECT_ZOOM:
             return []
@@ -792,14 +482,6 @@ def get_or_process_detections(z: int, x: int, y: int) -> "asyncio.Future[list[di
 
 
 def get_cached_only(z: int, x: int, y: int) -> list[dict] | None:
-    """This tile's fused detections if already cached, None otherwise -- never fetches, infers, or
-    touches the queue, unlike get_or_process_detections() above. For ws_server.py's *historical*
-    known_tiles (accumulated from earlier reports, no longer in the live view) -- those tiles should
-    keep contributing to classification while their data is still around, but shouldn't force
-    reprocessing once the bounded TileCache evicts them; only tiles in the *current* live view are
-    worth spending queue/worker time on. Confirmed live: without this distinction, a long browsing
-    session's queue kept re-growing with stale, off-screen tiles competing with the current view's
-    own tiles for worker time."""
     tile_id = common.tile_id(z, x, y)
     cache: TileCache = _state["cache"]
     cached = cache.get(tile_id)
@@ -807,15 +489,6 @@ def get_cached_only(z: int, x: int, y: int) -> list[dict] | None:
 
 
 async def prune_pending() -> None:
-    """Discards every not-yet-started *batch* job in the queue (see DetectionQueue.clear_pending --
-    interactive/HTTP-backed jobs are deliberately left untouched) -- called once at the start of
-    every new extent report (see ws_server.py's ws_extent, including a movestart's empty-tiles
-    cancel message), since a batch tile that only mattered to a now-superseded report is no longer
-    worth spending CPU on. Each pruned job's future is resolved with an empty result (rather than
-    left dangling) so anything still awaiting it -- most notably the *previous* report's own
-    classify_extent, if it's still winding down -- unblocks immediately instead of hanging. The
-    other half of this, cancelling that previous stream's websocket-sending task so it can't race
-    the new one, is ws_server.py's job, not this module's."""
     queue: DetectionQueue = _state["queue"]
     in_flight: dict = _state["in_flight"]
     removed = await queue.clear_pending()
@@ -827,16 +500,6 @@ async def prune_pending() -> None:
 
 @router.get("/api/detections/{z}/{x}/{y}")
 async def get_detections(z: int, x: int, y: int, request: Request):
-    """Transparent-background PNG overlay -- empty/see-through wherever there's nothing to show.
-    Stacked on top of /api/tile's base imagery as a second MapLibre source, so this endpoint being
-    slow (queued, or just genuinely mid-inference) never blocks the base layer from rendering.
-
-    Only ever does real work at exactly DETECT_ZOOM -- every other zoom returns empty immediately,
-    including zooms *above* DETECT_ZOOM: showing a blown-up DETECT_ZOOM box next to native-resolution
-    imagery would misrepresent where the box actually is, and showing nothing is a more honest
-    "you're not at the zoom this was detected at" than a stretched, misaligned one. The site-level
-    layer (ws_server.py) is what still shows a match at any zoom -- this endpoint is just the
-    per-tile visual boxes, a different concern."""
     if z != DETECT_ZOOM:
         return Response(content=TRANSPARENT_TILE_BYTES, media_type="image/png", headers={"Cache-Control": "no-store"})
     result = await _ensure_processed(z, x, y, request)
