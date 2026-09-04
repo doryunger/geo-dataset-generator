@@ -260,17 +260,28 @@ class DetectionQueue:
             return batch
 
     async def clear_pending(self) -> list[Job]:
-        """Atomically removes every not-yet-started job (whatever's still sitting in the queue, not
-        yet popped by the worker). Returns what was removed, so the caller can resolve those jobs'
-        futures and clean up in_flight -- this is a deliberate, wholesale supersession (see
-        tile_server.prune_pending(), called once per new extent report in ws_server.py), different
-        from push()'s blind capacity eviction above: that one never touches a batch job because
-        dropping it would be arbitrary; this one removes batch jobs on purpose, because a newer
-        live-view report has made them genuinely stale. A job already popped and actively running in
-        the executor is untouched either way -- it can't be cheaply cancelled."""
+        """Atomically removes every not-yet-started *batch* job (Job.request is None -- queued on
+        ws_server.py's behalf, see get_or_process_detections) still sitting in the queue. Returns
+        what was removed, so the caller can resolve those jobs' futures and clean up in_flight --
+        this is a deliberate, wholesale supersession (see tile_server.prune_pending(), called once
+        per new extent report in ws_server.py, including a movestart's empty-tiles cancel message),
+        mirroring push()'s blind capacity eviction above but in the opposite direction: that one
+        only ever evicts *interactive* jobs (a live HTTP request) because dropping a batch job there
+        would be arbitrary; this one only ever removes batch jobs, because those are what a newer
+        live-view report actually supersedes -- a still-queued *interactive* job (Job.request is not
+        None) is a live browser's own /api/detections fetch for a tile MapLibre may still be
+        displaying, regardless of what the site-classification websocket state does, and dropping it
+        used to resolve that fetch with a permanent, non-cacheable blank PNG. Since MapLibre only
+        ever fetches a given tile URL once and keeps whatever response it got (even an empty one),
+        that tile then stayed blank until a *later* pan/zoom happened to re-request it -- confirmed
+        live as the actual cause of "the detections layer only updates after panning": the pan
+        wasn't triggering the layer, it was destroying the pending work for the still-static view and
+        replacing it with a fresh, smaller batch that happened to finish before the next gesture
+        pruned it too. A job already popped and actively running in the executor is untouched either
+        way -- it can't be cheaply cancelled."""
         async with self._condition:
-            removed = self._items
-            self._items = []
+            removed = [job for job in self._items if job.request is None]
+            self._items = [job for job in self._items if job.request is not None]
             return removed
 
     def __len__(self) -> int:
@@ -766,13 +777,15 @@ def get_cached_only(z: int, x: int, y: int) -> list[dict] | None:
 
 
 async def prune_pending() -> None:
-    """Discards every not-yet-started job in the queue -- called once at the start of every new
-    extent report (see ws_server.py's classify_extent_stream), since a tile that only mattered to a
-    now-superseded report is no longer worth spending CPU on. Each pruned job's future is resolved
-    with an empty result (rather than left dangling) so anything still awaiting it -- most notably
-    the *previous* report's own classify_extent_stream, if it's still winding down -- unblocks
-    immediately instead of hanging. The other half of this, cancelling that previous stream's
-    websocket-sending task so it can't race the new one, is ws_server.py's job, not this module's."""
+    """Discards every not-yet-started *batch* job in the queue (see DetectionQueue.clear_pending --
+    interactive/HTTP-backed jobs are deliberately left untouched) -- called once at the start of
+    every new extent report (see ws_server.py's ws_extent, including a movestart's empty-tiles
+    cancel message), since a batch tile that only mattered to a now-superseded report is no longer
+    worth spending CPU on. Each pruned job's future is resolved with an empty result (rather than
+    left dangling) so anything still awaiting it -- most notably the *previous* report's own
+    classify_extent, if it's still winding down -- unblocks immediately instead of hanging. The
+    other half of this, cancelling that previous stream's websocket-sending task so it can't race
+    the new one, is ws_server.py's job, not this module's."""
     queue: DetectionQueue = _state["queue"]
     in_flight: dict = _state["in_flight"]
     removed = await queue.clear_pending()
