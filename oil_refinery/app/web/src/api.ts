@@ -48,6 +48,12 @@ export class ExtentSocket {
   private ws: WebSocket | null = null
   private closed = false
   private onResult: (result: SiteFeatureCollection) => void
+  // Generated once per ExtentSocket instance (so once per page load, since Map.tsx creates exactly
+  // one), reused across every reconnect this same instance does -- lets ws_server.py's
+  // _get_or_create_session resume the same known_tiles/tracked sites after a brief network drop
+  // instead of starting over, while a genuinely new page load (a new ExtentSocket instance) still
+  // gets a fresh id and so a fresh, empty session. Not meant to persist any longer than that.
+  private readonly sessionId = crypto.randomUUID()
 
   constructor(onResult: (result: SiteFeatureCollection) => void) {
     this.onResult = onResult
@@ -56,7 +62,7 @@ export class ExtentSocket {
 
   private connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    this.ws = new WebSocket(`${protocol}://${window.location.host}/ws/extent`)
+    this.ws = new WebSocket(`${protocol}://${window.location.host}/ws/extent?session=${this.sessionId}`)
     this.ws.onmessage = (event) => {
       try {
         this.onResult(JSON.parse(event.data))

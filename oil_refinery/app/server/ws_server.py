@@ -13,6 +13,8 @@ GeoJSON FeatureCollection back over the same long-lived connection.
 import asyncio
 import math
 import sys
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -35,6 +37,40 @@ GRAPH: dict = site_graph.load_graph()  # loaded once at import time, same patter
 
 MAX_RELEVANT_DISTANCE_M = site_graph.max_relevant_distance_m(GRAPH)  # also loaded once at import
 # time, alongside GRAPH -- see _prune_far_tiles()'s docstring for what this bounds.
+
+
+@dataclass
+class _Session:
+    known_tiles: set[tuple[int, int, int]] = field(default_factory=set)
+    tracker: site_tracker.SiteTracker = field(default_factory=site_tracker.SiteTracker)
+    last_active: float = field(default_factory=time.monotonic)
+
+
+SESSION_IDLE_TIMEOUT_S = 600  # placeholder, like every other number in semantic_graph.md -- how
+# long a session's known_tiles/tracker survive a dropped connection with no reconnect, before being
+# swept as abandoned. Deliberately *not* meant to survive a page reload or a new tab -- api.ts's
+# ExtentSocket generates a fresh session id per instance (once per page load), so this only ever
+# resumes a transient reconnect *within* an already-open tab (a brief network drop), not a genuinely
+# new visit. Losing tracked sites between actual sessions is accepted as-is, not a gap to close.
+_SESSIONS: dict[str, _Session] = {}
+
+
+def _get_or_create_session(session_id: str | None) -> _Session:
+    now = time.monotonic()
+    # Opportunistic sweep on each new connection rather than a background task -- simplest correct
+    # option given how infrequently connections open relative to the timeout window.
+    for sid in [sid for sid, sess in _SESSIONS.items() if now - sess.last_active > SESSION_IDLE_TIMEOUT_S]:
+        del _SESSIONS[sid]
+
+    if session_id and session_id in _SESSIONS:
+        session = _SESSIONS[session_id]
+        session.last_active = now
+        return session
+
+    session = _Session()
+    if session_id:
+        _SESSIONS[session_id] = session
+    return session
 
 
 class TileXY(BaseModel):
@@ -233,10 +269,15 @@ async def ws_extent(websocket: WebSocket):
     priority, though they're still part of known_tiles and will get requested again below) and
     prunes tile_server's pending queue (throwing out not-yet-started work from the stale run) before
     starting a fresh task. There's always at most one classify task actively running/sending on this
-    connection at a time."""
+    connection at a time.
+
+    `known_tiles`/the site tracker live on a `_Session` looked up (or created) by the `?session=`
+    query param (see api.ts's ExtentSocket) rather than as plain local variables here, so a brief
+    reconnect -- the same tab, the same ExtentSocket instance, just a dropped-then-reopened TCP
+    connection -- resumes the same tracked sites instead of starting over. A genuinely new page load
+    gets a fresh session id and so a fresh, empty session -- that's accepted, not a gap to close."""
     await websocket.accept()
-    known_tiles: set[tuple[int, int, int]] = set()
-    tracker = site_tracker.SiteTracker()
+    session = _get_or_create_session(websocket.query_params.get("session"))
     current_task: asyncio.Task | None = None
     try:
         while True:
@@ -245,8 +286,9 @@ async def ws_extent(websocket: WebSocket):
             current_tiles = {
                 dz_tile for tile in body.tiles for dz_tile in _detect_zoom_tiles(body.zoom, tile.x, tile.y)
             }
-            historical_tiles = _prune_far_tiles(known_tiles - current_tiles, current_tiles)
-            known_tiles = current_tiles | historical_tiles
+            historical_tiles = _prune_far_tiles(session.known_tiles - current_tiles, current_tiles)
+            session.known_tiles = current_tiles | historical_tiles
+            session.last_active = time.monotonic()
 
             if current_task is not None:
                 current_task.cancel()
@@ -256,7 +298,9 @@ async def ws_extent(websocket: WebSocket):
                     pass
 
             await tile_server.prune_pending()
-            current_task = asyncio.ensure_future(_send_result(websocket, current_tiles, historical_tiles, tracker))
+            current_task = asyncio.ensure_future(
+                _send_result(websocket, current_tiles, historical_tiles, session.tracker)
+            )
     except WebSocketDisconnect:
         pass
     finally:
