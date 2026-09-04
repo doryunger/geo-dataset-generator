@@ -1,34 +1,13 @@
-import { useEffect, useState } from 'react'
 import Map from './Map'
 import StatsOverlay from './StatsOverlay'
-import { fetchStats } from './api'
-
-const BACKEND_POLL_INTERVAL_MS = 1000
+import { type RootState, useAppSelector } from './store'
 
 export default function App() {
-  const [backendReady, setBackendReady] = useState(false)
-
-  useEffect(() => {
-    if (backendReady) return
-    let cancelled = false
-    const check = async () => {
-      try {
-        await fetchStats()
-        if (!cancelled) setBackendReady(true)
-      } catch {
-      }
-    }
-    check()
-    const id = setInterval(check, BACKEND_POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [backendReady])
+  const serverReady = useAppSelector((s: RootState) => s.connection.serverReady)
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
-      {backendReady ? (
+      {serverReady ? (
         <>
           <Map />
           <StatsOverlay />

@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { EMPTY_FEATURE_COLLECTION, ExtentSocket, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties } from './api'
+import { EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties } from './api'
+import { extentSocket } from './socket'
 import {
-  extentResultReceived, gestureStarted, layersPainted,
+  gestureStarted, layersPainted,
   mapLoaded as mapLoadedAction, reset, type RootState, useAppDispatch, useAppSelector,
   type Viewport, viewportSettled, zoomChanged,
 } from './store'
@@ -73,7 +74,6 @@ function labelsFrom(fc: SiteFeatureCollection): LabelFeatureCollection {
 export default function Map() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
-  const socketRef = useRef<ExtentSocket | null>(null)
   const dispatch = useAppDispatch()
 
   const zoom = useAppSelector((s: RootState) => s.map.zoom)
@@ -154,12 +154,6 @@ export default function Map() {
 
     ;(window as typeof window & { map?: maplibregl.Map }).map = map
 
-    const socket = new ExtentSocket((result) => {
-      tileDebug('onResult', { siteCount: result.features.length })
-      dispatch(extentResultReceived(result))
-    })
-    socketRef.current = socket
-
     map.on('load', () => {
       tileDebug('map "load" fired')
       dispatch(mapLoadedAction())
@@ -179,8 +173,6 @@ export default function Map() {
 
     return () => {
       clearTimeout(moveEndDebounceTimer)
-      socket.close()
-      socketRef.current = null
       map.remove()
       mapRef.current = null
       dispatch(reset())
@@ -189,14 +181,13 @@ export default function Map() {
 
   useEffect(() => {
     if (!gestureActive) return
-    socketRef.current?.send(DETECT_ZOOM, [])
+    extentSocket.send(DETECT_ZOOM, [])
   }, [gestureActive])
 
   useEffect(() => {
-    const socket = socketRef.current
-    if (!socket || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
+    if (!viewport || viewport.zoom < MIN_DETECT_ZOOM) return
     const tiles = tilesForViewport(viewport)
-    if (tiles.length > 0) socket.send(DETECT_ZOOM, tiles)
+    if (tiles.length > 0) extentSocket.send(DETECT_ZOOM, tiles)
   }, [viewport])
 
   useEffect(() => {

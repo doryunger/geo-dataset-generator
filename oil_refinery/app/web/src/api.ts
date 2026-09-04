@@ -40,14 +40,19 @@ export const EMPTY_FEATURE_COLLECTION: SiteFeatureCollection = { type: 'FeatureC
 
 export const INITIAL_ZOOM = 14
 
+export interface ExtentSocketHandlers {
+  onServerReady: () => void
+  onResult: (result: SiteFeatureCollection) => void
+}
+
 export class ExtentSocket {
   private ws: WebSocket | null = null
   private closed = false
-  private onResult: (result: SiteFeatureCollection) => void
+  private readonly handlers: ExtentSocketHandlers
   private readonly sessionId = crypto.randomUUID()
 
-  constructor(onResult: (result: SiteFeatureCollection) => void) {
-    this.onResult = onResult
+  constructor(handlers: ExtentSocketHandlers) {
+    this.handlers = handlers
     this.connect()
   }
 
@@ -56,7 +61,12 @@ export class ExtentSocket {
     this.ws = new WebSocket(`${protocol}://${window.location.host}/ws/extent?session=${this.sessionId}`)
     this.ws.onmessage = (event) => {
       try {
-        this.onResult(JSON.parse(event.data))
+        const data = JSON.parse(event.data)
+        if (data.type === 'server_ready') {
+          this.handlers.onServerReady()
+        } else {
+          this.handlers.onResult(data)
+        }
       } catch (err) {
         console.error('ExtentSocket: failed to parse message from server', err)
       }

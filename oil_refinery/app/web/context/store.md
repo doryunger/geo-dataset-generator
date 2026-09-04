@@ -59,3 +59,22 @@ mount→unmount→remount cycle would otherwise leave `mapLoaded` already `true`
 re-fire for the second, surviving map instance, and its `site-boundaries`/`site-labels`
 sources+layers would never get created. Returns `initialState` directly (rather than resetting
 fields one by one) so it stays correct automatically if `MapState` ever grows a field.
+
+## `connection` slice — `serverReady`
+
+Deliberately a *separate* slice from `map`, not another field on `MapState`. `serverReady` reflects
+`socket.ts`'s page-lifetime `ExtentSocket` connection (true once its `{"type": "server_ready"}`
+message arrives, see `api.md`), which has nothing to do with `Map.tsx`'s own mount/unmount cycle —
+if it lived in `MapState`, `mapSlice`'s `reset()` (dispatched on every `Map.tsx` unmount, including
+StrictMode's dev-mode double-invoke) would wipe it back to `false` even though the socket itself
+was never closed and will never send `server_ready` again on that same connection, permanently
+hiding `<Map />` behind `App.tsx`'s "waiting for backend" screen after the very first StrictMode
+cycle. Keeping it in its own slice means `mapSlice`'s `reset()` action (namespaced `map/reset`)
+simply doesn't match any case in `connectionSlice`'s reducer, leaving `serverReady` untouched —
+no special-casing needed. Replaced `App.tsx`'s previous `fetchStats()`-polling `backendReady`
+local state 2026-09-04: the frontend previously discovered backend readiness by repeatedly
+requesting `/api/stats` until one succeeded, but a browser can't suppress its own "failed to load
+resource" console logging for the requests made before the backend was actually up, so a slow
+model-loading window produced a stream of `502`s no matter how the fetch failure was caught in
+application code. A push-based signal over the same websocket the app needs anyway avoids ever
+making a request the backend isn't there to answer.

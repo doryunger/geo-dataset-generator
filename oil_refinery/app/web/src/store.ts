@@ -65,8 +65,28 @@ export const {
   extentResultReceived, layersPainted, reset,
 } = mapSlice.actions
 
+interface ConnectionState {
+  serverReady: boolean
+}
+
+const connectionInitialState: ConnectionState = {
+  serverReady: false,
+}
+
+const connectionSlice = createSlice({
+  name: 'connection',
+  initialState: connectionInitialState,
+  reducers: {
+    serverReadyReceived(state) {
+      state.serverReady = true
+    },
+  },
+})
+
+export const { serverReadyReceived } = connectionSlice.actions
+
 export const store = configureStore({
-  reducer: { map: mapSlice.reducer },
+  reducer: { map: mapSlice.reducer, connection: connectionSlice.reducer },
 })
 
 export type RootState = ReturnType<typeof store.getState>

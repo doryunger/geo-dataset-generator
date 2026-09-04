@@ -195,6 +195,7 @@ async def _send_result(
 @router.websocket("/ws/extent")
 async def ws_extent(websocket: WebSocket):
     await websocket.accept()
+    await websocket.send_json({"type": "server_ready"})
     session = _get_or_create_session(websocket.query_params.get("session"))
     current_task: asyncio.Task | None = None
     try:

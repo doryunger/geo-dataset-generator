@@ -16,9 +16,16 @@ the server waits for the whole reported batch to finish processing before classi
 (see `ws_server.py`'s `classify_extent()`), no partial/early results. Always just replace
 whatever's currently shown with the latest result, never try to merge or accumulate across calls.
 
-`sessionId` is generated once per `ExtentSocket` instance (so once per page load, since `Map.tsx`
-creates exactly one), reused across every reconnect this same instance does — lets
-`ws_server.py`'s `_get_or_create_session` resume the same `known_tiles`/tracked sites after a
-brief network drop instead of starting over, while a genuinely new page load (a new `ExtentSocket`
-instance) still gets a fresh id and so a fresh, empty session. Not meant to persist any longer
-than that.
+Takes an `ExtentSocketHandlers` object (`onServerReady`, `onResult`) rather than a single callback
+— `ws_server.py`'s `ws_extent()` sends a `{"type": "server_ready"}` message immediately after
+`accept()`, before any real extent traffic, so the client has an explicit signal for "the backend
+is genuinely up" distinct from "a classification result came back." `onmessage` branches on
+`data.type === 'server_ready'` versus everything else (a bare `SiteFeatureCollection`, which
+carries its own `type: 'FeatureCollection'` field as the implicit "not this" case). See `socket.ts`
+for why this class is instantiated exactly once at module scope rather than per-`Map.tsx`-mount.
+
+`sessionId` is generated once per `ExtentSocket` instance — now once per page load, since
+`socket.ts` creates exactly one for the page's whole lifetime — reused across every reconnect this
+same instance does. Lets `ws_server.py`'s `_get_or_create_session` resume the same
+`known_tiles`/tracked sites after a brief network drop instead of starting over, while a genuinely
+new page load (a new `ExtentSocket` instance) still gets a fresh id and so a fresh, empty session.

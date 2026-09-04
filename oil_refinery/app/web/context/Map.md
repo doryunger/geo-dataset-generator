@@ -59,14 +59,14 @@ action that changes state another effect is watching. `store.ts`'s own doc cover
 means; this is about which effect reacts to which one and why the split is drawn where it is.
 
 1. **Mount effect** (`[dispatch]`) — constructs the MapLibre instance, declares the
-   `basemap`/`detections` raster sources+layers in the initial style, creates the one
-   `ExtentSocket` (kept in `socketRef`, not Redux — a live WebSocket handle isn't serializable app
-   data any more than the `Map` instance is), and wires every raw MapLibre event to a dispatch:
-   `'zoom'` → `zoomChanged`, `'load'` → `mapLoaded` + an immediate `viewportSettled` (no debounce
-   on the very first report — nothing to burst-collapse yet), debounced `'moveend'` →
-   `viewportSettled`, `'movestart'` → `gestureStarted`. The debounce timer itself stays a plain
-   local variable (an actual timer handle, not app state) — only the *decision* it produces
-   (dispatching `viewportSettled` once the debounce fires) is data-driven.
+   `basemap`/`detections` raster sources+layers in the initial style, and wires every raw MapLibre
+   event to a dispatch: `'zoom'` → `zoomChanged`, `'load'` → `mapLoaded` + an immediate
+   `viewportSettled` (no debounce on the very first report — nothing to burst-collapse yet),
+   debounced `'moveend'` → `viewportSettled`, `'movestart'` → `gestureStarted`. The debounce timer
+   itself stays a plain local variable (an actual timer handle, not app state) — only the
+   *decision* it produces (dispatching `viewportSettled` once the debounce fires) is data-driven.
+   Does *not* create the `ExtentSocket` (see `socket.md` for why that moved to module scope) — this
+   component only ever calls `.send()` on the already-open, page-lifetime `extentSocket` singleton.
 2. **Gesture-cancel effect** (`[gestureActive]`) — sends the empty-tiles cancel message the moment
    `gestureActive` flips true. Naturally only acts on the true transition (the `if (!gestureActive)
    return` guard no-ops the false transition back), so no separate flag is needed to avoid
@@ -87,8 +87,9 @@ means; this is about which effect reacts to which one and why the split is drawn
    dispatch-then-settle re-run (readyGeneration bump → paint → paintedGeneration catches up →
    effect re-checks and finds them equal → no-op) is expected, not a bug.
 
-The `Map` instance and the `ExtentSocket` both live in plain `useRef`s, not Redux — neither is
-serializable or app data, just the imperative handles the reactive effects drive.
+The `Map` instance lives in a plain `useRef`, not Redux — not serializable or app data, just the
+imperative handle the reactive effects drive. `extentSocket` itself lives outside React entirely
+(`socket.ts`, a module-scope singleton), not in a ref here — see `socket.md`.
 
 Basemap and detections raster sources are both capped at `maxzoom: DETECT_ZOOM` so MapLibre stops
 requesting new tiles past it and instead scales up the last-fetched `DETECT_ZOOM` tile (standard
