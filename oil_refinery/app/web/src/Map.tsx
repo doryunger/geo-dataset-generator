@@ -3,26 +3,17 @@ import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { EMPTY_FEATURE_COLLECTION, ExtentSocket, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties } from './api'
 import {
-  extentResultReceived, fullFollowUpSent, gestureStarted, layersPainted,
+  extentResultReceived, gestureStarted, layersPainted,
   mapLoaded as mapLoadedAction, reset, type RootState, useAppDispatch, useAppSelector,
   type Viewport, viewportSettled, zoomChanged,
 } from './store'
 
 const MIN_DETECT_ZOOM = 16
 const DETECT_ZOOM = 17
-const MAX_AREA_TRIM = 0.3
 const MIN_VISIBLE_ZOOM = 12
 
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
-}
-
-function centerWaveTrim(displayedZoom: number): number {
-  const maxGap = DETECT_ZOOM - MIN_DETECT_ZOOM
-  if (maxGap <= 0) return 0
-  const gap = DETECT_ZOOM - displayedZoom
-  const areaTrim = Math.min(MAX_AREA_TRIM, Math.max(0, MAX_AREA_TRIM * (gap / maxGap)))
-  return 1 - Math.sqrt(1 - areaTrim)
 }
 
 const INITIAL_CENTER: [number, number] = [9.9517431, 53.4770211]
@@ -46,16 +37,10 @@ function currentViewport(map: maplibregl.Map): Viewport {
   }
 }
 
-function tilesForViewport(
-  viewport: Viewport, trimFraction: number = centerWaveTrim(viewport.zoom),
-): { x: number; y: number }[] {
+function tilesForViewport(viewport: Viewport): { x: number; y: number }[] {
   const { west, east, south, north } = viewport
-  const trim = trimFraction / 2
-  const lonInset = (east - west) * trim
-  const latInset = (north - south) * trim
-
-  const [xMin, yMin] = lonLatToTile(west + lonInset, north - latInset, DETECT_ZOOM)
-  const [xMax, yMax] = lonLatToTile(east - lonInset, south + latInset, DETECT_ZOOM)
+  const [xMin, yMin] = lonLatToTile(west, north, DETECT_ZOOM)
+  const [xMax, yMax] = lonLatToTile(east, south, DETECT_ZOOM)
   const tiles: { x: number; y: number }[] = []
   for (let x = xMin; x <= xMax; x++) {
     for (let y = yMin; y <= yMax; y++) {
@@ -89,7 +74,6 @@ export default function Map() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const socketRef = useRef<ExtentSocket | null>(null)
-  const lastFollowUpGenRef = useRef(0)
   const dispatch = useAppDispatch()
 
   const zoom = useAppSelector((s: RootState) => s.map.zoom)
@@ -99,7 +83,6 @@ export default function Map() {
   const paintedGeneration = useAppSelector((s: RootState) => s.map.paintedGeneration)
   const viewport = useAppSelector((s: RootState) => s.map.viewport)
   const gestureActive = useAppSelector((s: RootState) => s.map.gestureActive)
-  const pendingFullFollowUp = useAppSelector((s: RootState) => s.map.pendingFullFollowUp)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -200,7 +183,6 @@ export default function Map() {
       socketRef.current = null
       map.remove()
       mapRef.current = null
-      lastFollowUpGenRef.current = 0
       dispatch(reset())
     }
   }, [dispatch])
@@ -216,17 +198,6 @@ export default function Map() {
     const tiles = tilesForViewport(viewport)
     if (tiles.length > 0) socket.send(DETECT_ZOOM, tiles)
   }, [viewport])
-
-  useEffect(() => {
-    const socket = socketRef.current
-    if (!pendingFullFollowUp || !socket || !viewport) return
-    if (readyGeneration === lastFollowUpGenRef.current) return
-    lastFollowUpGenRef.current = readyGeneration
-    dispatch(fullFollowUpSent())
-    if (viewport.zoom < MIN_DETECT_ZOOM) return
-    const fullTiles = tilesForViewport(viewport, 0)
-    if (fullTiles.length > 0) socket.send(DETECT_ZOOM, fullTiles)
-  }, [dispatch, readyGeneration, pendingFullFollowUp, viewport])
 
   useEffect(() => {
     const map = mapRef.current

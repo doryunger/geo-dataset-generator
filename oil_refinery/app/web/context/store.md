@@ -15,18 +15,16 @@ the store; this slice is deliberately just the pieces that actually gate a rende
   `site-boundaries`/`site-labels` sources+layers, which can't be added before that.
 - `viewport` — the map's *settled* view (debounced moveend, or immediately on `'load'`): zoom +
   lon/lat bounds, plain serializable fields, not a MapLibre `LngLatBounds` instance. `Map.tsx`'s
-  request effect watches this and sends the trimmed extent report whenever it changes — moving
-  "when to ask the server for data" out of an imperative moveend handler and into the same
-  reducer + `useSelector`-driven-effect shape as everything else in this slice.
+  request effect watches this and sends the full-viewport extent report whenever it changes —
+  moving "when to ask the server for data" out of an imperative moveend handler and into the same
+  reducer + `useSelector`-driven-effect shape as everything else in this slice. Used to send a
+  trimmed report first with an untrimmed follow-up once it landed (a "two-stage load"); dropped
+  2026-09-04 — the two requests ended up firing close enough together that they didn't actually
+  save wall-clock time, and briefly caused a real bug where the follow-up's optimization (send only
+  the peripheral diff) silently dropped the center wave's own detections (see `Map.md`'s "Two-stage
+  load" section, since removed, for the postmortem). One direct full-viewport request now.
 - `gestureActive` — true from `'movestart'` until the next settled `viewportSettled`. A separate
-  effect watches this to send the movestart cancel message, and the `viewportSettled` reducer
-  always clears `pendingFullFollowUp` alongside it — a gesture starting means any not-yet-fired
-  follow-up was for a view now being left.
-- `pendingFullFollowUp` — true after a trimmed request is sent, cleared once its follow-up
-  (untrimmed, full-viewport) request has actually been sent. The follow-up effect watches
-  `readyGeneration` while this is true and fires the untrimmed request the moment a result lands,
-  same two-stage load as before (trimmed tiles drawn first, full coverage a little later) just
-  modeled as state instead of a closure-local boolean.
+  effect watches this to send the movestart cancel message.
 - `readyGeneration` — bumped every time a genuinely new extent result arrives from the backend
   (`extentResultReceived`). Compared against `paintedGeneration` to decide "is there newer data
   than what's on screen."

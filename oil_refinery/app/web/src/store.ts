@@ -18,7 +18,6 @@ interface MapState {
   paintedGeneration: number
   viewport: Viewport | null
   gestureActive: boolean
-  pendingFullFollowUp: boolean
 }
 
 const initialState: MapState = {
@@ -29,7 +28,6 @@ const initialState: MapState = {
   paintedGeneration: 0,
   viewport: null,
   gestureActive: false,
-  pendingFullFollowUp: false,
 }
 
 const mapSlice = createSlice({
@@ -44,15 +42,10 @@ const mapSlice = createSlice({
     },
     gestureStarted(state) {
       state.gestureActive = true
-      state.pendingFullFollowUp = false
     },
     viewportSettled(state, action: PayloadAction<Viewport>) {
       state.viewport = action.payload
       state.gestureActive = false
-      state.pendingFullFollowUp = true
-    },
-    fullFollowUpSent(state) {
-      state.pendingFullFollowUp = false
     },
     extentResultReceived(state, action: PayloadAction<SiteFeatureCollection>) {
       state.sites = action.payload
@@ -68,7 +61,7 @@ const mapSlice = createSlice({
 })
 
 export const {
-  zoomChanged, mapLoaded, gestureStarted, viewportSettled, fullFollowUpSent,
+  zoomChanged, mapLoaded, gestureStarted, viewportSettled,
   extentResultReceived, layersPainted, reset,
 } = mapSlice.actions
 

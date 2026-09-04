@@ -36,31 +36,20 @@ below for why the data flow is split this way.
   current screen at `DETECT_ZOOM` resolution — not "whatever tile the current zoom's grid happens
   to cover," which could include a lot of ground that's barely touching the edge of the viewport,
   not actually on it.
-- `MAX_AREA_TRIM = 0.3` / `centerWaveTrim()` — the two-stage load is meant to put ~70% of the
-  *tile count* in the center-first wave and the remaining ~30% (the peripheral ring) in the
-  follow-up, not a 70/30 split of the viewport's linear width/height. Since tile count scales with
-  *area*, trimming 15% off each edge (a 70% linear width/height) only keeps ~49% of the tiles
-  (0.7 × 0.7) — half, not 70%. `centerWaveTrim()` corrects for this: it treats `MAX_AREA_TRIM` as
-  the fraction of *area* to drop (scaling with how far below `DETECT_ZOOM` the map is displayed,
-  same taper-to-0-at-`DETECT_ZOOM` shape as before), then converts that to the correct per-side
-  linear inset via `1 - sqrt(1 - areaTrim)` so the *tile count* in the first wave actually comes out
-  to ~70% at the `MIN_DETECT_ZOOM` floor.
 - `INITIAL_CENTER` — the same Hamburg refinery site already used elsewhere in this repo's own
   probing (`oil_refinery/probe_pretrained.py`), a known-good spot with real storage tanks to look
   at.
 
-## `visibleDetectZoomTiles()`
+## `tilesForViewport()`
 
 Every `DETECT_ZOOM` tile whose bounds actually intersect the current viewport — computed straight
 from the screen bounds at `DETECT_ZOOM`, not by taking whatever tile the *displayed* zoom's grid
 covers and expanding it to every descendant (which would include plenty of ground nowhere near the
-screen whenever a displayed-zoom tile only partially overlaps the viewport's edge). Bounds are
-shrunk by `trimFraction` first — an even margin trimmed off each side, not the whole box scaled
-from a corner — so the skipped strip stays centered around the edges the user is least likely to
-be looking directly at. Passing 0 explicitly gets the untrimmed full viewport (see the two-stage
-send below).
+screen whenever a displayed-zoom tile only partially overlaps the viewport's edge). Used to take an
+optional trim fraction for a since-removed two-stage load (see below) — now always returns the full
+viewport's tiles.
 
-## Architecture: one mount effect, five reactive effects
+## Architecture: one mount effect, four reactive effects
 
 Every piece of business logic past "construct the map and turn a raw MapLibre/backend event into a
 dispatch" lives in its own small `useEffect`, keyed on exactly the slice of Redux state it cares
@@ -82,31 +71,15 @@ means; this is about which effect reacts to which one and why the split is drawn
    `gestureActive` flips true. Naturally only acts on the true transition (the `if (!gestureActive)
    return` guard no-ops the false transition back), so no separate flag is needed to avoid
    double-sending.
-3. **Request effect** (`[viewport]`) — sends the trimmed extent report whenever `viewport` changes,
-   provided its zoom clears `MIN_DETECT_ZOOM`. This is "when to ask the server for data" moved out
-   of an imperative moveend handler and into the same reducer + `useSelector`-driven-effect shape
-   as everything else.
-4. **Follow-up effect** (`[readyGeneration, pendingFullFollowUp, viewport]`) — the two-stage load's
-   second stage: once a trimmed request is pending (`pendingFullFollowUp`) and a *new* result
-   arrives (`readyGeneration` changed since `lastFollowUpGenRef`, a ref rather than Redux state
-   since it's purely this effect's own "have I already handled this generation" bookkeeping, never
-   read anywhere else), sends the untrimmed follow-up for the *current* viewport and dispatches
-   `fullFollowUpSent()`. The `lastFollowUpGenRef` comparison is what stops this effect from firing
-   the moment `pendingFullFollowUp` itself becomes true (before any result has actually come back)
-   — dependency-array re-runs alone can't distinguish "`pendingFullFollowUp` just turned true" from
-   "`readyGeneration` just changed while it's true," so the ref-based generation check is what
-   actually gates the send. The mount effect's cleanup resets `lastFollowUpGenRef.current` back to
-   0 alongside `dispatch(reset())` -- the store's own `readyGeneration` resets to 0 there too, so
-   without also resetting the ref, a remount could in principle start comparing a fresh, low
-   `readyGeneration` against a stale, higher leftover ref value from the previous mount. In
-   practice this self-corrects on the very next genuinely new generation (the check only ever
-   suppresses on an *exact* match), so it was never a real bug, but resetting both together removes
-   even the theoretical edge case.
-5. **Layer-creation effect** (`[isMapLoaded]`) — adds the `site-boundaries`/`site-labels`
+3. **Request effect** (`[viewport]`) — sends the full-viewport extent report whenever `viewport`
+   changes, provided its zoom clears `MIN_DETECT_ZOOM`. This is "when to ask the server for data"
+   moved out of an imperative moveend handler and into the same reducer + `useSelector`-driven-effect
+   shape as everything else.
+4. **Layer-creation effect** (`[isMapLoaded]`) — adds the `site-boundaries`/`site-labels`
    sources+layers once `isMapLoaded` flips true (mirrors what used to happen inline inside the
    mount effect's own `'load'` handler). No cleanup needed: `map.remove()` in the mount effect's
    cleanup already tears down every source/layer along with the whole map instance.
-6. **Paint effect** (`[isMapLoaded, readyGeneration, paintedGeneration, sites]`) — the single place
+5. **Paint effect** (`[isMapLoaded, readyGeneration, paintedGeneration, sites]`) — the single place
    in the codebase that decides "there's newer data than what's on screen, go apply it." Re-runs
    whenever `readyGeneration`, `paintedGeneration`, or `sites` changes; once painted, dispatches
    `layersPainted(readyGeneration)`, which sets `paintedGeneration = readyGeneration` and makes
@@ -133,29 +106,28 @@ React StrictMode's dev-mode mount→unmount→remount cycle would otherwise leav
 flipping false→true) would never re-fire for the second, surviving map instance, and its
 site-boundaries/labels sources+layers would never get created.
 
-## Two-stage load
+## Removed: two-stage (trimmed-then-full) load
 
-The trimmed (center) request (`tilesForViewport(viewport)`, `centerWaveTrim` trim, sent by the
-request effect) gets the fast, most-likely-relevant ~70% of tiles drawn first; once that result is
-back, the follow-up effect sends the *untrimmed* full viewport (`tilesForViewport(viewport, 0)`)
-so the peripheral ring still gets covered, just a little later rather than never. Deliberately
-resends the center tiles too rather than just the peripheral diff — a tried-and-reverted version
-that sent only the diff put the center tiles through `ws_server.py`'s `historical_tiles`/
-`_prune_far_tiles()` path, which prunes by real-world distance from *this message's* `current_tiles`
-(designed for "dropped a site the user panned away from minutes ago," not "tiles from the same
-view's earlier wave") — on a wide viewport, deep-center tiles can be farther from the thin
-peripheral ring than `MAX_RELEVANT_DISTANCE_M`, so they got silently pruned and their detections
-vanished from the result. Resending the full set avoids this entirely: `current_tiles` never goes
-through `_prune_far_tiles`, and the center tiles are already a cache hit in
-`get_or_process_detections` (dict lookup, no queue, no re-inference), so this costs nothing extra.
-Both this result and the follow-up's own result each separately bump `readyGeneration` and get
-painted — neither is an echo of the other.
+An earlier version sent a trimmed, center-only request first and an untrimmed full-viewport
+follow-up once that result landed, meant to get the most-likely-relevant tiles on screen faster.
+Removed 2026-09-04: in practice the follow-up fired soon enough after the first request that the
+two waves didn't produce a visible time saving, so the extra moving parts (a second effect, a
+`pendingFullFollowUp` state field, a `lastFollowUpGenRef` ref for degenerate-refire tracking, the
+area-vs-linear trim math) weren't earning their cost. It also briefly caused a real bug on the way
+out: an intermediate version that sent only the peripheral diff (instead of resending everything)
+routed the center tiles through `ws_server.py`'s `historical_tiles`/`_prune_far_tiles()` path,
+which prunes by real-world distance from *that message's* `current_tiles` — built for "drop a site
+the user panned away from minutes ago," not "tiles from the same view's earlier wave" — so
+deep-center tiles farther than `MAX_RELEVANT_DISTANCE_M` from the thin peripheral ring got silently
+pruned and their detections vanished from the result. The request effect now just sends the full
+viewport in one shot; nothing in this history is a reason to reintroduce staging without a
+demonstrated wall-clock win to justify it.
 
 `moveEndDebounceTimer` (mount effect, a plain local timer handle) — moveend fires once a single
 gesture (or its momentum) has fully settled, but several separate short gestures in a row (e.g. a
 few quick individual pans) each fire their own; a short debounce means only the last one in a
 quick burst actually dispatches `viewportSettled`, instead of firing (and then immediately
-cancelling, via movestart on the next one) a full two-stage load for a view the user was never
+cancelling, via movestart on the next one) a full extent report for a view the user was never
 actually going to stay on.
 
 `movestart` → `gestureStarted()` → the gesture-cancel effect's empty-tiles send — tells the server
