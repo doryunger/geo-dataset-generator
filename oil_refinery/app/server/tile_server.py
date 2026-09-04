@@ -95,8 +95,18 @@ for _edge in _GRAPH["edges"]:
 
 
 def _is_graph_relevant(det: dict) -> bool:
-    floor = _COMPONENT_MIN_CONFIDENCE.get(det["class_name"])
-    return floor is not None and det["confidence"] >= floor
+    """Fuzzy-matches det's class_name against the graph's component names (fuser.same_concept,
+    the same whitespace/hyphen-insensitive check fuser.py itself uses to dedup), not an exact
+    dict-key lookup -- a detection only ever gets fuser's canonical-model label rewrite when it
+    gets IoU-merged with a canonically-labeled detection; a standalone same-concept detection (e.g.
+    a solo DIOR "storagetank" with nothing nearby to merge with) otherwise keeps its own model's
+    raw spelling, and an exact lookup against the graph's "storage tank" node would silently drop
+    it regardless of confidence. Confirmed live: a solo DIOR "storagetank" at 0.879 confidence,
+    well above its component's 0.75 floor, was being dropped this way before this fix."""
+    return any(
+        fuser.same_concept(det["class_name"], component) and det["confidence"] >= floor
+        for component, floor in _COMPONENT_MIN_CONFIDENCE.items()
+    )
 
 CONF_THRESHOLD = 0.15  # matches the threshold already used for the pretrained checkpoint in
 # probe_pretrained.py; not yet re-tuned for this repo's own (much higher precision/recall) models

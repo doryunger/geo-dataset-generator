@@ -5,7 +5,7 @@ against the semantic graph (site_graph.py). All this does is spot two detections
 different models) that describe the same real-world object and collapse them to one.
 
 Two overlapping detections are only collapsed when their labels also read as the same underlying
-concept (a fuzzy substring match, see _same_concept) -- overlap alone isn't evidence of duplication,
+concept (a fuzzy substring match, see same_concept) -- overlap alone isn't evidence of duplication,
 since a class describing a large area (e.g. "harbor") will legitimately contain many distinct
 smaller objects. When they are collapsed: the higher-confidence detection's geometry/confidence
 survives (ties go to CANONICAL_MODEL), and -- independently -- the merged detection is always
@@ -22,14 +22,22 @@ from shapely.geometry import Polygon
 
 IOU_MERGE_THRESHOLD = 0.3  # placeholder pending calibration, same caveat as every other number in
 # oil_refinery/semantic_graph.md -- two detections overlapping at least this much (on their oriented
-# boxes) are candidates for being the same real-world object, subject to _same_concept() too
+# boxes) are candidates for being the same real-world object, subject to same_concept() too
 
 
 def _normalize(label: str) -> str:
     return re.sub(r"[\s\-]+", "", label.lower())
 
 
-def _same_concept(a: str, b: str) -> bool:
+def same_concept(a: str, b: str) -> bool:
+    """Fuzzy "same real-world concept" check -- whitespace/hyphen-insensitive substring match, so
+    e.g. a model's raw "storagetank" and another's "storage tank" read as the same thing. Public
+    (not `_`-prefixed) because tile_server.py's _is_graph_relevant also needs it: the semantic
+    graph's node names only match a *canonical* model's own label exactly, so a class this same
+    function already treats as a duplicate during fusion must be treated as a match there too --
+    otherwise a detection that never got IoU-merged with a canonically-labeled one (nothing nearby
+    to merge with) keeps its own model's raw spelling and an exact-string graph lookup silently
+    drops it even at high confidence."""
     na, nb = _normalize(a), _normalize(b)
     return na in nb or nb in na
 
@@ -81,7 +89,7 @@ def fuse(detections: list[dict], canonical_model: str) -> list[dict]:
     uf = _UnionFind(len(detections))
     for i in range(len(detections)):
         for j in range(i + 1, len(detections)):
-            if not _same_concept(detections[i]["class_name"], detections[j]["class_name"]):
+            if not same_concept(detections[i]["class_name"], detections[j]["class_name"]):
                 continue
             if _iou(detections[i]["corners"], detections[j]["corners"]) >= IOU_MERGE_THRESHOLD:
                 uf.union(i, j)
