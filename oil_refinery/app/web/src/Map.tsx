@@ -204,6 +204,37 @@ export default function Map() {
     map.on('moveend', () => tileDebug('moveend'))
     map.on('idle', () => tileDebug('idle'))
 
+    // Distinguishes "MapLibre has fresh data but isn't painting it" (render loop genuinely stalled)
+    // from "the data isn't actually fresh yet" (onResult/sourcedata fired, but the byte content
+    // behind it wasn't what we assumed) -- the two remaining explanations for "layer only appears
+    // after panning" now that a forced reload + triggerRepaint() didn't fix it. Logged at most once
+    // every 2s (real usage can fire 'render' dozens of times a second) so a still-firing render
+    // loop during the "static" window shows up here as evidence painting itself isn't the problem.
+    let lastRenderLogAt = 0
+    map.on('render', () => {
+      const now = performance.now()
+      if (now - lastRenderLogAt > 2000) {
+        lastRenderLogAt = now
+        tileDebug('render (throttled, logged at most 1/2s)')
+      }
+    })
+
+    // On-demand from the DevTools console during a "boxes missing" moment: window.checkTile(x, y)
+    // (z is always DETECT_ZOOM) does a fresh, uncached fetch of that exact tile URL and reports its
+    // byte size. tile_server.py's transparent placeholder is a small fixed-size PNG (~1KB, printed
+    // as 1096 bytes against this repo's own test tiles) -- a real overlay with boxes baked in is
+    // reliably larger. A size close to that placeholder means the *server* genuinely doesn't have a
+    // real overlay for this tile yet (onResult fired for a different tile set, or too early);
+    // meaningfully larger means the server has real content right now and MapLibre is the one
+    // failing to display already-available bytes -- a decisive way to tell the two apart without
+    // guessing further.
+    ;(window as typeof window & { checkTile?: (x: number, y: number) => Promise<void> }).checkTile =
+      async (x: number, y: number) => {
+        const res = await fetch(`/api/detections/${DETECT_ZOOM}/${x}/${y}`, { cache: 'no-store' })
+        const bytes = await res.arrayBuffer()
+        tileDebug(`checkTile(${x},${y})`, { status: res.status, bytes: bytes.byteLength })
+      }
+
     // Dev/debug convenience -- direct console access to the live MapLibre instance (e.g.
     // `map.getSource('site-boundaries')._data`, `map.getZoom()`) without threading it through
     // React state anywhere.
