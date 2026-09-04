@@ -194,6 +194,7 @@ export default function Map() {
       socketRef.current = null
       map.remove()
       mapRef.current = null
+      lastFollowUpGenRef.current = 0
       dispatch(reset())
     }
   }, [dispatch])

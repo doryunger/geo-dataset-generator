@@ -208,8 +208,10 @@ async def ws_extent(websocket: WebSocket):
                 current_task.cancel()
                 try:
                     await current_task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
                     pass
+                except Exception:
+                    logger.exception("Previous classify_extent task ended with an unexpected error")
 
             current_task = asyncio.ensure_future(
                 _send_result(websocket, current_tiles, historical_tiles, session.tracker)

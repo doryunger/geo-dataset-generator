@@ -78,7 +78,13 @@ means; this is about which effect reacts to which one and why the split is drawn
    the moment `pendingFullFollowUp` itself becomes true (before any result has actually come back)
    — dependency-array re-runs alone can't distinguish "`pendingFullFollowUp` just turned true" from
    "`readyGeneration` just changed while it's true," so the ref-based generation check is what
-   actually gates the send.
+   actually gates the send. The mount effect's cleanup resets `lastFollowUpGenRef.current` back to
+   0 alongside `dispatch(reset())` -- the store's own `readyGeneration` resets to 0 there too, so
+   without also resetting the ref, a remount could in principle start comparing a fresh, low
+   `readyGeneration` against a stale, higher leftover ref value from the previous mount. In
+   practice this self-corrects on the very next genuinely new generation (the check only ever
+   suppresses on an *exact* match), so it was never a real bug, but resetting both together removes
+   even the theoretical edge case.
 5. **Layer-creation effect** (`[isMapLoaded]`) — adds the `site-boundaries`/`site-labels`
    sources+layers once `isMapLoaded` flips true (mirrors what used to happen inline inside the
    mount effect's own `'load'` handler). No cleanup needed: `map.remove()` in the mount effect's

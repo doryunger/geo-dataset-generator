@@ -64,6 +64,7 @@ WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))
 
 _MODEL_EXECUTOR_SIZE = max(2, WORKER_POOL_SIZE * len(model_router.MODELS))
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=_MODEL_EXECUTOR_SIZE)
+_BATCH_EXECUTOR = ThreadPoolExecutor(max_workers=WORKER_POOL_SIZE)
 
 TILE_CACHE_CAPACITY = 300
 
@@ -373,7 +374,7 @@ async def _worker_loop() -> None:
         loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
         try:
-            batch_results = await loop.run_in_executor(None, _run_detection_batch, live_jobs)
+            batch_results = await loop.run_in_executor(_BATCH_EXECUTOR, _run_detection_batch, live_jobs)
             inference_ms_total = (time.perf_counter() - t0) * 1000
             stats.record_processed(inference_ms_total / len(live_jobs))
             job_results = [
