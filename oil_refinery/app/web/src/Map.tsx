@@ -224,9 +224,8 @@ export default function Map() {
     lastFollowUpGenRef.current = readyGeneration
     dispatch(fullFollowUpSent())
     if (viewport.zoom < MIN_DETECT_ZOOM) return
-    const centerKeys = new Set(tilesForViewport(viewport).map(({ x, y }) => `${x},${y}`))
-    const peripheralTiles = tilesForViewport(viewport, 0).filter(({ x, y }) => !centerKeys.has(`${x},${y}`))
-    if (peripheralTiles.length > 0) socket.send(DETECT_ZOOM, peripheralTiles)
+    const fullTiles = tilesForViewport(viewport, 0)
+    if (fullTiles.length > 0) socket.send(DETECT_ZOOM, fullTiles)
   }, [dispatch, readyGeneration, pendingFullFollowUp, viewport])
 
   useEffect(() => {

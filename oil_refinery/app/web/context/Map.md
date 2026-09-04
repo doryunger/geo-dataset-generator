@@ -137,14 +137,19 @@ site-boundaries/labels sources+layers would never get created.
 
 The trimmed (center) request (`tilesForViewport(viewport)`, `centerWaveTrim` trim, sent by the
 request effect) gets the fast, most-likely-relevant ~70% of tiles drawn first; once that result is
-back, the follow-up effect computes the full untrimmed tile set (`tilesForViewport(viewport, 0)`),
-subtracts the center wave's own tile set from it, and sends only that peripheral-ring difference —
-not the whole viewport again. `ws_server.py`'s session already tracks `known_tiles` across
-messages, so the center tiles the peripheral wave leaves out still fold back into the result via
-its `historical_tiles`/`get_cached_only` path (already-cached from the first wave, no
-re-inference), while the peripheral tiles are the only ones actually gathered live. Both this
-result and the follow-up's own result each separately bump `readyGeneration` and get painted —
-neither is an echo of the other.
+back, the follow-up effect sends the *untrimmed* full viewport (`tilesForViewport(viewport, 0)`)
+so the peripheral ring still gets covered, just a little later rather than never. Deliberately
+resends the center tiles too rather than just the peripheral diff — a tried-and-reverted version
+that sent only the diff put the center tiles through `ws_server.py`'s `historical_tiles`/
+`_prune_far_tiles()` path, which prunes by real-world distance from *this message's* `current_tiles`
+(designed for "dropped a site the user panned away from minutes ago," not "tiles from the same
+view's earlier wave") — on a wide viewport, deep-center tiles can be farther from the thin
+peripheral ring than `MAX_RELEVANT_DISTANCE_M`, so they got silently pruned and their detections
+vanished from the result. Resending the full set avoids this entirely: `current_tiles` never goes
+through `_prune_far_tiles`, and the center tiles are already a cache hit in
+`get_or_process_detections` (dict lookup, no queue, no re-inference), so this costs nothing extra.
+Both this result and the follow-up's own result each separately bump `readyGeneration` and get
+painted — neither is an echo of the other.
 
 `moveEndDebounceTimer` (mount effect, a plain local timer handle) — moveend fires once a single
 gesture (or its momentum) has fully settled, but several separate short gestures in a row (e.g. a
