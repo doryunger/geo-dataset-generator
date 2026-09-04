@@ -3,9 +3,15 @@
 For what the code does and where things live, see `README.md` — this file is about *how to work
 on it*, distilled from actual sessions rather than aspirational.
 
-Code files are kept deliberately free of explanatory comments/long docstrings — for the "why"
-behind a non-obvious design choice in any script, check `context/<script_name>.md` (one file per
-`scripts/*.py`, not every script has one).
+**No comments in code files, anywhere in this repo** — no inline `#`/`//` comments, no explanatory
+docstrings, in any language (Python, TypeScript/TSX, etc.), in any part of the tree (`scripts/`,
+`oil_refinery/app/server/`, `oil_refinery/app/web/src/`, ...). For the "why" behind a non-obvious
+design choice, put it in that directory's own `context/<filename>.md` instead (one file per source
+file, not every file needs one) — `scripts/context/`, `oil_refinery/app/server/context/`, and
+`oil_refinery/app/web/context/` are the three that exist so far; a new area of the codebase gets
+its own `context/` sibling directory the same way. Applies to new code and existing code alike —
+if you're editing a file that still has comments in it, or adding logic that would otherwise need
+one, strip/move them out as part of that edit rather than leaving or adding to them.
 
 ## Reply style
 
