@@ -238,6 +238,19 @@ forever), while an existing job got redundantly re-pushed onto the queue every t
 caller joined it. Fixed by restoring `push()` to the `if job is None:` branch; the `elif` branch
 now only ever updates `has_interactive_request`.
 
+## `get_or_process_detections()`
+
+`_run()`'s body is wrapped in a try/except that logs and returns `[]` on failure (e.g. `Job` name
+already exists, but concretely: `common.fetch_tile` exhausting its retries on Mapbox rate-limiting)
+rather than letting the exception propagate. This has two callers, and an uncontained exception was
+a real gap for both: `ws_server.py`'s `classify_extent()` awaits many of these at once via
+`asyncio.gather()` — without containment, one bad tile fetch would abort the *entire* extent
+report, silently, with nothing sent to the client that round. `get_detections()`'s fire-and-forget
+kickoff (below) never awaits the returned future at all — without containment, a failure there
+would only ever surface as an anonymous "Task exception was never retrieved" from asyncio's default
+handler instead of a real log entry. Verified directly: a failing `fetch_tile` now resolves to `[]`
+in both call shapes, logged with a full traceback, never raised.
+
 ## `get_detections()`
 
 Only ever does real work at exactly `DETECT_ZOOM` — every other zoom returns the transparent

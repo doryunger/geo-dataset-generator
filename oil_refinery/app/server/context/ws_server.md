@@ -108,6 +108,12 @@ the connection. Only *this* message's tiles are worth spending queue/worker time
 else kept is passed to `classify_extent()` as best-effort "historical" tiles (cache-only, see
 `get_cached_only()`), not reprocessed.
 
+A malformed incoming message (`ExtentRequest.model_validate(data)` raising) is logged and skipped
+rather than left to propagate out of the loop and kill the connection — this is the one point where
+genuinely untrusted, client-controlled input first enters the system, so it's the right boundary
+for defensive handling; nothing past validation gets the same treatment, since everything after
+that point is this module's own already-validated logic.
+
 A genuinely new (non-empty) incoming message doesn't wait for the previous one's
 `classify_extent()` call to finish — it cancels it first (superseded: the previous report's
 still-unprocessed tiles are no longer the priority, though they're still part of `known_tiles` and

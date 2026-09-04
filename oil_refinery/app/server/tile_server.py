@@ -476,7 +476,11 @@ def get_or_process_detections(z: int, x: int, y: int) -> "asyncio.Future[list[di
     async def _run() -> list[dict]:
         if z != DETECT_ZOOM:
             return []
-        result = await _ensure_processed(z, x, y)
+        try:
+            result = await _ensure_processed(z, x, y)
+        except Exception:
+            logger.exception("get_or_process_detections failed for tile %s", common.tile_id(z, x, y))
+            return []
         return result.detections or []
     return asyncio.ensure_future(_run())
 

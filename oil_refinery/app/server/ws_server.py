@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import sys
 import time
@@ -17,6 +18,8 @@ import geometry  # noqa: E402
 import site_graph  # noqa: E402
 import site_tracker  # noqa: E402
 import tile_server  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 GRAPH: dict = site_graph.load_graph()
 MAX_RELEVANT_DISTANCE_M = site_graph.max_relevant_distance_m(GRAPH)
@@ -184,7 +187,11 @@ async def ws_extent(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
-            body = ExtentRequest.model_validate(data)
+            try:
+                body = ExtentRequest.model_validate(data)
+            except Exception:
+                logger.exception("ws_extent: ignoring malformed message: %r", data)
+                continue
             current_tiles = {
                 dz_tile for tile in body.tiles for dz_tile in _detect_zoom_tiles(body.zoom, tile.x, tile.y)
             }
