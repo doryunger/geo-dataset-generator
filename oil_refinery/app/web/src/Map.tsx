@@ -250,6 +250,7 @@ export default function Map() {
     const FORCED_RELOAD_COOLDOWN_MS = 2000
 
     const socket = new ExtentSocket((result) => {
+      tileDebug('onResult', { siteCount: result.features.length })
       setSites(result)
       const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
       const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
@@ -274,7 +275,10 @@ export default function Map() {
       if (now - lastForcedDetectionsReload > FORCED_RELOAD_COOLDOWN_MS) {
         lastForcedDetectionsReload = now
         const detectionsSource = map.getSource('detections') as maplibregl.RasterTileSource | undefined
+        tileDebug('forcing detections reload', { hasSource: !!detectionsSource })
         detectionsSource?.setTiles(['/api/detections/{z}/{x}/{y}'])
+      } else {
+        tileDebug('forced reload skipped (cooldown)', { msSinceLast: now - lastForcedDetectionsReload })
       }
 
       // Two-stage load: the trimmed request above gets the fast, most-likely-relevant tiles drawn
