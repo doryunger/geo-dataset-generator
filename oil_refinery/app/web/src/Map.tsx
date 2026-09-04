@@ -193,6 +193,12 @@ export default function Map() {
         dataType: e.dataType,
         sourceDataType: (e as unknown as { sourceDataType?: string }).sourceDataType,
       })
+      // Nudge a repaint right at the source's own "I just finished loading" signal -- the most
+      // precise point available, and not conditional on the websocket's onResult callback (below)
+      // ever firing or its cooldown letting a forced reload through. Covers tile data that arrived
+      // through MapLibre's own ordinary (non-forced) loading too, not just our forced reload's.
+      // See onResult's own triggerRepaint() call for the full theory this is testing.
+      if (e.sourceId === 'detections' && e.isSourceLoaded) map.triggerRepaint()
     })
     map.on('movestart', () => tileDebug('movestart'))
     map.on('moveend', () => tileDebug('moveend'))
@@ -280,6 +286,20 @@ export default function Map() {
       } else {
         tileDebug('forced reload skipped (cooldown)', { msSinceLast: now - lastForcedDetectionsReload })
       }
+
+      // A loaded tile normally re-arms MapLibre's own render loop and schedules its next paint
+      // frame automatically -- but that loop can go fully idle (no camera motion, nothing else
+      // pending) by the time a slow tile's response lands well after the gesture that requested
+      // it, and there's reason to suspect that re-arm doesn't reliably happen in that case (this is
+      // the gap the "layer only appears after panning" symptom actually looks like: sourcedata
+      // fires -- the source has the data -- but nothing gets painted with it). triggerRepaint() is
+      // MapLibre's own public escape hatch for exactly this: "repaint now, don't wait for your own
+      // heuristics to decide a frame is needed." Called unconditionally here (not just when the
+      // reload above actually fires) since the same idle-loop gap could just as easily strand data
+      // that arrived through MapLibre's own unforced tile loading, not only our forced reload.
+      // Cheap and safe to call liberally -- documented as deduping to a single frame if called
+      // more than once before the next one renders.
+      map.triggerRepaint()
 
       // Two-stage load: the trimmed request above gets the fast, most-likely-relevant tiles drawn
       // first; once that's back, follow up with the *untrimmed* full viewport so the skipped edge
