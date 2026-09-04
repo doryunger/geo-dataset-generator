@@ -15,7 +15,6 @@ export default function StatsOverlay() {
         const s = await fetchStats()
         if (!cancelled) setStats(s)
       } catch {
-        // server not up yet / transient -- just try again next tick
       }
     }
     poll()
