@@ -305,6 +305,7 @@ def _generate_pieces_for_class(
     for i, row in enumerate(samples):
         src = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
         if src is None:
+            logger.warning(f"[{class_name}] obb: sample {row['id']} has no crop image on disk, skipping")
             continue
         split = (row["id"] in val_ids) if val_ids is not None else (i % VAL_FRACTION == 0)
         split = "val" if split else "train"

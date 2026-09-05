@@ -141,6 +141,7 @@ def generate_package(class_name: str) -> dict:
     for i, row in enumerate(samples):
         src = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
         if src is None:
+            logger.warning(f"[{class_name}] segmentation: sample {row['id']} has no crop image on disk, skipping")
             continue
         split = "val" if i % VAL_FRACTION == 0 else "train"
         dst = common.dataset_dir(class_name) / "images" / split / f"{row['id']}{_dataset_ext(src)}"
