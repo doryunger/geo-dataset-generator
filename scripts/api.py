@@ -697,7 +697,11 @@ def hard_negative_image(tile_id: str):
         raise HTTPException(400, "Invalid tile_id")
     match = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
     if match is None:
-        raise HTTPException(404, "Tile image not found")
+        z, x, y = (int(v) for v in tile_id.split("_"))
+        try:
+            match = common.fetch_tile(z, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
+        except Exception as e:
+            raise HTTPException(502, f"Tile image missing locally and re-fetch from Mapbox failed: {e}")
     media_type = "image/png" if match.suffix.startswith(".png") else "image/jpeg"
     return FileResponse(match, media_type=media_type)
 
