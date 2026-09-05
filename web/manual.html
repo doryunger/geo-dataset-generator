@@ -39,6 +39,7 @@
       <button id="tab-btn-validation" class="tab-btn">Validation</button>
       <button id="tab-btn-training" class="tab-btn">Training</button>
       <button id="tab-btn-graph" class="tab-btn">Graph</button>
+      <button id="tab-btn-hard-negatives" class="tab-btn">Hard Negatives</button>
     </div>
 
     <div id="samples-tab" class="tab-panel">
@@ -48,6 +49,10 @@
       <label id="include-latest-label">
         <input type="checkbox" id="include-latest-checkbox" checked />
         Include latest available entry (merge in S3's latest before packaging)
+      </label>
+      <label id="include-hard-negatives-label">
+        <input type="checkbox" id="include-hard-negatives-checkbox" />
+        Include hard negatives (from the Hard Negatives tab)
       </label>
       <button id="generate-package-btn">Generate Package</button>
       <progress id="generate-package-progress" value="0" max="100" style="display:none"></progress>
@@ -114,6 +119,18 @@
       </div>
 
       <div id="graph-status" class="hint"></div>
+    </div>
+
+    <div id="hard-negatives-tab" class="tab-panel" style="display:none">
+      <p class="hint">
+        Tiles that look like this class but aren't -- e.g. plain storage tanks for fan-unit. Click
+        "Add Hard Negative", then hover the map: the box shows the extent of the tile that will be
+        cropped (fixed real-world size, so it looks bigger/smaller on screen as you zoom). Click to
+        confirm.
+      </p>
+      <button id="add-hard-negative-btn">+ Add Hard Negative</button>
+      <div id="hard-negatives-status" class="hint"></div>
+      <div id="hard-negatives-list"></div>
     </div>
   </div>
 

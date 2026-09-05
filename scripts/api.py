@@ -137,6 +137,16 @@ class ManualPromoteRequest(BaseModel):
 class GeneratePackageRequest(BaseModel):
     class_name: str
     include_latest: bool = False
+    include_hard_negatives: bool = False
+
+
+class AddHardNegativeRequest(BaseModel):
+    class_name: str
+    lat: float
+    lon: float
+
+
+HARD_NEGATIVE_ZOOM = 17
 
 
 @app.get("/api/config")
@@ -642,6 +652,56 @@ def manual_sample_image(sample_id: str, class_name: str):
     return FileResponse(match, media_type=media_type, headers={"Cache-Control": "no-store"})
 
 
+@app.get("/api/manual/hard_negatives")
+def list_hard_negatives(class_name: str):
+    tile_ids = s3_sync.sync_hard_negatives(class_name)
+    tiles = []
+    for tile_id in tile_ids:
+        z, x, y = (int(v) for v in tile_id.split("_"))
+        bounds = common.tile_bounds(z, x, y)
+        tiles.append({
+            "tile_id": tile_id,
+            "lon": (bounds["west"] + bounds["east"]) / 2,
+            "lat": (bounds["south"] + bounds["north"]) / 2,
+            "thumbnail_url": f"/api/manual/hard_negative_image/{tile_id}",
+        })
+    return {"tiles": tiles}
+
+
+@app.post("/api/manual/hard_negatives")
+def add_hard_negative(req: AddHardNegativeRequest):
+    if req.class_name not in common.list_classes():
+        raise HTTPException(404, f"Class '{req.class_name}' not found")
+    x, y = common.lonlat_to_tile(req.lon, req.lat, HARD_NEGATIVE_ZOOM)
+    tile_id = common.tile_id(HARD_NEGATIVE_ZOOM, x, y)
+    common.fetch_tile(HARD_NEGATIVE_ZOOM, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
+    common.add_hard_negative(req.class_name, tile_id)
+    s3_sync.upload_hard_negative(req.class_name, tile_id)
+    logger.info(f"[{req.class_name}] added hard negative tile {tile_id}")
+    return {"tile_id": tile_id}
+
+
+@app.delete("/api/manual/hard_negatives/{tile_id}")
+def delete_hard_negative(tile_id: str, class_name: str):
+    if not _TILE_ID_RE.match(tile_id):
+        raise HTTPException(400, "Invalid tile_id")
+    common.remove_hard_negative(class_name, tile_id)
+    s3_sync.delete_remote_hard_negative(class_name, tile_id)
+    logger.info(f"[{class_name}] removed hard negative tile {tile_id}")
+    return {"deleted": True}
+
+
+@app.get("/api/manual/hard_negative_image/{tile_id}")
+def hard_negative_image(tile_id: str):
+    if not _TILE_ID_RE.match(tile_id):
+        raise HTTPException(400, "Invalid tile_id")
+    match = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
+    if match is None:
+        raise HTTPException(404, "Tile image not found")
+    media_type = "image/png" if match.suffix.startswith(".png") else "image/jpeg"
+    return FileResponse(match, media_type=media_type)
+
+
 def _build_validate_response(class_name: str, result: search.ValidationResult) -> dict:
     return {
         "z": result.z, "lon": result.lon, "lat": result.lat,
@@ -753,7 +813,9 @@ def _run_generate_package_job(job: Job, req: GeneratePackageRequest) -> None:
                 "percent": 20 + int(70 * i / max(total, 1)),
             }
 
-        obb_result = obb.generate_obb_package(class_name, embedder=_state["embedder"], on_progress=on_obb_progress)
+        obb_result = obb.generate_obb_package(
+            class_name, req.include_hard_negatives, embedder=_state["embedder"], on_progress=on_obb_progress,
+        )
         logger.info(f"[{class_name}] OBB dataset done: {obb_result['train']} train, {obb_result['val']} val")
 
         job.progress = {"step": "Uploading to S3", "percent": 92}

@@ -1,5 +1,6 @@
 """S3 backup for classes/ as timestamped package snapshots."""
 import io
+import json
 import logging
 import os
 import shutil
@@ -197,3 +198,50 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
         "remote_total": len(remote_samples), "local_total": len(local_samples),
         "added_from_remote": len(added_rows), "merged_total": len(local_samples) + len(added_rows),
     }
+
+
+def _hard_negative_prefix(class_name: str) -> str:
+    return f"hard_negatives/{class_name}/"
+
+
+def upload_hard_negative(class_name: str, tile_id: str) -> None:
+    if not s3_configured():
+        return
+    key = f"{_hard_negative_prefix(class_name)}{tile_id}.json"
+    body = json.dumps({"tile_id": tile_id, "added_at": time.time()}).encode("utf-8")
+    _client().put_object(Bucket=_BUCKET, Key=key, Body=body, ContentType="application/json")
+    logger.info(f"[{class_name}] uploaded hard negative {tile_id} to s3://{_BUCKET}/{key}")
+
+
+def delete_remote_hard_negative(class_name: str, tile_id: str) -> None:
+    if not s3_configured():
+        return
+    key = f"{_hard_negative_prefix(class_name)}{tile_id}.json"
+    _client().delete_object(Bucket=_BUCKET, Key=key)
+    logger.info(f"[{class_name}] deleted hard negative {tile_id} from s3://{_BUCKET}/{key}")
+
+
+def list_remote_hard_negatives(class_name: str) -> list[str]:
+    if not s3_configured():
+        return []
+    tile_ids = []
+    paginator = _client().get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=_BUCKET, Prefix=_hard_negative_prefix(class_name)):
+        for obj in page.get("Contents", []):
+            name = Path(obj["Key"]).name
+            if name.endswith(".json"):
+                tile_ids.append(name.removesuffix(".json"))
+    return tile_ids
+
+
+def sync_hard_negatives(class_name: str) -> list[str]:
+    if not s3_configured():
+        return common.load_hard_negatives(class_name)
+    remote = list_remote_hard_negatives(class_name)
+    local = common.load_hard_negatives(class_name)
+    added = [t for t in remote if t not in local]
+    for tile_id in added:
+        common.add_hard_negative(class_name, tile_id)
+    if added:
+        logger.info(f"[{class_name}] pulled {len(added)} hard negative(s) from S3: {added}")
+    return common.load_hard_negatives(class_name)

@@ -47,24 +47,12 @@ HARD_NEGATIVE_TILES = {
     "19_312953_212894": ("fence-face",),
     "19_312954_212894": ("fence-face",),
     "19_312955_212893": ("fence-face",),
-    "17_69157_42405": ("distillation-column",),
-    "17_69157_42406": ("distillation-column",),
-    "17_69159_42405": ("distillation-column",),
-    "17_69161_42405": ("distillation-column",),
-    "17_69160_42405": ("distillation-column",),
-    "17_69159_42406": ("distillation-column",),
-    "17_69159_42407": ("distillation-column",),
-    "17_69160_42406": ("distillation-column",),
-    "17_69160_42407": ("distillation-column",),
-    "17_69161_42406": ("distillation-column",),
-    "17_69161_42407": ("distillation-column",),
-    "17_67109_43729": ("fan-unit",),
-    "17_67109_43724": ("fan-unit",),
-    "17_67113_43740": ("fan-unit",),
-    "17_69161_42384": ("fan-unit",),
-    "17_69159_42384": ("fan-unit",),
-    "17_69158_42382": ("fan-unit",),
 }
+
+
+def _hard_negative_tile_ids(class_name: str) -> list[str]:
+    legacy = [tid for tid, classes in HARD_NEGATIVE_TILES.items() if class_name in classes]
+    return list(dict.fromkeys(legacy + common.load_hard_negatives(class_name)))
 
 
 def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
@@ -399,12 +387,9 @@ def generate_obb_package(
         if positive_sizes:
             rng = random.Random(42)
             crops_per_tile = 1
-            for tile_id, classes in HARD_NEGATIVE_TILES.items():
-                if class_name not in classes:
-                    continue
-                src = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
-                if src is None:
-                    continue
+            for tile_id in _hard_negative_tile_ids(class_name):
+                z, x, y = (int(v) for v in tile_id.split("_"))
+                src = common.fetch_tile(z, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
                 for i, crop in enumerate(_sample_hard_negative_crops(src, positive_sizes, rng, crops_per_tile)):
                     name = f"{tile_id}_neg{i}"
                     crop.save(output_dir / "images" / "train" / f"{name}.jpg", format="JPEG")

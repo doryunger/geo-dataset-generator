@@ -145,6 +145,25 @@ def samples_path(name: str) -> Path:
     return class_dir(name) / "samples.jsonl"
 
 
+def hard_negatives_path(name: str) -> Path:
+    return class_dir(name) / "hard_negatives.jsonl"
+
+
+def load_hard_negatives(name: str) -> list[str]:
+    return [row["tile_id"] for row in read_jsonl(hard_negatives_path(name))]
+
+
+def add_hard_negative(name: str, tile_id: str) -> None:
+    if tile_id in load_hard_negatives(name):
+        return
+    append_jsonl(hard_negatives_path(name), [{"tile_id": tile_id, "added_at": time.time()}])
+
+
+def remove_hard_negative(name: str, tile_id: str) -> None:
+    rows = [row for row in read_jsonl(hard_negatives_path(name)) if row["tile_id"] != tile_id]
+    rewrite_jsonl(hard_negatives_path(name), rows)
+
+
 def yolo_seg_lines(polygons: list[list[list[float]]]) -> str:
     lines = []
     for polygon in polygons:
