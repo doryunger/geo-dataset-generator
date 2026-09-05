@@ -1,12 +1,13 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; font-family: -apple-system, sans-serif; }
 
-/* mapbox-gl-draw's controls use "mapboxgl-ctrl*" class names (built for Mapbox GL JS), but
-   MapLibre's own CSS only re-enables click-through (pointer-events) on its own "maplibregl-ctrl*"
-   names, leaving the draw control's ancestor container at pointer-events:none — so without this,
-   clicks silently fall through to the map canvas underneath and the draw buttons do nothing. */
 .mapboxgl-ctrl-group, .mapboxgl-ctrl {
   pointer-events: auto;
+}
+.maplibregl-ctrl-top-right .mapboxgl-ctrl {
+  float: right;
+  clear: both;
+  margin: 10px 10px 0 0;
 }
 
 #sidebar {
@@ -21,6 +22,10 @@ html, body { margin: 0; height: 100%; font-family: -apple-system, sans-serif; }
 }
 
 #map { position: absolute; top: 0; right: 0; bottom: 0; left: 460px; }
+
+.upload-layer-file-row { display: flex; gap: 8px; }
+.upload-layer-file-row input { margin-bottom: 0; flex: 1; }
+.upload-layer-file-row button { width: auto; margin-bottom: 0; }
 
 h1 { font-size: 18px; margin: 0 0 12px; }
 

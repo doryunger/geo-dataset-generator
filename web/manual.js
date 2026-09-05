@@ -77,6 +77,13 @@ const warningModal = document.getElementById("warning-modal");
 const warningModalText = document.getElementById("warning-modal-text");
 const warningModalOk = document.getElementById("warning-modal-ok");
 
+const uploadLayerModal = document.getElementById("upload-layer-modal");
+const uploadLayerFilePath = document.getElementById("upload-layer-file-path");
+const uploadLayerBrowseBtn = document.getElementById("upload-layer-browse-btn");
+const uploadLayerFileInput = document.getElementById("upload-layer-file-input");
+const uploadLayerStatusEl = document.getElementById("upload-layer-status");
+const uploadLayerCloseBtn = document.getElementById("upload-layer-close-btn");
+
 function showWarning(text) {
   warningModalText.textContent = text;
   warningModal.style.display = "flex";
@@ -248,6 +255,27 @@ async function loadConfig() {
   });
   map.addControl(draw);
 
+  map.addControl({
+    onAdd() {
+      this._container = document.createElement("div");
+      this._container.className = "maplibregl-ctrl maplibregl-ctrl-group";
+      const btn = document.createElement("button");
+      btn.className = "upload-layer-ctrl-btn";
+      btn.type = "button";
+      btn.textContent = "Upload Data Layer";
+      btn.style.cssText =
+        "width:auto; height:auto; margin:0; padding:8px 12px; white-space:nowrap; " +
+        "background:#1a73e8; color:#fff; border:none; border-radius:4px; " +
+        "font-size:13px; font-weight:600; cursor:pointer;";
+      btn.addEventListener("click", openUploadLayerModal);
+      this._container.appendChild(btn);
+      return this._container;
+    },
+    onRemove() {
+      this._container.remove();
+    },
+  });
+
   map.on("load", () => {
     // Static, non-interactive rendering of every saved sample except the one currently pulled
     // into `draw` for editing -- kept out of MapboxDraw entirely so its own click-driven
@@ -342,6 +370,61 @@ function refreshSamplesLayer() {
       geometry: { type: "Polygon", coordinates: [s.polygon] },
     }));
   source.setData({ type: "FeatureCollection", features });
+}
+
+const GEOJSON_TYPES = new Set([
+  "FeatureCollection", "Feature", "Point", "MultiPoint", "LineString",
+  "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection",
+]);
+
+function openUploadLayerModal() {
+  uploadLayerFilePath.value = "";
+  uploadLayerFileInput.value = "";
+  uploadLayerStatusEl.textContent = "";
+  uploadLayerModal.style.display = "flex";
+}
+
+function applyUploadedLayer(geojson) {
+  const source = map.getSource("uploaded-data");
+  if (source) {
+    source.setData(geojson);
+  } else {
+    map.addSource("uploaded-data", { type: "geojson", data: geojson });
+  }
+  if (!map.getLayer("uploaded-data-layer")) {
+    map.addLayer({
+      id: "uploaded-data-layer",
+      type: "line",
+      source: "uploaded-data",
+      minzoom: 3,
+      paint: { "line-color": "#e74c3c", "line-width": 3 },
+    });
+  }
+}
+
+function handleUploadLayerFile(file) {
+  if (!file) return;
+  uploadLayerFilePath.value = file.name;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let geojson;
+    try {
+      geojson = JSON.parse(reader.result);
+    } catch (err) {
+      uploadLayerStatusEl.textContent = "Invalid file: not valid JSON.";
+      return;
+    }
+    if (!geojson || typeof geojson !== "object" || !GEOJSON_TYPES.has(geojson.type)) {
+      uploadLayerStatusEl.textContent = "Invalid file: not a GeoJSON object.";
+      return;
+    }
+    applyUploadedLayer(geojson);
+    uploadLayerStatusEl.textContent = "Layer loaded.";
+  };
+  reader.onerror = () => {
+    uploadLayerStatusEl.textContent = "Failed to read file.";
+  };
+  reader.readAsText(file);
 }
 
 // ---------- drawing a new sample ----------
@@ -1104,6 +1187,9 @@ validationModalCancel.addEventListener("click", () => { validationModal.style.di
 validationModalRun.addEventListener("click", runValidationFromModal);
 abortValidationBtn.addEventListener("click", abortValidation);
 warningModalOk.addEventListener("click", () => { warningModal.style.display = "none"; });
+uploadLayerBrowseBtn.addEventListener("click", () => uploadLayerFileInput.click());
+uploadLayerFileInput.addEventListener("change", () => handleUploadLayerFile(uploadLayerFileInput.files[0]));
+uploadLayerCloseBtn.addEventListener("click", () => { uploadLayerModal.style.display = "none"; });
 
 loadConfig();
 loadClasses();
