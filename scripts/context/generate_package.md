@@ -1,8 +1,23 @@
-# generate_package.py
+# generate_package.py / .sh / .bat
 
 Usage:
 
     python scripts/generate_package.py --class <class>
+    scripts/generate_package.sh                        # or generate_package.bat on Windows
+    scripts/generate_package.sh --class chimney         # skips the interactive prompt
+
+`--class` is optional: when omitted, the script prompts with a numbered menu built from
+`common.list_classes()` (the same directory-scan `/api/classes` uses -- one entry per top-level
+`classes/<name>/` directory, plus `<parent>/<child>` for any sub-class directory that has its own
+`samples/`) instead of failing on a missing argument, since this is meant to be run directly by
+double-clicking `generate_package.bat` or typing `./generate_package.sh` with no memorized flags.
+The menu always matches whatever classes actually exist on disk, so it needs no manual update when
+a class is added or removed.
+
+The `.sh`/`.bat` wrappers are the same thin cd-and-load-`.env`-then-delegate pattern as
+`pull_classes.sh`/`.bat` (see `pull_classes.md` in this same directory for why `.env` sourcing is
+guarded rather than unconditional) -- they forward all arguments, so `--class`/`--hard-negatives`
+still work non-interactively through either wrapper.
 
 CLI equivalent of the `/manual` UI's "Generate Package" button with "Include latest available
 entry" unchecked -- rebuilds both `dataset/` (segmentation) and `dataset_obb/` (OBB) purely from
