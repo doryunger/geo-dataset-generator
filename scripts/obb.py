@@ -40,32 +40,31 @@ BEND_PIECES = {
     "7e1da02e5364": 2,
 }
 
-HARD_NEGATIVE_TILES = [
-    "19_312953_212891",
-    "19_312954_212892",
-    "19_312955_212891",
-    "19_312953_212894",
-    "19_312954_212894",
-    "19_312955_212893",
-    # Added for distillation-column, from oil_refinery/app POC testing at the Hamburg refinery
-    # site -- the model was firing on ~everything (roads, tanks, buildings) at full-tile scale
-    # despite 0.994 val precision, because it had never seen real backgrounds during training.
-    # Visually reviewed one by one; two ambiguous dense-process-unit tiles from the same batch
-    # were deliberately excluded (could plausibly contain a real column).
-    "17_69157_42405",  # storage tank farm
-    "17_69157_42406",  # storage tank farm
-    "17_69159_42405",  # buildings/warehouses/roads/rail
-    "17_69161_42405",  # water/harbor/docks
-    "17_69160_42405",  # rail yard/warehouses
-    # Second pass, same batch/review process -- v3 (trained with the 5 above) still showed real
-    # false positives on tiles not yet covered by those negatives.
-    "17_69159_42406",  # buildings/warehouses/parking
-    "17_69159_42407",  # storage tanks (incl. the large tank that misfired in v3/v4)
-    "17_69160_42406",  # rail yard/warehouses/dock
-    "17_69160_42407",  # water/docks
-    "17_69161_42406",  # water + storage tanks
-    "17_69161_42407",  # water + tank farm
-]
+HARD_NEGATIVE_TILES = {
+    "19_312953_212891": ("fence-face",),
+    "19_312954_212892": ("fence-face",),
+    "19_312955_212891": ("fence-face",),
+    "19_312953_212894": ("fence-face",),
+    "19_312954_212894": ("fence-face",),
+    "19_312955_212893": ("fence-face",),
+    "17_69157_42405": ("distillation-column",),
+    "17_69157_42406": ("distillation-column",),
+    "17_69159_42405": ("distillation-column",),
+    "17_69161_42405": ("distillation-column",),
+    "17_69160_42405": ("distillation-column",),
+    "17_69159_42406": ("distillation-column",),
+    "17_69159_42407": ("distillation-column",),
+    "17_69160_42406": ("distillation-column",),
+    "17_69160_42407": ("distillation-column",),
+    "17_69161_42406": ("distillation-column",),
+    "17_69161_42407": ("distillation-column",),
+    "17_67109_43729": ("fan-unit",),
+    "17_67109_43724": ("fan-unit",),
+    "17_67113_43740": ("fan-unit",),
+    "17_69161_42384": ("fan-unit",),
+    "17_69159_42384": ("fan-unit",),
+    "17_69158_42382": ("fan-unit",),
+}
 
 
 def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
@@ -104,17 +103,10 @@ DEFAULT_MIN_PIECE_M = 2.0
 DEFAULT_MAX_PIECE_M = 5.0
 CONTEXT_TILE_PX = 224
 
-DEFAULT_NORMALIZE_SAMPLE_CROP = False  # off by default -- existing classes' training-image
-# framing doesn't change unless a class opts in via subclass_graph.json's per-node config (same
-# place min_piece_m/max_piece_m already live). See _normalized_sample_crop's docstring for why.
+DEFAULT_NORMALIZE_SAMPLE_CROP = False
 
-SAMPLE_CROP_M = 80.0  # fixed real-world extent (per side) fetched around every sample's centroid
-SAMPLE_FETCH_ZOOM = 18  # fixed zoom for that fetch -- not whatever zoom the sample happened to be
-# drawn at. Together with the existing GSD-resample step below, every opted-in class's training
-# image ends up the same pixel size no matter how large or small the real object is (this class's
-# own samples ranged 5-49m across) -- label size within that fixed frame then honestly reflects
-# the object's real proportional size, instead of being an artifact of how tightly each sample
-# happened to be hand-cropped.
+SAMPLE_CROP_M = 80.0
+SAMPLE_FETCH_ZOOM = 18
 
 
 def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
@@ -132,17 +124,6 @@ def _bbox_around(lon: float, lat: float, extent_m: float) -> tuple[float, float,
 
 
 def _normalized_sample_crop(row: dict):
-    """Fetches a fixed real-world extent (SAMPLE_CROP_M) around a sample's polygon centroid, at a
-    fixed zoom (SAMPLE_FETCH_ZOOM) -- not the sample's own tight bounds (see web/manual.js's
-    polygonBbox, used verbatim as the fetch bounds in api.py's create_manual_sample) and not
-    whatever zoom it happened to be drawn at. That tight-crop convention was fine for this
-    project's primary embedding-similarity-search workflow, but for detector training it meant the
-    object filled nearly the whole training image, in a differently-sized frame per sample --
-    teaching classification of a pre-isolated crop, not localization of an object within a
-    consistently-framed scene. No re-labeling needed: the polygon is already real lon/lat and
-    re-projects correctly into whatever fixed bounds get fetched here. Reuses common.fetch_tile's
-    on-disk cache (via fetch_and_crop_bbox) -- usually a cheap re-composite of tiles already
-    fetched when the sample was first drawn, not a fresh network round-trip."""
     lon, lat = _polygon_centroid(row["polygon"])
     west, south, east, north = _bbox_around(lon, lat, SAMPLE_CROP_M)
     out_path = common.SCRATCH_DIR / "obb_context_crops" / f"{row['id']}.jpg"
@@ -351,11 +332,6 @@ def _generate_pieces_for_class(
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 
         if len(rects) == 1:
-            # A minimum-rotated-rectangle's corners can extend slightly past the polygon it
-            # bounds (normal for non-rectangular shapes) -- clip to the image window the same
-            # way the multi-piece branch below already does, or a tightly-cropped sample (no
-            # margin) can produce out-of-[0,1] normalized coordinates that ultralytics silently
-            # rejects as invalid during label caching.
             clipped = _clip_rect_to_window(rects[0], 0, 0, w, h)
             if clipped is None:
                 logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
@@ -420,11 +396,11 @@ def generate_obb_package(
                 positive_sizes.append(im.size)
 
         if positive_sizes:
-            rng = random.Random(42)  # deterministic -- same crops on every regeneration
-            crops_per_tile = 1  # conservative: keeps negatives well under positives in count,
-            # matching this repo's own caution that hard negatives destabilized training once at
-            # a much less favorable ratio than this produces -- raise once this is confirmed safe
-            for tile_id in HARD_NEGATIVE_TILES:
+            rng = random.Random(42)
+            crops_per_tile = 1
+            for tile_id, classes in HARD_NEGATIVE_TILES.items():
+                if class_name not in classes:
+                    continue
                 src = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
                 if src is None:
                     continue

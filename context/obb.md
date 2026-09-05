@@ -33,14 +33,68 @@ loosest fit. Both deleted ids were re-drawn under the new ids above, not stale e
 `8382b49f6b71` (2): right-angle turn at the bottom-left corner. `7e1da02e5364` (2): elbow where
 the ribbon follows the road's curve.
 
+## DEFAULT_NORMALIZE_SAMPLE_CROP / SAMPLE_CROP_M / SAMPLE_FETCH_ZOOM / _normalized_sample_crop
+
+Off by default — existing classes' training-image framing doesn't change unless a class opts in
+via its own `subclass_graph.json`'s per-node `normalize_sample_crop` (same place
+`min_piece_m`/`max_piece_m` already live).
+
+`_normalized_sample_crop` fetches a fixed real-world extent (`SAMPLE_CROP_M`, 80m) around a
+sample's polygon centroid at a fixed zoom (`SAMPLE_FETCH_ZOOM`, 18) — not the sample's own tight
+bounds (see `web/manual.js`'s `polygonBbox`, used verbatim as the fetch bounds in `api.py`'s
+`create_manual_sample`) and not whatever zoom it happened to be drawn at. That tight-crop
+convention is fine for this project's primary embedding-similarity-search workflow, but for
+detector training it meant the object filled nearly the whole training image, in a
+differently-sized frame per sample — teaching classification of a pre-isolated crop, not
+localization of an object within a consistently-framed scene. Confirmed as a real, severe bug for
+`fan-unit`: its subclass_graph.json only had `min_piece_m`/`max_piece_m` set (copied from
+`chimney`'s, which never opted into this), so every one of its 74 training crops was 42-138px,
+object edge-to-edge, near-zero background — and the resulting `fan_unit_obb_v1` fired on
+~everything (roads, water, tree canopy) at real-tile scale despite 0.995 val precision. Turning on
+`normalize_sample_crop` and retraining (`fan_unit_obb_v2`) cut a same-site false-positive scan from
+100% of tiles hit / 395 boxes down to 44% / 59 boxes, with genuine localized hits confirmed by
+hand. No re-labeling needed when opting a class in: the polygon is already real lon/lat and
+re-projects correctly into whatever fixed bounds get fetched here. Reuses `common.fetch_tile`'s
+on-disk cache (via `fetch_and_crop_bbox`) — usually a cheap re-composite of tiles already fetched
+when the sample was first drawn, not a fresh network round-trip. Together with the existing
+GSD-resample step (`generate_obb_package`, below), every opted-in class's training image ends up
+the same pixel size no matter how large or small the real object is — label size within that fixed
+frame then honestly reflects the object's real proportional size, instead of being an artifact of
+how tightly each sample happened to be hand-cropped.
+
 ## HARD_NEGATIVE_TILES
 
-Real tiles (from the shared `tiles/images/` cache, no re-fetch needed) that `fence_obb_v1`
-confidently but wrongly fired on during a wide-area `predict_area_obb.py` scan — plowed farmland,
-whose furrows are just as "elongated and diagonal" as a fence, apparently enough for a model
-trained on only ~17 positives to latch onto as a shortcut. Included as background images (real
-image, empty label) so training sees explicit examples of "elongated diagonal, still not a fence"
+Real tiles (from the shared `tiles/images/` cache, no re-fetch needed) a class's own model
+confidently but wrongly fired on during a wide-area scan. Included as background images (real
+image, empty label) so training sees explicit examples of "looks like the class, still isn't"
 instead of only ever seeing positives.
+
+The first 6 (`19_...`) are plowed-farmland tiles `fence_obb_v1` fired on during a wide-area
+`predict_area_obb.py` scan — furrows are just as "elongated and diagonal" as a fence, apparently
+enough for a model trained on only ~17 positives to latch onto as a shortcut.
+
+The `17_691...` tiles are from Hamburg-refinery `oil_refinery/app` POC testing on
+`distillation-column`: the model fired on ~everything (roads, tanks, buildings) at full-tile scale
+despite 0.994 val precision, because it had never seen real backgrounds during training. Added in
+two passes — a first batch of 5, then (once v3, trained with those 5, still misfired on tiles
+outside that batch) a second batch of 6 — each tile visually reviewed one by one, with two
+ambiguous dense-process-unit tiles from the same scan deliberately excluded since they could
+plausibly contain a real column. Mostly storage-tank farms, plus some rail yard/warehouse/water
+tiles that misfired too.
+
+The remaining 6 are `fan-unit` negatives, all storage tanks — the same "round industrial thing"
+confusion as `distillation-column`'s tank-farm negatives above, just for fan-unit's own round
+shape. `17_67109_43729` and `17_67109_43724` are from the Berendrecht-Zandvliet-Lillo site
+(Antwerp, ~51.26-51.31/4.30-4.32); `17_69161_42384`/`17_69159_42384`/`17_69158_42382` are a few km
+along the same river/industrial corridor as the Hamburg tiles above (~53.51-53.52/9.95);
+`17_67113_43740` is another Antwerp tank tile. Each was checked by hand against
+`fan_unit_obb_v2.pt` before adding (not just visual similarity to another class's confusion) —
+3 of the 6 (`..._43729`, `..._43724`, `..._42384`x2) were live false positives at the time
+(0.16-0.58 confidence); the other 2 didn't trigger a hit but are the same dense-tank-farm content
+as ones that did, kept as preventive coverage rather than waiting for a live misfire to add them.
+New candidates can be turned into this exact `"z_x_y",` format with
+`scripts/fetch_hard_negative_tile.py --lat ... --lon ...`, which also saves a viewable preview
+under `.scratch/hard_negative_previews/` to check before adding.
 
 ## save_bend_review_overlay
 
@@ -151,11 +205,44 @@ negatives is a small fraction of the set, not close to half of it. Hard negative
 train — val stays small and purely real positives, so its metrics keep meaning "does it find real
 fences," not diluted by background accuracy.
 
+`HARD_NEGATIVE_TILES` is keyed by tile id -> the tuple of class names it's a negative *for*
+(originally a flat list shared across every class regardless of which class's testing found it —
+changed 2026-09-04 after `fan-unit`'s v3 package silently pulled in 11 `distillation-column`
+Hamburg tiles nobody had reviewed for fan-unit specifically, just because `--hard-negatives` was
+on). `generate_obb_package` only samples crops from a tile whose tuple contains the class currently
+being packaged. A tile equally valid as a negative for more than one class can just list both.
+`crops_per_tile = 1` and the `random.Random(42)` seed are both deliberate: 1 keeps negatives well
+under positives in count (see the ratio caution above), and a fixed seed makes every regeneration
+of the same class produce byte-identical negative crops, so re-running `obb.py` without changing
+`samples.jsonl` or `HARD_NEGATIVE_TILES` never spuriously changes `dataset_obb/`.
+
 The multi-label-per-crop loop (labeling every rect visible in a crop, not just the piece's own)
 exists because `PIECE_CROP_MARGIN`'s context margin routinely pulls a *neighboring* piece's real,
 unlabeled ribbon into frame (confirmed on `8382b49f6b71`: piece 0/1 crops overlapped by
 235x200px) — without this, the model would be shown real fence texture with no box on it,
 teaching it that texture is background.
+
+**The single-piece branch has the same theoretical problem, tried and reverted 2026-09-04**: for a
+`normalize_sample_crop` class, the fixed 80m frame very often contains *other, independently
+hand-labeled* samples of the same class, not just pieces of the current one — objects like
+fan-unit come in banks, so a real neighboring fan sitting a few meters away routinely lands inside
+another sample's 80m window. Confirmed on `fan-unit`: every one of its 116 samples had at least one
+other sample within 40m (519 such pairs total), and every training image had *exactly* one labeled
+box, meaning most crops showed 2+ real fans while only one was ever boxed. By the same reasoning as
+the multi-piece loop below, this looked like it should be a bug — so it was fixed the same way:
+re-running `polygon_to_obb_corners` for every other same-class, same-split sample whose polygon
+projects into the current crop's window, adding each as an extra label line.
+
+In practice this backfired hard: `fan_unit_obb_v3` (single box per crop) scored
+precision/recall/mAP50/mAP50-95 = 0.994/1.00/0.995/0.846; regenerating with every neighbor labeled
+and retraining as `v4` on the exact same 116 samples collapsed precision to 0.218 (recall stayed
+0.917 — the model over-predicts, not under-predicts). Some of that is a real, separate bug (16
+training images ended up with a degenerate near-zero-area box, from a neighbor's rect grazing the
+crop edge and clipping to a sliver) but the regression was large enough that the whole approach was
+reverted rather than patched — kept as single-box-per-crop, matching how these samples were always
+hand-labeled (one polygon, one object) in the first place. Worth retrying later with the degenerate
+clip filtered out and enough real samples that dense multi-instance scenes aren't such a large
+fraction of train, but not assumed to be the right call until that's actually confirmed to help.
 
 ## main() / S3 upload
 
