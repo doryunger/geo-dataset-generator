@@ -6,13 +6,21 @@ on it*, distilled from actual sessions rather than aspirational.
 **No comments in code files, anywhere in this repo** — no inline `#`/`//` comments, no explanatory
 docstrings, in any language (Python, TypeScript/TSX, etc.), in any part of the tree (`scripts/`,
 `oil_refinery/app/server/`, `oil_refinery/app/web/src/`, ...). For the "why" behind a non-obvious
-design choice, put it in that directory's own `context/<filename>.md` instead (one file per source
-file, not every file needs one) — `scripts/context/`, `oil_refinery/app/server/context/`,
-`oil_refinery/app/web/context/`, and `oil_refinery/app/context/` are the ones that exist so far; a
-new area of the codebase gets its own `context/` sibling directory the same way. Applies to new
-code and existing code alike —
-if you're editing a file that still has comments in it, or adding logic that would otherwise need
-one, strip/move them out as part of that edit rather than leaving or adding to them.
+design choice, put it in that directory's own `context/` sibling directory instead — **one file per
+component (e.g. one for a whole backend, one for a whole frontend), not one per source file**
+(changed 2026-09-06 after the per-file convention produced too many small files to navigate; the
+existing per-file docs across the repo were consolidated down accordingly at the same time) —
+`scripts/context/scripts.md`, `oil_refinery/app/server/context/server.md`,
+`oil_refinery/app/web/context/frontend.md`, and `web/context/frontend.md` are the ones that exist so
+far; a new area of the codebase gets its own single `context/<component>.md` the same way, split
+into `## <file-or-topic>` sections inside it rather than a new file per source file. Keep genuinely
+non-obvious content — concrete numbers, historical bug postmortems, "tried X, it backfired because
+Y" narratives, cross-file design rationale — but cut anything that just restates what's obvious from
+reading the code itself; a context file existing at all is not license to pad it. Applies to new
+code and existing code alike — if you're editing a file that still has comments in it, or adding
+logic that would otherwise need one, strip/move them out as part of that edit rather than leaving or
+adding to them, folding the note into the component's existing context file instead of starting a
+new one.
 
 ## Reply style
 
