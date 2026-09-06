@@ -171,6 +171,10 @@ button.secondary:hover { background: #ddd; }
   width: 22px; height: 22px; padding: 0; margin: 0 0 0 auto; flex-shrink: 0;
   border-radius: 50%; font-size: 12px; line-height: 22px; background: #e74c3c;
 }
+.hard-negative-toggle { margin-left: auto; flex-shrink: 0; cursor: pointer; }
+.hard-negative-toggle input { cursor: pointer; }
+.hard-negative-disabled { opacity: 0.45; }
+.hard-negative-disabled img { filter: grayscale(1); }
 .panel-spinner {
   width: 24px; height: 24px; margin: 16px auto; border: 3px solid #ddd;
   border-top-color: #1a73e8; border-radius: 50%; animation: panel-spin 0.8s linear infinite;

@@ -105,7 +105,13 @@ def _bbox_around(lon: float, lat: float, extent_m: float) -> tuple[float, float,
 
 def _normalized_sample_crop(row: dict):
     lon, lat = _polygon_centroid(row["polygon"])
-    west, south, east, north = _bbox_around(lon, lat, SAMPLE_CROP_M)
+    lons = [p[0] for p in row["polygon"]]
+    lats = [p[1] for p in row["polygon"]]
+    mid_lat = (min(lats) + max(lats)) / 2
+    width_m = (max(lons) - min(lons)) * 111_320 * math.cos(math.radians(mid_lat))
+    height_m = (max(lats) - min(lats)) * 111_320
+    crop_extent_m = max(SAMPLE_CROP_M, (max(width_m, height_m)) * 1.1)
+    west, south, east, north = _bbox_around(lon, lat, crop_extent_m)
     out_path = common.SCRATCH_DIR / "obb_context_crops" / f"{row['id']}.jpg"
     path = common.fetch_and_crop_bbox(
         SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
@@ -113,20 +119,50 @@ def _normalized_sample_crop(row: dict):
     return Image.open(path), west, south, east, north
 
 
-def hard_negative_crop_bbox(row: dict, normalize_sample_crop: bool) -> tuple[float, float, float, float]:
-    if normalize_sample_crop:
+def _grid_positions(length: int, crop: int, n: int) -> list[int]:
+    if crop >= length:
+        return [0]
+    if n <= 1:
+        return [(length - crop) // 2]
+    span = length - crop
+    return sorted({round(span * i / (n - 1)) for i in range(n)})
+
+
+def hard_negative_crop_bboxes(row: dict, normalize_sample_crop: bool) -> list[tuple[float, float, float, float]]:
+    if not normalize_sample_crop:
+        return [(row["west"], row["south"], row["east"], row["north"])]
+
+    mid_lat = (row["north"] + row["south"]) / 2
+    width_m = (row["east"] - row["west"]) * 111_320 * math.cos(math.radians(mid_lat))
+    height_m = (row["north"] - row["south"]) * 111_320
+    grid_w = max(1, math.ceil(width_m / SAMPLE_CROP_M))
+    grid_h = max(1, math.ceil(height_m / SAMPLE_CROP_M))
+
+    if grid_w == 1 and grid_h == 1:
         lon, lat = _polygon_centroid(row["polygon"])
-        return _bbox_around(lon, lat, SAMPLE_CROP_M)
-    return row["west"], row["south"], row["east"], row["north"]
+        return [_bbox_around(lon, lat, SAMPLE_CROP_M)]
+
+    lefts_m = _grid_positions(round(width_m), round(SAMPLE_CROP_M), grid_w)
+    tops_m = _grid_positions(round(height_m), round(SAMPLE_CROP_M), grid_h)
+    bboxes = []
+    for top_m in tops_m:
+        for left_m in lefts_m:
+            center_lon = row["west"] + (left_m + SAMPLE_CROP_M / 2) / (111_320 * math.cos(math.radians(mid_lat)))
+            center_lat = row["north"] - (top_m + SAMPLE_CROP_M / 2) / 111_320
+            bboxes.append(_bbox_around(center_lon, center_lat, SAMPLE_CROP_M))
+    return bboxes
 
 
-def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool) -> None:
-    west, south, east, north = hard_negative_crop_bbox(row, normalize_sample_crop)
-    out_path = output_dir / "images" / "train" / f"{name_prefix}.jpg"
-    common.fetch_and_crop_bbox(
-        SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
-    )
-    (output_dir / "labels" / "train" / f"{name_prefix}.txt").write_text("")
+def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool) -> int:
+    bboxes = hard_negative_crop_bboxes(row, normalize_sample_crop)
+    for i, (west, south, east, north) in enumerate(bboxes):
+        piece_name = name_prefix if len(bboxes) == 1 else f"{name_prefix}_p{i}"
+        out_path = output_dir / "images" / "train" / f"{piece_name}.jpg"
+        common.fetch_and_crop_bbox(
+            SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+        )
+        (output_dir / "labels" / "train" / f"{piece_name}.txt").write_text("")
+    return len(bboxes)
 
 
 def _axis_projection(pixel_ring: list[tuple[float, float]]):
@@ -388,8 +424,10 @@ def generate_obb_package(
         node_cfg = subclass_graph.node_config(class_name)
         normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
         for row in _hard_negative_rows(class_name):
-            _hard_negative_crop(output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop)
-            counts["negatives"] = counts.get("negatives", 0) + 1
+            if not row.get("enabled", True):
+                continue
+            n = _hard_negative_crop(output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop)
+            counts["negatives"] = counts.get("negatives", 0) + n
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)

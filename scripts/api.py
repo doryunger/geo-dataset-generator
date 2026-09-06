@@ -145,6 +145,10 @@ class AddHardNegativeRequest(BaseModel):
     polygon: list[list[float]]
 
 
+class UpdateHardNegativeRequest(BaseModel):
+    enabled: bool
+
+
 _HARD_NEGATIVE_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -655,11 +659,9 @@ def _hard_negative_thumbnail(class_name: str, row: dict) -> Path:
     thumb_dir = common.hard_negative_review_dir(class_name)
     thumb_dir.mkdir(parents=True, exist_ok=True)
     out_path = thumb_dir / f"{row['id']}.jpg"
-    node_cfg = subclass_graph.node_config(class_name)
-    normalize_sample_crop = node_cfg.get("normalize_sample_crop", obb.DEFAULT_NORMALIZE_SAMPLE_CROP)
-    west, south, east, north = obb.hard_negative_crop_bbox(row, normalize_sample_crop)
     return common.fetch_and_crop_bbox(
-        obb.SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+        obb.SAMPLE_FETCH_ZOOM, row["west"], row["south"], row["east"], row["north"],
+        common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
     )
 
 
@@ -668,7 +670,7 @@ def list_hard_negatives(class_name: str):
     rows = s3_sync.sync_hard_negatives(class_name)
     return {"tiles": [
         {
-            "id": row["id"], "polygon": row["polygon"],
+            "id": row["id"], "polygon": row["polygon"], "enabled": row.get("enabled", True),
             "lon": (row["west"] + row["east"]) / 2, "lat": (row["south"] + row["north"]) / 2,
             "thumbnail_url": f"/api/manual/hard_negative_image/{row['id']}?class_name={quote(class_name, safe='')}",
         }
@@ -685,13 +687,27 @@ def add_hard_negative(req: AddHardNegativeRequest):
     row = {
         "id": uuid.uuid4().hex[:12],
         "west": min(lons), "south": min(lats), "east": max(lons), "north": max(lats),
-        "polygon": req.polygon, "added_at": time.time(),
+        "polygon": req.polygon, "added_at": time.time(), "enabled": True,
     }
     common.add_hard_negative(req.class_name, row)
     s3_sync.upload_hard_negative(req.class_name, row)
     _hard_negative_thumbnail(req.class_name, row)
     logger.info(f"[{req.class_name}] added hard negative {row['id']}")
     return {"id": row["id"]}
+
+
+@app.patch("/api/manual/hard_negatives/{hard_negative_id}")
+def update_hard_negative(hard_negative_id: str, class_name: str, req: UpdateHardNegativeRequest):
+    if not _HARD_NEGATIVE_ID_RE.match(hard_negative_id):
+        raise HTTPException(400, "Invalid hard negative id")
+    row = next((r for r in common.load_hard_negatives(class_name) if r["id"] == hard_negative_id), None)
+    if row is None:
+        raise HTTPException(404, "Hard negative not found")
+    row["enabled"] = req.enabled
+    common.add_hard_negative(class_name, row)
+    s3_sync.upload_hard_negative(class_name, row)
+    logger.info(f"[{class_name}] hard negative {hard_negative_id} enabled={req.enabled}")
+    return {"id": row["id"], "enabled": row["enabled"]}
 
 
 @app.delete("/api/manual/hard_negatives/{hard_negative_id}")

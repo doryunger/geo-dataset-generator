@@ -45,3 +45,13 @@ a synthesized rectangle as their `polygon` (see `_hard_negative_rows` in `script
 and new marks render identically with no frontend special-casing. Clicking a list row
 `map.fitBounds`s the polygon's bbox (`polygonBbox`, shared with Samples) instead of flying to a
 fixed zoom on a point, so the view frames the exact marked extent.
+
+**Enabled/disabled toggle** (2026-09-06): each row's checkbox PATCHes `enabled` on the backend row
+and immediately reflects locally (`t.enabled` mutated in the cached `hardNegativeTiles` array,
+`refreshHardNegativesLayer` re-run against it) rather than doing a full `loadHardNegatives()` -- a
+single toggle doesn't need the server round-trip a full list refresh would add. Disabled rows dim
+(`.hard-negative-disabled`, grayscale thumbnail) and their map polygon switches to gray/dashed
+(data-driven `["case", ["get", "enabled"], ...]` paint expressions on `hard-negatives-fill`/`-line`,
+fed by the `enabled` property `refreshHardNegativesLayer` now includes on every feature) -- lets a
+row stay visibly on the map/list while excluded from the next training build, for testing whether a
+specific hard negative (or a batch of them) is actually responsible for a regression.

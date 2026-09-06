@@ -324,11 +324,18 @@ async function loadConfig() {
     map.addSource("hard-negatives-source", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
       id: "hard-negatives-fill", type: "fill", source: "hard-negatives-source",
-      paint: { "fill-color": "#e74c3c", "fill-opacity": 0.15 },
+      paint: {
+        "fill-color": ["case", ["get", "enabled"], "#e74c3c", "#999"],
+        "fill-opacity": ["case", ["get", "enabled"], 0.15, 0.08],
+      },
     });
     map.addLayer({
       id: "hard-negatives-line", type: "line", source: "hard-negatives-source",
-      paint: { "line-color": "#e74c3c", "line-width": 2 },
+      paint: {
+        "line-color": ["case", ["get", "enabled"], "#e74c3c", "#999"],
+        "line-width": 2,
+        "line-dasharray": ["case", ["get", "enabled"], ["literal", [1, 0]], ["literal", [2, 2]]],
+      },
     });
 
     refreshSamplesLayer();
@@ -1228,23 +1235,56 @@ async function loadHardNegatives(clearFirst = false) {
   refreshHardNegativesLayer(data.tiles || []);
 }
 
+let hardNegativeTiles = [];
+
 function refreshHardNegativesLayer(tiles) {
   const source = map.getSource("hard-negatives-source");
   if (!source) return;
   const features = tiles.map((t) => ({
-    type: "Feature", properties: { id: t.id }, geometry: { type: "Polygon", coordinates: [t.polygon] },
+    type: "Feature", properties: { id: t.id, enabled: t.enabled }, geometry: { type: "Polygon", coordinates: [t.polygon] },
   }));
   source.setData({ type: "FeatureCollection", features });
 }
 
 function renderHardNegativesList(tiles) {
+  hardNegativeTiles = tiles;
   hardNegativesListEl.innerHTML = "";
   for (const t of tiles) {
     const row = document.createElement("div");
     row.className = "sample-row";
+    row.classList.toggle("hard-negative-disabled", !t.enabled);
     const img = document.createElement("img");
     img.src = t.thumbnail_url;
     row.appendChild(img);
+
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "hard-negative-toggle";
+    toggleLabel.title = "Include in training";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.checked = t.enabled;
+    toggle.addEventListener("click", (e) => e.stopPropagation());
+    toggle.addEventListener("change", async () => {
+      toggle.disabled = true;
+      try {
+        const res = await fetch(`/api/manual/hard_negatives/${t.id}?class_name=${encodeURIComponent(currentClassName())}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: toggle.checked }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        t.enabled = toggle.checked;
+        row.classList.toggle("hard-negative-disabled", !t.enabled);
+        refreshHardNegativesLayer(hardNegativeTiles);
+      } catch (err) {
+        toggle.checked = !toggle.checked;
+        hardNegativesStatusEl.textContent = "Error: " + err.message;
+      }
+      toggle.disabled = false;
+    });
+    toggleLabel.appendChild(toggle);
+    row.appendChild(toggleLabel);
+
     const delBtn = document.createElement("button");
     delBtn.className = "danger";
     delBtn.textContent = "✕";

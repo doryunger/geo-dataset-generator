@@ -175,6 +175,17 @@ re-labeling needed to opt a class in -- the polygon is real lon/lat and re-proje
 whatever fixed bounds get fetched. Reuses `fetch_and_crop_bbox`'s on-disk tile cache, usually a
 cheap re-composite rather than a fresh fetch.
 
+**Crop window grows to fit an oversized polygon (2026-09-06)**: the fixed 80m window is a floor,
+not a ceiling -- `crop_extent_m = max(SAMPLE_CROP_M, longest polygon dimension * 1.1)`. Added after
+finding the identical bug class already fixed for hard negatives (see the Hard negatives section)
+also applied here in principle: a polygon (object + cast shadow, which for these classes can
+legitimately run 10-120m) bigger than 80m would get silently cropped by the fixed window, and
+unlike a hard negative, a real positive can't just be sliced into pieces without breaking its one
+object/one label correspondence -- growing the window is the only option that keeps the whole
+object in frame. Checked against real data at the time: every current fan-unit and
+distillation-column sample already fits inside 80m (this is a no-op today, a floor for whatever
+comes next, not a fix to any currently-broken sample).
+
 ### HARD_NEGATIVE_TILES (legacy dict, mostly superseded -- see Hard negatives section below)
 
 Keyed by tile id -> tuple of class names it's a negative *for* (changed from a flat shared list
@@ -271,17 +282,28 @@ the same MapboxDraw polygon tool Samples uses), stored per class in `hard_negati
 `{"id":, "west":,"south":,"east":,"north":,"polygon":,"added_at":}` -- same jsonl-of-rows shape as
 `samples.jsonl`. Nothing is fetched/cropped at draw time; only the ring and its bbox get submitted.
 
-At package-build time, `hard_negative_crop_bbox(row, normalize_sample_crop)` decides what to fetch:
-if the class has `normalize_sample_crop`, the drawn polygon's **centroid** picks *where*, then a
-**fixed** `SAMPLE_CROP_M`/`SAMPLE_FETCH_ZOOM` window is fetched around it -- the identical helper
-and parameters `_normalized_sample_crop` uses for a real positive, so a negative crop is
+At package-build time, `hard_negative_crop_bboxes(row, normalize_sample_crop)` decides what to
+fetch: if the class has `normalize_sample_crop`, the drawn polygon's **centroid** picks *where*,
+then a **fixed** `SAMPLE_CROP_M`/`SAMPLE_FETCH_ZOOM` window is fetched around it -- the identical
+helper and parameters `_normalized_sample_crop` uses for a real positive, so a negative crop is
 indistinguishable from a positive in framing/resolution, differing only in content. (If positives
 for a class are *always* the same fixed 80m/z18 window regardless of true object size, a
 hard-negative crop using its own drawn -- and therefore variable -- size would be its own framing
 shortcut for the model to exploit, a subtler version of the exact problem this mechanism exists to
 avoid.) For a class without `normalize_sample_crop`, positives use their own drawn bbox as-is, so a
-hard negative does too. One row -> exactly one crop; no grid subdivision, no randomness -- precision
-comes from the user drawing tightly around the one confusing object.
+hard negative does too.
+
+**Oversized shapes are sliced, not grown or clipped (fixed 2026-09-06)**: the function name is
+plural because a drawn shape bigger than `SAMPLE_CROP_M` in either dimension no longer just gets a
+single crop centered on its centroid -- that silently lost whatever fell outside the fixed 80m
+window, confirmed as a real, widespread bug: 35 of fan-unit's 65 hard negatives at the time (54%)
+had a drawn extent over 60% of the crop window, several by a lot (156m, 148m, 121m). Instead, an
+oversized shape is tiled into a `grid_w x grid_h` set of `SAMPLE_CROP_M`-sized crops
+(`_grid_positions`, evenly spread across the drawn bbox) covering it fully, so every crop stays
+exactly the same size as a real positive (no framing-consistency tradeoff at all, unlike the
+grow-the-crop alternative that was considered and rejected) while nothing drawn is ever lost --
+just possibly several small crops instead of one for a large shape. A shape that already fits
+within `SAMPLE_CROP_M` still gets exactly one crop, centroid-centered, same as before.
 
 **Why free-draw, not a fixed-zoom tile**: earlier iterations captured a tile aligned to a fixed
 z/x/y grid around a clicked point (first z17 ~191m, then z18 ~96m). Both were too big in practice --
@@ -325,6 +347,15 @@ negatives) and peak confidence on a known real fence tile dropped 0.30 -> 0.03. 
 signal for the model to learn what specifically differs; it just suppressed everything. Hard
 negatives always go to train, never val, so val keeps meaning "does it find real examples,"
 undiluted by background accuracy.
+
+The slicing fix above raises the ratio risk again in a new way: fan-unit's hard-negative count
+jumped from 65 to 152 (against 128 positives, flipping negative-heavy) purely from previously-
+oversized entries correctly multiplying into several pieces each, not from adding anything new.
+Each row's own `enabled` field (default `true`, toggled via `PATCH /api/manual/hard_negatives/{id}`,
+checkbox in the Hard Negatives tab) lets a row be kept on record but excluded from the next build
+(`generate_obb_package` skips any row where `enabled` is `false`) -- meant for exactly this: testing
+whether a specific hard negative (or the volume from slicing) is responsible for a confidence/recall
+regression, without losing the row or having to re-draw it if the answer is no.
 
 ## s3_sync.py -- S3 backup
 
