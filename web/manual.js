@@ -1,4 +1,4 @@
-let map, draw;
+let map, draw, drawControlsEl;
 let currentJobId = null;
 let samples = []; // [{id, class_name, lon, lat, polygon, thumbnail_url}]
 let editingSampleId = null; // sample currently pulled into `draw` for editing, or null
@@ -7,10 +7,7 @@ let pickingValidationOrigin = false;
 let pickedOrigin = null; // {lon, lat} chosen via "Pick on Map", or null if not set yet
 let validationCandidates = []; // last validation run's results
 let knownClassNames = new Set();
-let pickingHardNegative = false;
-let hardNegativePreviewTileKey = null;
-
-const HARD_NEGATIVE_ZOOM = 17;
+let addingHardNegative = false;
 
 const classSelect = document.getElementById("class-select");
 const addClassToggleBtn = document.getElementById("add-class-toggle-btn");
@@ -135,7 +132,7 @@ lightboxModal.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && lightboxModal.style.display !== "none") closeLightbox();
-  if (e.key === "Escape" && pickingHardNegative) stopPickingHardNegative();
+  if (e.key === "Escape" && addingHardNegative) stopAddingHardNegative();
 });
 
 function currentClassName() {
@@ -219,26 +216,15 @@ function polygonBbox(ring) {
   return { west: Math.min(...lons), east: Math.max(...lons), south: Math.min(...lats), north: Math.max(...lats) };
 }
 
-function lonLatToTileXY(lon, lat, z) {
-  const n = 2 ** z;
-  const x = Math.floor(((lon + 180) / 360) * n);
-  const latRad = (lat * Math.PI) / 180;
-  const y = Math.floor(((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n);
-  return [x, y];
+function showPanelSpinner(container) {
+  container.innerHTML = '<div class="panel-spinner"></div>';
 }
 
-function tileXYToLonLat(z, x, y) {
-  const n = 2 ** z;
-  const lon = (x / n) * 360 - 180;
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)));
-  const lat = (latRad * 180) / Math.PI;
-  return [lon, lat];
-}
-
-function tileBoundsLonLat(z, x, y) {
-  const [west, north] = tileXYToLonLat(z, x, y);
-  const [east, south] = tileXYToLonLat(z, x + 1, y + 1);
-  return { west, south, east, north };
+function beginRowAction(listEl, btn) {
+  listEl.querySelectorAll("button").forEach((b) => { b.hidden = true; });
+  const spinner = document.createElement("div");
+  spinner.className = "row-spinner";
+  btn.replaceWith(spinner);
 }
 
 function labelOverlaySvg(labelPolygons) {
@@ -288,6 +274,8 @@ async function loadConfig() {
     controls: { polygon: true, trash: true },
   });
   map.addControl(draw);
+  drawControlsEl = document.querySelector(".mapboxgl-ctrl-group");
+  updateDrawControlsVisibility();
 
   map.addControl({
     onAdd() {
@@ -333,16 +321,6 @@ async function loadConfig() {
       paint: { "circle-radius": 4, "circle-color": "#3b82f6", "circle-stroke-width": 1, "circle-stroke-color": "#fff" },
     });
 
-    map.addSource("hard-negative-preview-source", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    map.addLayer({
-      id: "hard-negative-preview-fill", type: "fill", source: "hard-negative-preview-source",
-      paint: { "fill-color": "#e74c3c", "fill-opacity": 0.15 },
-    });
-    map.addLayer({
-      id: "hard-negative-preview-line", type: "line", source: "hard-negative-preview-source",
-      paint: { "line-color": "#e74c3c", "line-width": 2, "line-dasharray": [2, 2] },
-    });
-
     map.addSource("hard-negatives-source", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
       id: "hard-negatives-fill", type: "fill", source: "hard-negatives-source",
@@ -356,7 +334,10 @@ async function loadConfig() {
     refreshSamplesLayer();
   });
 
-  map.on("draw.create", (e) => handleNewShape(e.features[0]));
+  map.on("draw.create", (e) => {
+    if (addingHardNegative) handleNewHardNegativeShape(e.features[0]);
+    else handleNewShape(e.features[0]);
+  });
 
   map.on("draw.modechange", (e) => {
     map.getCanvas().style.cursor = e.mode === "draw_polygon" ? "crosshair" : "";
@@ -382,11 +363,6 @@ async function loadConfig() {
   });
 
   map.on("click", (e) => {
-    if (pickingHardNegative) {
-      stopPickingHardNegative();
-      addHardNegativeAt(e.lngLat.lng, e.lngLat.lat);
-      return;
-    }
     if (!pickingValidationOrigin) return;
     pickingValidationOrigin = false;
     map.getCanvas().style.cursor = "";
@@ -394,20 +370,6 @@ async function loadConfig() {
     validationPositionDisplay.textContent = `${pickedOrigin.lat.toFixed(5)}, ${pickedOrigin.lon.toFixed(5)}`;
     validationModalRun.disabled = false;
     validationModal.style.display = "flex";
-  });
-
-  map.on("mousemove", (e) => {
-    if (!pickingHardNegative) return;
-    const [x, y] = lonLatToTileXY(e.lngLat.lng, e.lngLat.lat, HARD_NEGATIVE_ZOOM);
-    const key = `${x}_${y}`;
-    if (key === hardNegativePreviewTileKey) return;
-    hardNegativePreviewTileKey = key;
-    const { west, south, east, north } = tileBoundsLonLat(HARD_NEGATIVE_ZOOM, x, y);
-    const ring = [[west, north], [east, north], [east, south], [west, south], [west, north]];
-    map.getSource("hard-negative-preview-source").setData({
-      type: "FeatureCollection",
-      features: [{ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} }],
-    });
   });
 }
 
@@ -587,8 +549,11 @@ async function loadSamples() {
   editingSampleId = null;
   editingFeatureId = null;
   refreshSamplesLayer();
-  renderSamplesList();
-  if (!className) return;
+  if (!className) {
+    renderSamplesList();
+    return;
+  }
+  showPanelSpinner(samplesListEl);
 
   const res = await fetch(`/api/manual/samples?class_name=${encodeURIComponent(className)}`);
   const data = await res.json();
@@ -611,9 +576,14 @@ function renderSamplesList() {
     delBtn.title = "Delete this sample";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await fetch(`/api/manual/samples/${s.id}?class_name=${encodeURIComponent(currentClassName())}`, { method: "DELETE" });
-      samples = samples.filter((x) => x.id !== s.id);
-      refreshSamplesLayer();
+      beginRowAction(samplesListEl, delBtn);
+      try {
+        await fetch(`/api/manual/samples/${s.id}?class_name=${encodeURIComponent(currentClassName())}`, { method: "DELETE" });
+        samples = samples.filter((x) => x.id !== s.id);
+        refreshSamplesLayer();
+      } catch (err) {
+        showWarning("Failed to delete: " + err.message);
+      }
       renderSamplesList();
     });
     row.appendChild(delBtn);
@@ -671,8 +641,14 @@ async function generatePackage() {
 
 // ---------- tabs ----------
 
+function updateDrawControlsVisibility() {
+  if (!drawControlsEl) return;
+  const visible = samplesTab.style.display !== "none" || addingHardNegative;
+  drawControlsEl.style.display = visible ? "" : "none";
+}
+
 function switchTab(tab) {
-  if (pickingHardNegative && tab !== "hard-negatives") stopPickingHardNegative();
+  if (addingHardNegative && tab !== "hard-negatives") stopAddingHardNegative();
   samplesTab.style.display = tab === "samples" ? "block" : "none";
   validationTab.style.display = tab === "validation" ? "block" : "none";
   trainingTab.style.display = tab === "training" ? "block" : "none";
@@ -685,7 +661,8 @@ function switchTab(tab) {
   tabBtnHardNegatives.classList.toggle("active", tab === "hard-negatives");
   if (tab === "training") loadTrainingPanel();
   if (tab === "graph") loadGraphTab();
-  if (tab === "hard-negatives") loadHardNegatives();
+  if (tab === "hard-negatives") loadHardNegatives(true);
+  updateDrawControlsVisibility();
 }
 
 // ---------- training tab ----------
@@ -1190,37 +1167,37 @@ function renderValidationResults() {
   }
 }
 
-function clearHardNegativePreview() {
-  hardNegativePreviewTileKey = null;
-  const source = map.getSource("hard-negative-preview-source");
-  if (source) source.setData({ type: "FeatureCollection", features: [] });
-}
-
-function startPickingHardNegative() {
+function startAddingHardNegative() {
   if (!currentClassName()) {
     showWarning("Pick or name a class first.");
     return;
   }
-  pickingHardNegative = true;
-  map.getCanvas().style.cursor = "crosshair";
-  addHardNegativeBtn.textContent = "Click on the map... (Esc to cancel)";
+  addingHardNegative = true;
+  addHardNegativeBtn.textContent = "Draw a shape... (Esc to cancel)";
   hardNegativesStatusEl.textContent = "";
+  updateDrawControlsVisibility();
+  draw.changeMode("draw_polygon");
 }
 
-function stopPickingHardNegative() {
-  pickingHardNegative = false;
-  map.getCanvas().style.cursor = "";
+function stopAddingHardNegative() {
+  addingHardNegative = false;
   addHardNegativeBtn.textContent = "+ Add Hard Negative";
-  clearHardNegativePreview();
+  updateDrawControlsVisibility();
+  if (draw.getMode() === "draw_polygon") draw.changeMode("simple_select");
 }
 
-async function addHardNegativeAt(lon, lat) {
+async function handleNewHardNegativeShape(feature) {
+  const className = currentClassName();
+  const ring = feature.geometry.coordinates[0];
+  draw.delete(feature.id);
+  stopAddingHardNegative();
+
   hardNegativesStatusEl.textContent = "Adding...";
   try {
     const res = await fetch("/api/manual/hard_negatives", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ class_name: currentClassName(), lat, lon }),
+      body: JSON.stringify({ class_name: className, polygon: ring }),
     });
     if (!res.ok) throw new Error(await res.text());
     hardNegativesStatusEl.textContent = "";
@@ -1230,30 +1207,33 @@ async function addHardNegativeAt(lon, lat) {
   }
 }
 
-async function loadHardNegatives() {
+let hardNegativesRequestId = 0;
+
+async function loadHardNegatives(clearFirst = false) {
   const className = currentClassName();
-  hardNegativesListEl.innerHTML = "";
-  refreshHardNegativesLayer([]);
-  if (!className) return;
+  const requestId = ++hardNegativesRequestId;
+  if (!className) {
+    hardNegativesListEl.innerHTML = "";
+    refreshHardNegativesLayer([]);
+    return;
+  }
+  if (clearFirst) {
+    showPanelSpinner(hardNegativesListEl);
+    refreshHardNegativesLayer([]);
+  }
   const res = await fetch(`/api/manual/hard_negatives?class_name=${encodeURIComponent(className)}`);
   const data = await res.json();
+  if (requestId !== hardNegativesRequestId) return;
   renderHardNegativesList(data.tiles || []);
   refreshHardNegativesLayer(data.tiles || []);
-}
-
-function tileBoundsFromId(tileId) {
-  const [z, x, y] = tileId.split("_").map(Number);
-  return tileBoundsLonLat(z, x, y);
 }
 
 function refreshHardNegativesLayer(tiles) {
   const source = map.getSource("hard-negatives-source");
   if (!source) return;
-  const features = tiles.map((t) => {
-    const { west, south, east, north } = tileBoundsFromId(t.tile_id);
-    const ring = [[west, north], [east, north], [east, south], [west, south], [west, north]];
-    return { type: "Feature", properties: { tileId: t.tile_id }, geometry: { type: "Polygon", coordinates: [ring] } };
-  });
+  const features = tiles.map((t) => ({
+    type: "Feature", properties: { id: t.id }, geometry: { type: "Polygon", coordinates: [t.polygon] },
+  }));
   source.setData({ type: "FeatureCollection", features });
 }
 
@@ -1271,13 +1251,18 @@ function renderHardNegativesList(tiles) {
     delBtn.title = "Remove this hard negative";
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await fetch(`/api/manual/hard_negatives/${t.tile_id}?class_name=${encodeURIComponent(currentClassName())}`, { method: "DELETE" });
+      beginRowAction(hardNegativesListEl, delBtn);
+      try {
+        await fetch(`/api/manual/hard_negatives/${t.id}?class_name=${encodeURIComponent(currentClassName())}`, { method: "DELETE" });
+      } catch (err) {
+        hardNegativesStatusEl.textContent = "Error: " + err.message;
+      }
       await loadHardNegatives();
     });
     row.appendChild(delBtn);
     row.addEventListener("click", () => {
-      const { west, south, east, north } = tileBoundsFromId(t.tile_id);
-      map.fitBounds([[west, south], [east, north]], { padding: 60 });
+      const bbox = polygonBbox(t.polygon);
+      map.fitBounds([[bbox.west, bbox.south], [bbox.east, bbox.north]], { padding: 60 });
     });
     hardNegativesListEl.appendChild(row);
   }
@@ -1337,7 +1322,7 @@ async function loadClasses() {
 classSelect.addEventListener("change", () => {
   loadSamples();
   if (trainingTab.style.display !== "none") loadTrainingPanel();
-  if (hardNegativesTab.style.display !== "none") loadHardNegatives();
+  if (hardNegativesTab.style.display !== "none") loadHardNegatives(true);
 });
 addClassToggleBtn.addEventListener("click", () => {
   if (addClassPanel.style.display === "none") openAddClassPanel();
@@ -1357,8 +1342,8 @@ tabBtnTraining.addEventListener("click", () => switchTab("training"));
 tabBtnGraph.addEventListener("click", () => switchTab("graph"));
 tabBtnHardNegatives.addEventListener("click", () => switchTab("hard-negatives"));
 addHardNegativeBtn.addEventListener("click", () => {
-  if (pickingHardNegative) stopPickingHardNegative();
-  else startPickingHardNegative();
+  if (addingHardNegative) stopAddingHardNegative();
+  else startAddingHardNegative();
 });
 generatePackageBtn.addEventListener("click", generatePackage);
 openValidationModalBtn.addEventListener("click", openValidationModal);

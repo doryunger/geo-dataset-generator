@@ -7,7 +7,6 @@ Usage:
 import argparse
 import logging
 import math
-import random
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -50,9 +49,25 @@ HARD_NEGATIVE_TILES = {
 }
 
 
-def _hard_negative_tile_ids(class_name: str) -> list[str]:
-    legacy = [tid for tid, classes in HARD_NEGATIVE_TILES.items() if class_name in classes]
-    return list(dict.fromkeys(legacy + common.load_hard_negatives(class_name)))
+def _rect_polygon(bounds: dict) -> list[list[float]]:
+    w, s, e, n = bounds["west"], bounds["south"], bounds["east"], bounds["north"]
+    return [[w, n], [e, n], [e, s], [w, s], [w, n]]
+
+
+def _hard_negative_rows(class_name: str) -> list[dict]:
+    legacy_rows = []
+    for tile_id, classes in HARD_NEGATIVE_TILES.items():
+        if class_name not in classes:
+            continue
+        z, x, y = (int(v) for v in tile_id.split("_"))
+        bounds = common.tile_bounds(z, x, y)
+        legacy_rows.append({"id": tile_id, **bounds, "polygon": _rect_polygon(bounds)})
+    by_id = {row["id"]: row for row in legacy_rows}
+    for row in common.load_hard_negatives(class_name):
+        if "polygon" not in row:
+            row = {**row, "polygon": _rect_polygon(row)}
+        by_id[row["id"]] = row
+    return list(by_id.values())
 
 
 def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
@@ -62,29 +77,6 @@ def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
         return None
     dst = common.bend_review_dir(class_name) / f"{sample_id}.jpg"
     return common.draw_polygon_overlay(src, [row["label_polygon"]], dst)
-
-
-def _sample_hard_negative_crops(
-    tile_path: Path, sizes: list[tuple[int, int]], rng: random.Random, n: int,
-) -> list[Image.Image]:
-    """n random crops from tile_path, sized by sampling from `sizes` (the *real* positive crop
-    dimensions for whatever class is currently being packaged -- see caller). A whole 512px tile
-    used as a "negative" taught a model a framing shortcut ("big image = no object") instead of
-    real content discrimination, regardless of class -- confirmed on distillation-column, where
-    real positive crops ran ~40-300px and 512px hard-negative tiles let the model tell them apart
-    by size alone. Matching the size distribution removes that shortcut for any class, not just
-    this one, since sizes are never hardcoded -- they come from that class's own samples."""
-    with Image.open(tile_path) as img:
-        img = img.convert("RGB")
-        w, h = img.size
-        crops = []
-        for _ in range(n):
-            cw, ch = rng.choice(sizes)
-            cw, ch = min(cw, w), min(ch, h)
-            left = rng.randint(0, w - cw) if w > cw else 0
-            top = rng.randint(0, h - ch) if h > ch else 0
-            crops.append(img.crop((left, top, left + cw, top + ch)).copy())
-        return crops
 
 
 DEFAULT_MIN_PIECE_M = 2.0
@@ -119,6 +111,22 @@ def _normalized_sample_crop(row: dict):
         SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
     )
     return Image.open(path), west, south, east, north
+
+
+def hard_negative_crop_bbox(row: dict, normalize_sample_crop: bool) -> tuple[float, float, float, float]:
+    if normalize_sample_crop:
+        lon, lat = _polygon_centroid(row["polygon"])
+        return _bbox_around(lon, lat, SAMPLE_CROP_M)
+    return row["west"], row["south"], row["east"], row["north"]
+
+
+def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool) -> None:
+    west, south, east, north = hard_negative_crop_bbox(row, normalize_sample_crop)
+    out_path = output_dir / "images" / "train" / f"{name_prefix}.jpg"
+    common.fetch_and_crop_bbox(
+        SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+    )
+    (output_dir / "labels" / "train" / f"{name_prefix}.txt").write_text("")
 
 
 def _axis_projection(pixel_ring: list[tuple[float, float]]):
@@ -377,24 +385,11 @@ def generate_obb_package(
     counts = _generate_pieces_for_class(class_name, output_dir, embedder, val_ids=val_ids, on_progress=on_progress)
 
     if include_hard_negatives:
-        # Crop sizes sampled from this class's own just-generated positive images -- not a fixed
-        # size, so a class with larger typical pieces automatically gets larger negative crops too.
-        positive_sizes = []
-        for img_path in (output_dir / "images" / "train").iterdir():
-            with Image.open(img_path) as im:
-                positive_sizes.append(im.size)
-
-        if positive_sizes:
-            rng = random.Random(42)
-            crops_per_tile = 1
-            for tile_id in _hard_negative_tile_ids(class_name):
-                z, x, y = (int(v) for v in tile_id.split("_"))
-                src = common.fetch_tile(z, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
-                for i, crop in enumerate(_sample_hard_negative_crops(src, positive_sizes, rng, crops_per_tile)):
-                    name = f"{tile_id}_neg{i}"
-                    crop.save(output_dir / "images" / "train" / f"{name}.jpg", format="JPEG")
-                    (output_dir / "labels" / "train" / f"{name}.txt").write_text("")
-                    counts["negatives"] = counts.get("negatives", 0) + 1
+        node_cfg = subclass_graph.node_config(class_name)
+        normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
+        for row in _hard_negative_rows(class_name):
+            _hard_negative_crop(output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop)
+            counts["negatives"] = counts.get("negatives", 0) + 1
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)

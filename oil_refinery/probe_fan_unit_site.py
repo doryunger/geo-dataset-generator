@@ -72,7 +72,7 @@ def main():
                 rects = result.obb.xyxyxyxyn.cpu().numpy().tolist()
                 confs = [float(c) for c in result.obb.conf]
                 labeled_path = out_dir / f"{tid}_labeled.jpg"
-                common.draw_polygon_overlay(path, rects, labeled_path)
+                common.draw_polygon_overlay(path, rects, labeled_path, labels=[f"{c:.2f}" for c in confs])
                 hits.append((tid, confs, str(labeled_path)))
         print(f"scanned {min(i + CHUNK, len(paths))}/{len(paths)}, {len(hits)} hit(s) so far", flush=True)
 

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 import common
 
@@ -204,44 +205,51 @@ def _hard_negative_prefix(class_name: str) -> str:
     return f"hard_negatives/{class_name}/"
 
 
-def upload_hard_negative(class_name: str, tile_id: str) -> None:
+def upload_hard_negative(class_name: str, row: dict) -> None:
     if not s3_configured():
         return
-    key = f"{_hard_negative_prefix(class_name)}{tile_id}.json"
-    body = json.dumps({"tile_id": tile_id, "added_at": time.time()}).encode("utf-8")
+    key = f"{_hard_negative_prefix(class_name)}{row['id']}.json"
+    body = json.dumps(row).encode("utf-8")
     _client().put_object(Bucket=_BUCKET, Key=key, Body=body, ContentType="application/json")
-    logger.info(f"[{class_name}] uploaded hard negative {tile_id} to s3://{_BUCKET}/{key}")
+    logger.info(f"[{class_name}] uploaded hard negative {row['id']} to s3://{_BUCKET}/{key}")
 
 
-def delete_remote_hard_negative(class_name: str, tile_id: str) -> None:
+def delete_remote_hard_negative(class_name: str, hard_negative_id: str) -> None:
     if not s3_configured():
         return
-    key = f"{_hard_negative_prefix(class_name)}{tile_id}.json"
+    key = f"{_hard_negative_prefix(class_name)}{hard_negative_id}.json"
     _client().delete_object(Bucket=_BUCKET, Key=key)
-    logger.info(f"[{class_name}] deleted hard negative {tile_id} from s3://{_BUCKET}/{key}")
+    logger.info(f"[{class_name}] deleted hard negative {hard_negative_id} from s3://{_BUCKET}/{key}")
 
 
-def list_remote_hard_negatives(class_name: str) -> list[str]:
+def list_remote_hard_negatives(class_name: str) -> list[dict]:
     if not s3_configured():
         return []
-    tile_ids = []
+    rows = []
     paginator = _client().get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=_BUCKET, Prefix=_hard_negative_prefix(class_name)):
         for obj in page.get("Contents", []):
-            name = Path(obj["Key"]).name
-            if name.endswith(".json"):
-                tile_ids.append(name.removesuffix(".json"))
-    return tile_ids
+            if not obj["Key"].endswith(".json"):
+                continue
+            buf = io.BytesIO()
+            try:
+                _client().download_fileobj(_BUCKET, obj["Key"], buf)
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
+                    continue
+                raise
+            rows.append(json.loads(buf.getvalue()))
+    return rows
 
 
-def sync_hard_negatives(class_name: str) -> list[str]:
+def sync_hard_negatives(class_name: str) -> list[dict]:
     if not s3_configured():
         return common.load_hard_negatives(class_name)
     remote = list_remote_hard_negatives(class_name)
-    local = common.load_hard_negatives(class_name)
-    added = [t for t in remote if t not in local]
-    for tile_id in added:
-        common.add_hard_negative(class_name, tile_id)
+    local_ids = {r["id"] for r in common.load_hard_negatives(class_name)}
+    added = [r for r in remote if r["id"] not in local_ids]
+    for row in added:
+        common.add_hard_negative(class_name, row)
     if added:
-        logger.info(f"[{class_name}] pulled {len(added)} hard negative(s) from S3: {added}")
+        logger.info(f"[{class_name}] pulled {len(added)} hard negative(s) from S3: {[r['id'] for r in added]}")
     return common.load_hard_negatives(class_name)

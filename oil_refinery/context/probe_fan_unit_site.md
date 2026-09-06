@@ -17,6 +17,10 @@ memory) — only detections get saved as overlay images.
 the batch's largest resampled dimension, so ultralytics never silently letterboxes back down to
 its default 640 and undoes the whole point of the GSD resample.
 
+Each box's confidence is burned onto the labeled image itself (`draw_polygon_overlay`'s `labels`
+param), not just printed to the console -- readable straight off the image when eyeballing a batch
+of them, without cross-referencing which console line matched which file.
+
 Usage:
 
 ```

@@ -125,6 +125,10 @@ def bend_review_dir(name: str) -> Path:
     return class_dir(name) / "bend_review"
 
 
+def hard_negative_review_dir(name: str) -> Path:
+    return class_dir(name) / "hard_negatives_review"
+
+
 def error_review_dir(name: str) -> Path:
     return class_dir(name) / "error_review"
 
@@ -149,18 +153,17 @@ def hard_negatives_path(name: str) -> Path:
     return class_dir(name) / "hard_negatives.jsonl"
 
 
-def load_hard_negatives(name: str) -> list[str]:
-    return [row["tile_id"] for row in read_jsonl(hard_negatives_path(name))]
+def load_hard_negatives(name: str) -> list[dict]:
+    return read_jsonl(hard_negatives_path(name))
 
 
-def add_hard_negative(name: str, tile_id: str) -> None:
-    if tile_id in load_hard_negatives(name):
-        return
-    append_jsonl(hard_negatives_path(name), [{"tile_id": tile_id, "added_at": time.time()}])
+def add_hard_negative(name: str, row: dict) -> None:
+    rows = [r for r in load_hard_negatives(name) if r["id"] != row["id"]]
+    rewrite_jsonl(hard_negatives_path(name), rows + [row])
 
 
-def remove_hard_negative(name: str, tile_id: str) -> None:
-    rows = [row for row in read_jsonl(hard_negatives_path(name)) if row["tile_id"] != tile_id]
+def remove_hard_negative(name: str, hard_negative_id: str) -> None:
+    rows = [r for r in load_hard_negatives(name) if r["id"] != hard_negative_id]
     rewrite_jsonl(hard_negatives_path(name), rows)
 
 
@@ -172,13 +175,22 @@ def yolo_seg_lines(polygons: list[list[list[float]]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def draw_polygon_overlay(image_path: Path, polygons: list[list[list[float]]], output_path: Path) -> Path:
+def draw_polygon_overlay(
+    image_path: Path, polygons: list[list[list[float]]], output_path: Path, labels: list[str] | None = None,
+) -> Path:
     img = Image.open(image_path).convert("RGB")
     w, h = img.size
     draw = ImageDraw.Draw(img)
-    for polygon in polygons:
+    for i, polygon in enumerate(polygons):
         pts = [(x * w, y * h) for x, y in polygon]
         draw.line(pts + [pts[0]], fill=(46, 204, 113), width=4)
+        if labels:
+            text = labels[i]
+            tx, ty = min(p[0] for p in pts), min(p[1] for p in pts)
+            tw, th = draw.textbbox((0, 0), text)[2:]
+            ty = ty - th - 4 if ty - th - 4 >= 0 else ty + 4
+            draw.rectangle([tx, ty, tx + tw + 4, ty + th + 4], fill=(46, 204, 113))
+            draw.text((tx + 2, ty + 2), text, fill=(255, 255, 255))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(output_path)
     return output_path

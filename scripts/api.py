@@ -142,11 +142,10 @@ class GeneratePackageRequest(BaseModel):
 
 class AddHardNegativeRequest(BaseModel):
     class_name: str
-    lat: float
-    lon: float
+    polygon: list[list[float]]
 
 
-HARD_NEGATIVE_ZOOM = 17
+_HARD_NEGATIVE_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 @app.get("/api/config")
@@ -652,58 +651,74 @@ def manual_sample_image(sample_id: str, class_name: str):
     return FileResponse(match, media_type=media_type, headers={"Cache-Control": "no-store"})
 
 
+def _hard_negative_thumbnail(class_name: str, row: dict) -> Path:
+    thumb_dir = common.hard_negative_review_dir(class_name)
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    out_path = thumb_dir / f"{row['id']}.jpg"
+    node_cfg = subclass_graph.node_config(class_name)
+    normalize_sample_crop = node_cfg.get("normalize_sample_crop", obb.DEFAULT_NORMALIZE_SAMPLE_CROP)
+    west, south, east, north = obb.hard_negative_crop_bbox(row, normalize_sample_crop)
+    return common.fetch_and_crop_bbox(
+        obb.SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+    )
+
+
 @app.get("/api/manual/hard_negatives")
 def list_hard_negatives(class_name: str):
-    tile_ids = s3_sync.sync_hard_negatives(class_name)
-    tiles = []
-    for tile_id in tile_ids:
-        z, x, y = (int(v) for v in tile_id.split("_"))
-        bounds = common.tile_bounds(z, x, y)
-        tiles.append({
-            "tile_id": tile_id,
-            "lon": (bounds["west"] + bounds["east"]) / 2,
-            "lat": (bounds["south"] + bounds["north"]) / 2,
-            "thumbnail_url": f"/api/manual/hard_negative_image/{tile_id}",
-        })
-    return {"tiles": tiles}
+    rows = s3_sync.sync_hard_negatives(class_name)
+    return {"tiles": [
+        {
+            "id": row["id"], "polygon": row["polygon"],
+            "lon": (row["west"] + row["east"]) / 2, "lat": (row["south"] + row["north"]) / 2,
+            "thumbnail_url": f"/api/manual/hard_negative_image/{row['id']}?class_name={quote(class_name, safe='')}",
+        }
+        for row in rows
+    ]}
 
 
 @app.post("/api/manual/hard_negatives")
 def add_hard_negative(req: AddHardNegativeRequest):
     if req.class_name not in common.list_classes():
         raise HTTPException(404, f"Class '{req.class_name}' not found")
-    x, y = common.lonlat_to_tile(req.lon, req.lat, HARD_NEGATIVE_ZOOM)
-    tile_id = common.tile_id(HARD_NEGATIVE_ZOOM, x, y)
-    common.fetch_tile(HARD_NEGATIVE_ZOOM, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
-    common.add_hard_negative(req.class_name, tile_id)
-    s3_sync.upload_hard_negative(req.class_name, tile_id)
-    logger.info(f"[{req.class_name}] added hard negative tile {tile_id}")
-    return {"tile_id": tile_id}
+    lons = [p[0] for p in req.polygon]
+    lats = [p[1] for p in req.polygon]
+    row = {
+        "id": uuid.uuid4().hex[:12],
+        "west": min(lons), "south": min(lats), "east": max(lons), "north": max(lats),
+        "polygon": req.polygon, "added_at": time.time(),
+    }
+    common.add_hard_negative(req.class_name, row)
+    s3_sync.upload_hard_negative(req.class_name, row)
+    _hard_negative_thumbnail(req.class_name, row)
+    logger.info(f"[{req.class_name}] added hard negative {row['id']}")
+    return {"id": row["id"]}
 
 
-@app.delete("/api/manual/hard_negatives/{tile_id}")
-def delete_hard_negative(tile_id: str, class_name: str):
-    if not _TILE_ID_RE.match(tile_id):
-        raise HTTPException(400, "Invalid tile_id")
-    common.remove_hard_negative(class_name, tile_id)
-    s3_sync.delete_remote_hard_negative(class_name, tile_id)
-    logger.info(f"[{class_name}] removed hard negative tile {tile_id}")
+@app.delete("/api/manual/hard_negatives/{hard_negative_id}")
+def delete_hard_negative(hard_negative_id: str, class_name: str):
+    if not _HARD_NEGATIVE_ID_RE.match(hard_negative_id):
+        raise HTTPException(400, "Invalid hard negative id")
+    common.remove_hard_negative(class_name, hard_negative_id)
+    s3_sync.delete_remote_hard_negative(class_name, hard_negative_id)
+    (common.hard_negative_review_dir(class_name) / f"{hard_negative_id}.jpg").unlink(missing_ok=True)
+    logger.info(f"[{class_name}] removed hard negative {hard_negative_id}")
     return {"deleted": True}
 
 
-@app.get("/api/manual/hard_negative_image/{tile_id}")
-def hard_negative_image(tile_id: str):
-    if not _TILE_ID_RE.match(tile_id):
-        raise HTTPException(400, "Invalid tile_id")
-    match = next(common.TILE_IMAGES_DIR.glob(f"{tile_id}.*"), None)
-    if match is None:
-        z, x, y = (int(v) for v in tile_id.split("_"))
+@app.get("/api/manual/hard_negative_image/{hard_negative_id}")
+def hard_negative_image(hard_negative_id: str, class_name: str):
+    if not _HARD_NEGATIVE_ID_RE.match(hard_negative_id):
+        raise HTTPException(400, "Invalid hard negative id")
+    match = common.hard_negative_review_dir(class_name) / f"{hard_negative_id}.jpg"
+    if not match.exists():
+        row = next((r for r in common.load_hard_negatives(class_name) if r["id"] == hard_negative_id), None)
+        if row is None:
+            raise HTTPException(404, "Hard negative not found")
         try:
-            match = common.fetch_tile(z, x, y, common.DEFAULT_TILESET, common.DEFAULT_FORMAT)
+            _hard_negative_thumbnail(class_name, row)
         except Exception as e:
-            raise HTTPException(502, f"Tile image missing locally and re-fetch from Mapbox failed: {e}")
-    media_type = "image/png" if match.suffix.startswith(".png") else "image/jpeg"
-    return FileResponse(match, media_type=media_type)
+            raise HTTPException(502, f"Thumbnail missing locally and re-fetch failed: {e}")
+    return FileResponse(match, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 def _build_validate_response(class_name: str, result: search.ValidationResult) -> dict:
