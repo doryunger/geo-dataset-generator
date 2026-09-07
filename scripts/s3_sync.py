@@ -1,6 +1,5 @@
 """S3 backup for classes/ as timestamped package snapshots."""
 import io
-import json
 import logging
 import os
 import shutil
@@ -10,7 +9,6 @@ import time
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
 
 import common
 
@@ -195,61 +193,22 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
             combined.sort(key=lambda e: e["timestamp"])
             common.rewrite_jsonl(common.sample_changelog_path(class_name), combined)
 
+        remote_hn_path = remote_dir / "hard_negatives.jsonl"
+        remote_hn = common.read_jsonl(remote_hn_path) if remote_hn_path.exists() else []
+        local_hn = common.load_hard_negatives(class_name)
+        local_hn_ids = {r["id"] for r in local_hn}
+        added_hn = [r for r in remote_hn if r["id"] not in local_hn_ids]
+        if added_hn:
+            common.hard_negative_review_dir(class_name).mkdir(parents=True, exist_ok=True)
+            for row in added_hn:
+                common.add_hard_negative(class_name, row)
+                remote_thumb = remote_dir / "hard_negatives_review" / f"{row['id']}.jpg"
+                if remote_thumb.exists():
+                    shutil.copy(remote_thumb, common.hard_negative_review_dir(class_name) / f"{row['id']}.jpg")
+            logger.info(f"[{class_name}] merged {len(added_hn)} hard negative(s) from remote package")
+
     return {
         "remote_total": len(remote_samples), "local_total": len(local_samples),
         "added_from_remote": len(added_rows), "merged_total": len(local_samples) + len(added_rows),
+        "hard_negatives_added": len(added_hn),
     }
-
-
-def _hard_negative_prefix(class_name: str) -> str:
-    return f"hard_negatives/{class_name}/"
-
-
-def upload_hard_negative(class_name: str, row: dict) -> None:
-    if not s3_configured():
-        return
-    key = f"{_hard_negative_prefix(class_name)}{row['id']}.json"
-    body = json.dumps(row).encode("utf-8")
-    _client().put_object(Bucket=_BUCKET, Key=key, Body=body, ContentType="application/json")
-    logger.info(f"[{class_name}] uploaded hard negative {row['id']} to s3://{_BUCKET}/{key}")
-
-
-def delete_remote_hard_negative(class_name: str, hard_negative_id: str) -> None:
-    if not s3_configured():
-        return
-    key = f"{_hard_negative_prefix(class_name)}{hard_negative_id}.json"
-    _client().delete_object(Bucket=_BUCKET, Key=key)
-    logger.info(f"[{class_name}] deleted hard negative {hard_negative_id} from s3://{_BUCKET}/{key}")
-
-
-def list_remote_hard_negatives(class_name: str) -> list[dict]:
-    if not s3_configured():
-        return []
-    rows = []
-    paginator = _client().get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=_BUCKET, Prefix=_hard_negative_prefix(class_name)):
-        for obj in page.get("Contents", []):
-            if not obj["Key"].endswith(".json"):
-                continue
-            buf = io.BytesIO()
-            try:
-                _client().download_fileobj(_BUCKET, obj["Key"], buf)
-            except ClientError as e:
-                if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
-                    continue
-                raise
-            rows.append(json.loads(buf.getvalue()))
-    return rows
-
-
-def sync_hard_negatives(class_name: str) -> list[dict]:
-    if not s3_configured():
-        return common.load_hard_negatives(class_name)
-    remote = list_remote_hard_negatives(class_name)
-    local_ids = {r["id"] for r in common.load_hard_negatives(class_name)}
-    added = [r for r in remote if r["id"] not in local_ids]
-    for row in added:
-        common.add_hard_negative(class_name, row)
-    if added:
-        logger.info(f"[{class_name}] pulled {len(added)} hard negative(s) from S3: {[r['id'] for r in added]}")
-    return common.load_hard_negatives(class_name)

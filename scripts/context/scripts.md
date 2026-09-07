@@ -318,22 +318,28 @@ sample creation, no marking-zoom decision needed at all.
 computation works uniformly regardless of a row's age -- old marks keep working, just with a
 less-precise whole-tile polygon than a freshly hand-drawn one.
 
-**Why hard negatives get their own S3 prefix instead of riding the package snapshot**:
-`classes/<class>/` already backs up to S3 as a timestamped tarball on "Generate Package," but only
-at publish time, and merging two machines' both-new hard-negative lists there would need the same
-read-modify-write merge `merge_latest_package` does for samples. Instead: `hard_negatives/<class>/
-<id>.json`, one small object per row (full row, not just an id marker) rather than one combined
-list file, so two machines adding *different* rows never race on the same object. Each add/delete is
-an independent `PutObject`/`DeleteObject`, and `/api/manual/hard_negatives` calls
-`sync_hard_negatives` (additive-only pull) on every list load, not just at publish time -- a tile one
-labeler spots the model confusing should show up for everyone immediately.
+**S3 sync now rides the package snapshot, same as samples (reverted 2026-09-07)**: an earlier
+design gave hard negatives their own live-synced S3 prefix (`hard_negatives/<class>/<id>.json`, one
+object per row) so a tile one labeler spotted the model confusing would show up for every machine
+immediately, without anyone needing to publish first -- `/api/manual/hard_negatives` called a
+`sync_hard_negatives` that listed the prefix and downloaded every row's full content, every single
+list load. That worked fine at a handful of rows but stopped scaling: at 66+ hard negatives it meant
+66+ sequential S3 round-trips on every tab switch, class switch, add, or delete, while the identical
+samples list stayed instant since it never touches S3 outside of "Generate Package."
 
-`list_remote_hard_negatives` (called by `sync_hard_negatives` on every list load) lists S3 keys
-under the prefix, then downloads each one's content -- a key can legitimately vanish between those
-two steps (e.g. deleting a hard negative removes its S3 object, and the browser's own post-delete
-list refresh can race that removal), so a per-key 404 on the download is caught and skipped rather
-than left to raise `ClientError` and crash the whole listing (surfaced as a plain-text 500 the
-frontend's `res.json()` then failed to parse as JSON -- fixed 2026-09-06).
+The immediacy wasn't actually buying anything samples' own approach doesn't already solve: comparing
+`add`/`delete`/`local_ids`, `git log`, and the S3 packages showed no case where a second machine
+needed a hard negative *before* the next publish. So hard negatives now behave exactly like samples
+-- purely local (`common.load_hard_negatives`/`add_hard_negative`/`remove_hard_negative`, no S3
+calls at all) until an explicit "Generate Package" or `obb.py --class <class>` publish, which already
+uploads `hard_negatives.jsonl` and `hard_negatives_review/*.jpg` for free (`upload_package` tars the
+whole class directory, no hard-negative-specific code needed there). `merge_latest_package` (the
+"include latest available entry" checkbox's additive, local-always-wins merge, previously
+samples-only) now merges `hard_negatives.jsonl` the same way, copying over each newly-merged row's
+thumbnail from the remote package if present -- this is what replaces the old live-sync's
+multi-machine safety, just resolved at publish time instead of continuously. Net effect: a second
+machine's new hard negative now shows up after the next package publish, not instantly, in exchange
+for the list going from several seconds to effectively free.
 
 **Ratio caution**: an intermediate design (systematic grid crops from one big marked tile) pushed
 fan-unit's hard negatives from 42 to 378 against 123 positives (3:1 negative-heavy) before being

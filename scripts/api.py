@@ -667,7 +667,7 @@ def _hard_negative_thumbnail(class_name: str, row: dict) -> Path:
 
 @app.get("/api/manual/hard_negatives")
 def list_hard_negatives(class_name: str):
-    rows = s3_sync.sync_hard_negatives(class_name)
+    rows = common.load_hard_negatives(class_name)
     return {"tiles": [
         {
             "id": row["id"], "polygon": row["polygon"], "enabled": row.get("enabled", True),
@@ -690,7 +690,6 @@ def add_hard_negative(req: AddHardNegativeRequest):
         "polygon": req.polygon, "added_at": time.time(), "enabled": True,
     }
     common.add_hard_negative(req.class_name, row)
-    s3_sync.upload_hard_negative(req.class_name, row)
     _hard_negative_thumbnail(req.class_name, row)
     logger.info(f"[{req.class_name}] added hard negative {row['id']}")
     return {"id": row["id"]}
@@ -705,7 +704,6 @@ def update_hard_negative(hard_negative_id: str, class_name: str, req: UpdateHard
         raise HTTPException(404, "Hard negative not found")
     row["enabled"] = req.enabled
     common.add_hard_negative(class_name, row)
-    s3_sync.upload_hard_negative(class_name, row)
     logger.info(f"[{class_name}] hard negative {hard_negative_id} enabled={req.enabled}")
     return {"id": row["id"], "enabled": row["enabled"]}
 
@@ -715,7 +713,6 @@ def delete_hard_negative(hard_negative_id: str, class_name: str):
     if not _HARD_NEGATIVE_ID_RE.match(hard_negative_id):
         raise HTTPException(400, "Invalid hard negative id")
     common.remove_hard_negative(class_name, hard_negative_id)
-    s3_sync.delete_remote_hard_negative(class_name, hard_negative_id)
     (common.hard_negative_review_dir(class_name) / f"{hard_negative_id}.jpg").unlink(missing_ok=True)
     logger.info(f"[{class_name}] removed hard negative {hard_negative_id}")
     return {"deleted": True}
