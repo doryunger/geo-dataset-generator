@@ -186,6 +186,46 @@ object in frame. Checked against real data at the time: every current fan-unit a
 distillation-column sample already fits inside 80m (this is a no-op today, a floor for whatever
 comes next, not a fix to any currently-broken sample).
 
+### Two fixed crop buckets for small objects (2026-09-13)
+
+`_crop_bucket(obj_extent_m)` picks between two **fixed** framing conventions, not a continuous
+per-object size: objects under `SMALL_SAMPLE_THRESHOLD_M` (6m) get `SMALL_SAMPLE_CROP_M`/
+`SMALL_SAMPLE_FETCH_ZOOM`/`SMALL_SAMPLE_TARGET_GSD_M` (40m/z19/half the normal target GSD) instead
+of the normal 80m/z18/`TARGET_GSD_M`. Deliberately not continuous (e.g. crop = k * object size) --
+that's the exact framing-inconsistency bug `normalize_sample_crop` itself was built to fix (see
+above), so reintroducing it per-object for "just small ones" would bring the same shortcut back in
+a narrower disguise. Two fixed conventions keep every crop in a bucket identically framed while
+letting genuinely small objects (found via a handful of real fan-unit samples that rendered as a
+few blurry pixels in the 80m frame) resolve at real detail instead of a blur. GSD is halved to
+match the zoom step so both buckets still land at the same final pixel size after resampling.
+`_normalized_sample_crop` (positives) and `hard_negative_crop_bboxes`/`_hard_negative_crop` (hard
+negatives) both call `_crop_bucket` off their own object/drawn-shape extent -- **except** hard
+negatives were decoupled back to always using the normal 80m bucket regardless of size (2026-09-13,
+see below), so in practice only positive samples use the small bucket today.
+
+**Small-sample removal made Antwerp false positives *worse*, twice, in both directions tried
+(2026-09-13)**: motivated by a real regression after adding 53 new fan-unit samples (`fan_unit_obb
+_v18` -> `v19`, Antwerp went from 3 false-positive tiles to 7-42 depending on exactly which crop
+code/samples combination was tried), the natural-seeming fix was "drop the small ones, they're
+probably noisy." Tested twice, at two different scopes, both times against the same held-out
+Antwerp scan: removing just the 5 small samples from the new batch (269 -> 264) raised the hit
+count to 34 tiles at much *higher* confidence (0.5-0.77) than keeping them (7 tiles); separately,
+removing all 9 small samples that predate `v18` from its original 216-sample set (-> 207) raised
+v18's own near-baseline 6-tile result (with the two-bucket code, `v22`) to 25 tiles. Both directions
+of the "small samples are the problem" theory failed. The actual isolated cause (confirmed by
+holding `v18`'s exact 216-sample dataset fixed and only adding back the 5 small new-batch samples,
+`v25`/`v26`, both reproducing 6 tiles with the real cluster now at 0.44-0.57 vs `v18`'s own
+0.27-0.38) was the other 48 non-small new samples, not the small ones -- small samples were never
+the regression, and removing them actively hurt. `fan-unit`'s working set as of 2026-09-13 is
+`v18`'s original 216 samples plus those same 5 small new-batch ones (221 total, all 14 small
+samples across the class kept, the other 48 non-small new-batch samples excluded on disk -- crop,
+`bend_review`, and embedding-index entries all removed via `common.remove_sample`, not just left
+out of `samples.jsonl`). Generating this class's package uses the plain CLI (`python scripts/obb.py
+--class fan-unit --hard-negatives`), which never merges with S3 -- deliberately, so the excluded 48
+can't silently reappear via `/manual`'s "Generate Package" merge checkbox pulling in an older S3
+snapshot that still has them. If that button is ever used for this class, its "include latest
+available entry" checkbox needs to be off.
+
 ### HARD_NEGATIVE_TILES (legacy dict, mostly superseded -- see Hard negatives section below)
 
 Keyed by tile id -> tuple of class names it's a negative *for* (changed from a flat shared list
@@ -291,7 +331,12 @@ for a class are *always* the same fixed 80m/z18 window regardless of true object
 hard-negative crop using its own drawn -- and therefore variable -- size would be its own framing
 shortcut for the model to exploit, a subtler version of the exact problem this mechanism exists to
 avoid.) For a class without `normalize_sample_crop`, positives use their own drawn bbox as-is, so a
-hard negative does too.
+hard negative does too. This is also why hard negatives were deliberately **not** wired up to the
+small-object crop bucket (see `_crop_bucket` above) even though positives are: a hard negative's
+drawn size describes the *marked area*, not a real object's true extent the way a positive's
+polygon does, so sizing its crop off that would reintroduce the same drawn-size-as-shortcut problem
+this paragraph exists to avoid -- hard negatives always use the normal 80m/z18 bucket regardless of
+how small the drawn shape is.
 
 **Oversized shapes are sliced, not grown or clipped (fixed 2026-09-06)**: the function name is
 plural because a drawn shape bigger than `SAMPLE_CROP_M` in either dimension no longer just gets a

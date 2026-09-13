@@ -88,6 +88,17 @@ DEFAULT_NORMALIZE_SAMPLE_CROP = False
 SAMPLE_CROP_M = 80.0
 SAMPLE_FETCH_ZOOM = 18
 
+SMALL_SAMPLE_THRESHOLD_M = 6.0
+SMALL_SAMPLE_CROP_M = 40.0
+SMALL_SAMPLE_FETCH_ZOOM = 19
+SMALL_SAMPLE_TARGET_GSD_M = common.TARGET_GSD_M / 2
+
+
+def _crop_bucket(obj_extent_m: float) -> tuple[float, int, float]:
+    if obj_extent_m < SMALL_SAMPLE_THRESHOLD_M:
+        return SMALL_SAMPLE_CROP_M, SMALL_SAMPLE_FETCH_ZOOM, SMALL_SAMPLE_TARGET_GSD_M
+    return SAMPLE_CROP_M, SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
+
 
 def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
     pts = ring[:-1] if ring[0] == ring[-1] else ring
@@ -110,13 +121,14 @@ def _normalized_sample_crop(row: dict):
     mid_lat = (min(lats) + max(lats)) / 2
     width_m = (max(lons) - min(lons)) * 111_320 * math.cos(math.radians(mid_lat))
     height_m = (max(lats) - min(lats)) * 111_320
-    crop_extent_m = max(SAMPLE_CROP_M, (max(width_m, height_m)) * 1.1)
+    base_crop_m, fetch_zoom, target_gsd_m = _crop_bucket(max(width_m, height_m))
+    crop_extent_m = max(base_crop_m, (max(width_m, height_m)) * 1.1)
     west, south, east, north = _bbox_around(lon, lat, crop_extent_m)
     out_path = common.SCRATCH_DIR / "obb_context_crops" / f"{row['id']}.jpg"
     path = common.fetch_and_crop_bbox(
-        SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+        fetch_zoom, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
     )
-    return Image.open(path), west, south, east, north
+    return Image.open(path), west, south, east, north, fetch_zoom, target_gsd_m
 
 
 def _grid_positions(length: int, crop: int, n: int) -> list[int]:
@@ -128,39 +140,46 @@ def _grid_positions(length: int, crop: int, n: int) -> list[int]:
     return sorted({round(span * i / (n - 1)) for i in range(n)})
 
 
-def hard_negative_crop_bboxes(row: dict, normalize_sample_crop: bool) -> list[tuple[float, float, float, float]]:
+def hard_negative_crop_bboxes(
+    row: dict, normalize_sample_crop: bool,
+) -> tuple[list[tuple[float, float, float, float]], int, float]:
     if not normalize_sample_crop:
-        return [(row["west"], row["south"], row["east"], row["north"])]
+        return [(row["west"], row["south"], row["east"], row["north"])], SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
 
+    crop_m, fetch_zoom, target_gsd_m = SAMPLE_CROP_M, SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
     mid_lat = (row["north"] + row["south"]) / 2
     width_m = (row["east"] - row["west"]) * 111_320 * math.cos(math.radians(mid_lat))
     height_m = (row["north"] - row["south"]) * 111_320
-    grid_w = max(1, math.ceil(width_m / SAMPLE_CROP_M))
-    grid_h = max(1, math.ceil(height_m / SAMPLE_CROP_M))
+    grid_w = max(1, math.ceil(width_m / crop_m))
+    grid_h = max(1, math.ceil(height_m / crop_m))
 
     if grid_w == 1 and grid_h == 1:
         lon, lat = _polygon_centroid(row["polygon"])
-        return [_bbox_around(lon, lat, SAMPLE_CROP_M)]
+        return [_bbox_around(lon, lat, crop_m)], fetch_zoom, target_gsd_m
 
-    lefts_m = _grid_positions(round(width_m), round(SAMPLE_CROP_M), grid_w)
-    tops_m = _grid_positions(round(height_m), round(SAMPLE_CROP_M), grid_h)
+    lefts_m = _grid_positions(round(width_m), round(crop_m), grid_w)
+    tops_m = _grid_positions(round(height_m), round(crop_m), grid_h)
     bboxes = []
     for top_m in tops_m:
         for left_m in lefts_m:
-            center_lon = row["west"] + (left_m + SAMPLE_CROP_M / 2) / (111_320 * math.cos(math.radians(mid_lat)))
-            center_lat = row["north"] - (top_m + SAMPLE_CROP_M / 2) / 111_320
-            bboxes.append(_bbox_around(center_lon, center_lat, SAMPLE_CROP_M))
-    return bboxes
+            center_lon = row["west"] + (left_m + crop_m / 2) / (111_320 * math.cos(math.radians(mid_lat)))
+            center_lat = row["north"] - (top_m + crop_m / 2) / 111_320
+            bboxes.append(_bbox_around(center_lon, center_lat, crop_m))
+    return bboxes, fetch_zoom, target_gsd_m
 
 
 def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool) -> int:
-    bboxes = hard_negative_crop_bboxes(row, normalize_sample_crop)
+    bboxes, fetch_zoom, target_gsd_m = hard_negative_crop_bboxes(row, normalize_sample_crop)
     for i, (west, south, east, north) in enumerate(bboxes):
         piece_name = name_prefix if len(bboxes) == 1 else f"{name_prefix}_p{i}"
         out_path = output_dir / "images" / "train" / f"{piece_name}.jpg"
         common.fetch_and_crop_bbox(
-            SAMPLE_FETCH_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
+            fetch_zoom, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
         )
+        native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
+        with Image.open(out_path) as img:
+            resampled = common.resample_to_target_gsd(img.convert("RGB"), native_gsd_m, target_gsd_m)
+            resampled.save(out_path, format="JPEG")
         (output_dir / "labels" / "train" / f"{piece_name}.txt").write_text("")
     return len(bboxes)
 
@@ -347,17 +366,17 @@ def _generate_pieces_for_class(
             on_progress(i + 1, len(samples), row["id"])
         west, south, east, north = row["west"], row["south"], row["east"], row["north"]
         fetch_zoom = row["zoom"]
+        target_gsd_m = common.TARGET_GSD_M
         if normalize_sample_crop:
-            img, west, south, east, north = _normalized_sample_crop(row)
-            fetch_zoom = SAMPLE_FETCH_ZOOM
+            img, west, south, east, north, fetch_zoom, target_gsd_m = _normalized_sample_crop(row)
         else:
             img = Image.open(src)
         native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
-        img = common.resample_to_target_gsd(img, native_gsd_m)
+        img = common.resample_to_target_gsd(img, native_gsd_m, target_gsd_m)
         w, h = img.size
         normalized_ring = common.polygon_to_normalized(row["polygon"], west, south, east, north)
         pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
-        gsd_m_per_px = common.TARGET_GSD_M
+        gsd_m_per_px = target_gsd_m
         rects = polygon_to_obb_corners(
             pixel_ring, BEND_PIECES.get(row["id"], 1), image=img, gsd_m_per_px=gsd_m_per_px, embedder=embedder,
             min_piece_m=min_piece_m, max_piece_m=max_piece_m,

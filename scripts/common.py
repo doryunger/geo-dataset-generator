@@ -512,8 +512,8 @@ TARGET_GSD_M = 0.125
 GSD_RESAMPLE_TOLERANCE = 0.02
 
 
-def resample_to_target_gsd(image: Image.Image, native_gsd_m: float) -> Image.Image:
-    scale = native_gsd_m / TARGET_GSD_M
+def resample_to_target_gsd(image: Image.Image, native_gsd_m: float, target_gsd_m: float = TARGET_GSD_M) -> Image.Image:
+    scale = native_gsd_m / target_gsd_m
     if abs(scale - 1.0) < GSD_RESAMPLE_TOLERANCE:
         return image
     w, h = image.size
