@@ -27,28 +27,9 @@ logger = logging.getLogger(__name__)
 
 VAL_FRACTION = 5
 
-BEND_PIECES = {
-    "aee3c19a3df5": 2,
-    "68cc74d07889": 3,
-    "f88afb6aab98": 2,
-    "ffcf467c7162": 2,
-    "044713e7352a": 2,
-    "6bdee4ae4266": 2,
-    "a696901a6945": 2,
-    "c17abb87b064": 2,
-    "ef053a50e722": 4,
-    "8382b49f6b71": 2,
-    "7e1da02e5364": 2,
-}
+BEND_PIECES: dict[str, int] = {}
 
-HARD_NEGATIVE_TILES = {
-    "19_312953_212891": ("fence-face",),
-    "19_312954_212892": ("fence-face",),
-    "19_312955_212891": ("fence-face",),
-    "19_312953_212894": ("fence-face",),
-    "19_312954_212894": ("fence-face",),
-    "19_312955_212893": ("fence-face",),
-}
+HARD_NEGATIVE_TILES: dict[str, tuple[str, ...]] = {}
 
 
 def _rect_polygon(bounds: dict) -> list[list[float]]:

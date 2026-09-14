@@ -482,6 +482,29 @@ regression, without losing the row or having to re-draw it if the answer is no.
 
 ## s3_sync.py -- S3 backup
 
+### Archived classes (2026-09-14)
+
+Everything except `fan-unit` was archived to make the repo production-shaped: `chimney`,
+`distillation-column`, `fence` and its sub-class `fence/fence-face`. Nothing was deleted. Each
+got a final `upload_package` snapshot first (`fence` and `fence-face` had never been uploaded at
+all -- this was their first and only package), then every key under `packages/<class>/` was
+copied to `archive/packages/<class>/` and the original removed, and the local
+`classes/<class>/` directory was moved to `archive/classes/<class>/` (repo root, gitignored like
+`classes/`). 18 package objects in `archive/packages/` in total.
+
+Why a physical move rather than a display allowlist: `list_classes()` scans `classes/`, and
+`list_remote_classes()` / `download_latest_package()` / `pull_classes.py` only look under
+`packages/`, so moving the data out of both makes the archived classes invisible to `/manual`,
+to training, and to a fresh machine's pull -- with no flag that could be forgotten or that a
+future sync could bypass. Restoring is the reverse move on both sides.
+
+The global embedding index (`embeddings/index.npy` + `index_ids.json`) was pruned of the 698
+entries belonging to archived classes' samples (1,086 -> 388) so similarity search in the app
+only returns live samples; the pre-prune index is at `archive/embeddings/`. `BEND_PIECES` and
+`HARD_NEGATIVE_TILES` in `obb.py` were emptied at the same time -- both held only fence /
+fence-face entries; the mechanisms stay, and the old entries are in git history (commit
+`d77203e` and earlier) if fence is ever revived.
+
 Backs up `classes/<class>/` (samples, crops, bend_review/error_review, dataset_obb,
 hard_negatives.jsonl) to S3 as timestamped snapshots, not continuous per-write mirroring. Labeling
 work happens purely locally; only the deliberate "package" step (`obb.py`'s CLI, `/manual`'s

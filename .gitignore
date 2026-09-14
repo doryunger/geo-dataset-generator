@@ -4,6 +4,7 @@ tiles/
 embeddings/
 models/
 classes/
+archive/
 .scratch/
 
 # oil_refinery experiments — probe/benchmark outputs, raw downloaded datasets, and the
