@@ -3,6 +3,7 @@
   "canonical_model": "models/yolo11n-obb.pt",
   "models": [
     "models/yolo11n-obb.pt",
-    "models/DIOR_yolov8s_backbone.pt"
+    "models/DIOR_yolov8s_backbone.pt",
+    "models/fan-unit_obb_v33.pt"
   ]
 }

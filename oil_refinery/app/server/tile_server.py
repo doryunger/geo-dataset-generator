@@ -51,6 +51,8 @@ def _is_graph_relevant(det: dict) -> bool:
 
 CONF_THRESHOLD = 0.15
 
+HALO_M = 20.0
+
 MAX_PREDICT_IMGSZ = 3072
 
 INFERENCE_DEVICE = os.environ.get("INFERENCE_DEVICE", "cpu")
@@ -237,26 +239,44 @@ def _render_overlay(size: tuple[int, int], detections: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+def _padded_tile(job: Job, halo_px: int) -> tuple[Image.Image, int, int]:
+    centre = Image.open(io.BytesIO(job.image_bytes)).convert("RGB")
+    w, h = centre.size
+    composite = Image.new("RGB", (3 * w, 3 * h))
+    composite.paste(centre, (w, h))
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            try:
+                with Image.open(common.fetch_tile(job.z, job.x + dx, job.y + dy)) as neighbour:
+                    composite.paste(neighbour.convert("RGB"), ((dx + 1) * w, (dy + 1) * h))
+            except Exception:
+                logger.warning("Tile %s: neighbour (%+d,%+d) unavailable, halo left black there", job.tile_id, dx, dy)
+    return composite.crop((w - halo_px, h - halo_px, 2 * w + halo_px, 2 * h + halo_px)), w, h
+
+
 def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
     models: dict[str, YOLO] = _state["models"]
 
     prepped: list[dict] = []
     results_by_index: dict[int, tuple[bytes, list[dict]]] = {}
     for i, job in enumerate(jobs):
-        img = Image.open(io.BytesIO(job.image_bytes)).convert("RGB")
-        native_w, native_h = img.size
         bounds = common.tile_bounds(job.z, job.x, job.y)
         lat = (bounds["north"] + bounds["south"]) / 2
         native_gsd_m = common.meters_per_pixel(job.z, lat)
-        resampled = common.resample_to_target_gsd(img, native_gsd_m)
+        halo_px = int(round(HALO_M / native_gsd_m))
+        padded, native_w, native_h = _padded_tile(job, halo_px)
+        padded_w, padded_h = padded.size
+        resampled = common.resample_to_target_gsd(padded, native_gsd_m)
         resampled_w, resampled_h = resampled.size
         if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
             results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
             continue
         prepped.append({
-            "index": i, "job": job, "native_w": native_w, "native_h": native_h,
+            "index": i, "job": job, "native_w": native_w, "native_h": native_h, "halo_px": halo_px,
             "resampled": resampled,
-            "scale_back_x": native_w / resampled_w, "scale_back_y": native_h / resampled_h,
+            "scale_back_x": padded_w / resampled_w, "scale_back_y": padded_h / resampled_h,
         })
 
     if not prepped:
@@ -297,12 +317,18 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
                 per_model_counts[model_key] = {}
                 continue
             model_counts: dict[str, int] = {}
+            halo_dropped = 0
             for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
                 class_name = r.names[int(cls_id)]
-                model_counts[class_name] = model_counts.get(class_name, 0) + 1
-                corners = [(pt[0] * p["scale_back_x"], pt[1] * p["scale_back_y"]) for pt in xy]
+                corners = [
+                    (pt[0] * p["scale_back_x"] - p["halo_px"], pt[1] * p["scale_back_y"] - p["halo_px"]) for pt in xy
+                ]
                 cx = sum(pt[0] for pt in corners) / 4
                 cy = sum(pt[1] for pt in corners) / 4
+                if not (0 <= cx < p["native_w"] and 0 <= cy < p["native_h"]):
+                    halo_dropped += 1
+                    continue
+                model_counts[class_name] = model_counts.get(class_name, 0) + 1
                 raw_detections.append({
                     "tile_id": tile_id,
                     "model": model_key,
@@ -311,6 +337,8 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
                     "confidence": conf,
                     "centroid_px_global": geometry.global_pixel(job.x, job.y, cx, cy),
                 })
+            if halo_dropped:
+                model_counts["_halo"] = halo_dropped
             per_model_counts[model_key] = model_counts
 
         logger.info(

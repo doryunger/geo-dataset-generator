@@ -139,6 +139,54 @@ an exact lookup against the graph's "storage tank" node would silently drop it r
 confidence. **Confirmed live**: a solo DIOR "storagetank" at 0.879 confidence, well above its
 component's 0.75 floor, was being dropped this way before this fix.
 
+### `_padded_tile()` / `HALO_M` -- overlapping tiles (2026-09-14)
+
+Each tile is detected on with a halo of `HALO_M` (20 m) of neighbouring imagery composited around
+it from the eight adjacent tiles (`common.fetch_tile`, disk-cached, so mostly free once a viewport
+has loaded), and only detections whose *centroid* lands inside the core tile are kept -- a
+detection in the halo belongs to the neighbouring tile and is produced when that tile is
+processed. Corners are shifted back by `halo_px` before anything downstream sees them, so overlay
+rendering, `geometry.py` global centroids, fusion and the classifier all still work in plain
+native-tile coordinates and never know the halo existed. A neighbour that can't be fetched leaves
+its slot black rather than failing the tile.
+
+Why: an object cut by a tile boundary is only half-visible to the model. A held-out recall sweep
+of `fan-unit` on 2026-09-14 found 5 of 15 undetected labelled fans were found fine (0.57-0.68)
+when centred and missed only because a window edge cut them. **Measured on real z17 tiles the
+gain is smaller than that sweep suggested**: of 9 val fans within 10 m of a z17 tile edge, 7 were
+already detected without the halo (0.70-0.86, the model tolerates a partial fan better at z17's
+181 m tiles than at the sweep's 120 m z19 windows), 1 was recovered (0.00 -> 0.64), 1 stays
+undetected either way. Confidence never dropped on any of the 9 and the neighbour tile never
+double-reported. Kept because it is strictly non-negative and cheap; don't expect it to move
+recall by more than a point or two. Cost: the resampled input grows from ~1,456 px to ~1,770 px
+per side at z17 (about 1.5x the pixels), which lands directly on CPU inference time.
+
+`HALO_M` = 20 m covers any object up to 40 m across when its centroid sits inside the core; the
+largest fan-unit sample is 31.6 m. The `"_halo": n` entry in the per-tile "raw detections by
+model" log line counts detections discarded to the neighbour, so a tile straddling a bank shows
+where its fans went.
+
+A detection whose centroid is in the core but whose box extends past the tile edge is drawn
+clipped at that edge in the overlay -- cosmetic only, the detection itself is whole.
+
+### Wiring a custom class in (`fan-unit`, 2026-09-14)
+
+Two edits, no code: the checkpoint appended to `config.json`'s `models` (which also grows
+`_MODEL_EXECUTOR_SIZE`), and a `{"kind": "component"}` node plus a `requires` edge in
+`semantic_graph.json`. **The node name must be the model's own class string exactly** --
+`classifier.score()` looks detections up by exact `class_name`, and unlike the two pretrained
+checkpoints (whose "storage tank"/"storagetank" spellings get unified because the fuser rewrites a
+merged group to `CANONICAL_MODEL`'s label) a custom class has no canonical partner, so its raw
+`data.yaml` name (`fan-unit`, hyphenated) is what reaches the classifier. `_is_graph_relevant`'s
+fuzzy match would have let a `fan unit` node through; the classifier would then have silently
+counted zero of them.
+
+`min_confidence` 0.5 for `fan-unit` was measured, not guessed (same-day adjudication of every
+detection on the held-out sites): 0.5 gives precision 0.967 / recall 0.74, 0.8 gives 0.998 /
+0.44. For a site classifier that only needs "fans are present," the recall matters more than the
+last three points of precision. Known limitation accepted by the user: fans in the 18-23 m range
+are systematically missed (6% of training data is that size); everything under 18 m is found.
+
 ### `_run_detection_batch()`
 
 Runs on a background thread (`run_in_executor`) so the event loop stays free for other requests
