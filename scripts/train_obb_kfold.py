@@ -7,8 +7,8 @@ Usage:
     python scripts/train_obb_kfold.py --class fence --version v6 --folds 5
 """
 import argparse
+import hashlib
 import json
-import random
 import statistics
 
 import common
@@ -21,10 +21,13 @@ METRIC_KEYS = [
 ]
 
 
-def make_folds(sample_ids: list[str], k: int, seed: int = 0) -> list[list[str]]:
-    ids = sorted(sample_ids)
-    random.Random(seed).shuffle(ids)
-    return [ids[i::k] for i in range(k)]
+def make_folds(samples: list[dict], k: int, seed: int = 0) -> list[list[str]]:
+    sites = obb.cluster_sites(samples)
+    sites.sort(key=lambda ids: (-len(ids), hashlib.md5(f"{seed}:{','.join(sorted(ids))}".encode()).hexdigest()))
+    folds: list[list[str]] = [[] for _ in range(k)]
+    for site in sites:
+        min(folds, key=len).extend(site)
+    return folds
 
 
 def run_kfold(class_name: str, version: str, k: int = 5, seed: int = 0, **train_kwargs) -> dict:
@@ -33,13 +36,13 @@ def run_kfold(class_name: str, version: str, k: int = 5, seed: int = 0, **train_
     if len(sample_ids) < k:
         raise ValueError(f"only {len(sample_ids)} samples, can't make {k} non-empty folds")
 
-    folds = make_folds(sample_ids, k, seed)
+    folds = make_folds(samples, k, seed)
     embedder = Embedder()
 
     fold_results = []
     for i, val_ids in enumerate(folds):
         fold_version = f"{version}_fold{i}"
-        print(f"\n=== fold {i + 1}/{k}: {len(val_ids)} samples held out for val ===")
+        print(f"\n=== fold {i + 1}/{k}: {len(val_ids)} samples from whole sites held out for val ===")
         obb.generate_obb_package(class_name, embedder=embedder, val_ids=set(val_ids))
         result = train_obb_class(class_name, fold_version, **train_kwargs)
         metrics = json.loads(open(result["metrics_path"]).read())["metrics"]

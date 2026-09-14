@@ -153,6 +153,10 @@ def hard_negatives_path(name: str) -> Path:
     return class_dir(name) / "hard_negatives.jsonl"
 
 
+def val_sites_path(name: str) -> Path:
+    return class_dir(name) / "val_sites.json"
+
+
 def load_hard_negatives(name: str) -> list[dict]:
     return read_jsonl(hard_negatives_path(name))
 

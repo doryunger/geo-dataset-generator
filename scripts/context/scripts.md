@@ -203,6 +203,29 @@ negatives) both call `_crop_bucket` off their own object/drawn-shape extent -- *
 negatives were decoupled back to always using the normal 80m bucket regardless of size (2026-09-13,
 see below), so in practice only positive samples use the small bucket today.
 
+**Open concern: the small bucket trains at a scale inference never sees (found 2026-09-14, not yet
+acted on).** Both buckets land at the same 640px *image* size, but that is the image, not the
+object: a 5m object is 80px in the small bucket and 40px at the 0.125 GSD that every inference path
+resamples to (`tile_server.py`, `probe_fan_unit_site.py`, `predict_area_obb.py` all target
+`common.TARGET_GSD_M`). So the 29 of 255 `fan-unit` samples under the 6m threshold teach the model
+to find small fans at double the pixel size they can ever appear at, with a hard discontinuity at
+the threshold (5.9m -> 94px, 6.1m -> 49px). Note this is *not* the same intervention as the
+2026-09-13 experiments below, which deleted small samples outright and made things worse twice --
+re-rendering the same samples at the uniform convention keeps the data and only removes the scale
+skew. Exposed as the per-class `uniform_crop_bucket` flag (default off, current behaviour
+preserved) rather than changed silently, so it can be A/B'd against an otherwise identical run
+instead of being confounded with the labeling fixes. Note that simply lowering the small bucket's
+GSD does not fix this: a 40m crop at 0.125 is a 320px image, and ultralytics rescales it to
+`imgsz` anyway, reintroducing the same 2x. Only one uniform crop extent at one GSD avoids it.
+
+**Open concern: crops are built from upsampled imagery.** `SAMPLE_FETCH_ZOOM` z18 is 0.177 m/px,
+LANCZOS-*up*scaled x1.42 to reach the 0.125 target -- an 80m crop is 452 real pixels stretched to
+640. Fetching at z19 (0.0886 m/px) and downscaling would put 903 real pixels behind the same 640,
+and matches or beats the sharpness of the z17-z19 tiles inference actually runs on. Exposed as the
+per-class `sample_fetch_zoom` override (default 18, unchanged) for the same A/B reason; raising it
+roughly quadruples tile fetches for a class, though `fetch_and_crop_bbox`'s on-disk cache absorbs
+most of that on a re-run.
+
 **Small-sample removal made Antwerp false positives *worse*, twice, in both directions tried
 (2026-09-13)**: motivated by a real regression after adding 53 new fan-unit samples (`fan_unit_obb
 _v18` -> `v19`, Antwerp went from 3 false-positive tiles to 7-42 depending on exactly which crop
@@ -279,35 +302,84 @@ data-quality problem.
 
 ### generate_obb_package
 
-Rebuilds `dataset_obb/images|labels/{train,val}` from scratch -- same round-robin split convention
-and re-run-safe design as `reconcile.generate_package`. Every piece (bend splits and length
-sub-splits) becomes its own separate cropped image, not one shared image with N boxes -- real extra
-training-image count from data already labeled. Split is decided per original sample *before*
-splitting into pieces, so pieces of one fence always land together (otherwise adjacent pieces
-sharing near-identical background would leak across train/val and inflate val metrics).
+Rebuilds `dataset_obb/images|labels/{train,val}` from scratch -- same re-run-safe design as
+`reconcile.generate_package`. Every piece (bend splits and length sub-splits) becomes its own
+separate cropped image, not one shared image with N boxes -- real extra training-image count from
+data already labeled. Split is decided per original sample *before* splitting into pieces, so
+pieces of one fence always land together (otherwise adjacent pieces sharing near-identical
+background would leak across train/val and inflate val metrics).
 
 `val_ids`: explicit id set for val (used by `train_obb_kfold.py` to materialize each fold); `None`
-keeps the default round-robin (1 in `VAL_FRACTION`).
+falls through to `site_val_ids` (see below).
 
-**The multi-label-per-crop loop** (labeling every rect visible in a crop, not just the piece's own)
-exists because `PIECE_CROP_MARGIN`'s context margin routinely pulls a *neighboring* piece's real,
-unlabeled ribbon into frame (confirmed on `8382b49f6b71`: piece 0/1 crops overlapped 235x200px) --
-without it the model sees real fence texture with no box on it, teaching it that texture is
-background.
+**Multi-label per crop: every real instance visible in a crop gets a box (reinstated 2026-09-14).**
+A crop is labeled with its anchor sample's rect(s) *plus* every other same-class sample whose
+polygon projects into the same window (`_neighbor_pixel_rects` -> `_window_label_lines`). Two
+independent reasons: `PIECE_CROP_MARGIN`'s context margin routinely pulls a *neighboring piece* of
+the same sample into frame (confirmed on `8382b49f6b71`: piece 0/1 crops overlapped 235x200px);
+and for a `normalize_sample_crop` class, the fixed 80m frame very often contains other,
+independently labeled samples, because these objects come in banks. Without the loop, YOLO drives
+objectness to zero on every prediction that has no matching GT box, so each crop actively teaches
+that real, visible instances of the class are background.
 
-**The single-piece branch had the same theoretical problem, tried and reverted 2026-09-04**: for a
-`normalize_sample_crop` class, the fixed 80m frame often contains *other, independently labeled*
-samples (objects like fan-unit come in banks -- every one of fan-unit's 116 samples had another
-within 40m, 519 such pairs, every training image had exactly one labeled box despite showing 2+ real
-fans). Fixed the same way as the multi-piece loop (re-run `polygon_to_obb_corners` for every other
-same-class same-split sample projecting into the crop, add each as an extra label). **Backfired
-hard**: `fan_unit_obb_v3` (single box/crop) scored 0.994/1.00/0.995/0.846
-(precision/recall/mAP50/mAP50-95); the multi-label `v4` on the same 116 samples collapsed precision
-to 0.218 (recall held at 0.917 -- over-predicting, not under-predicting). Some of that was a
-separate real bug (16 images got a degenerate near-zero-area box from a neighbor's rect grazing the
-crop edge), but the regression was too large to just patch -- reverted to single-box-per-crop,
-matching how these samples were always hand-labeled. Worth retrying later with the degenerate clip
-filtered and more real samples, not assumed correct until actually re-confirmed.
+Measured on `fan-unit` at 255 samples (2026-09-14) before the fix: **1245 fully-contained
+other-sample instances sat unlabeled across the 255 crops, 95% of crops had at least one**, worst
+case 16 in a single image. After the fix the same 255 samples yield **1617 boxes (1362 of them
+recovered neighbours)** -- a 6.3x increase in supervision from data already on disk, no new
+labeling. This is the direct answer to "why does adding another positive sample make things worse":
+in a dense area each new sample added one box and roughly five fresh false-background assertions on
+real fans, so the marginal sample had negative expected value.
+
+**Why the first attempt (2026-09-04, `fan_unit_obb_v4`) looked like a failure and was reverted.**
+That version added neighbour labels only for *same-split* samples. Under the old `i % VAL_FRACTION`
+round-robin, a val image's neighbours were almost all in train, so val images stayed
+single-labeled while the model became a genuine multi-instance detector -- every correct extra
+detection scored as a false positive. `v4`'s precision 0.218 (recall held at 0.917, i.e.
+over-predicting) was the metric breaking, not the model. The lesson generalizes: **a one-box-per-crop
+val set rewards a model that only fires on the centred object**, which is exactly what `v25`-`v29`
+scoring precision 0.976-1.000 / recall 1.000 / mAP50 0.99 (k-fold 0.992 +/- 0.009) while swinging
+between 3 and 56 hit tiles on the held-out Antwerp scan were doing. Near-perfect val precision on
+this pipeline is evidence of the pathology, not of quality. Reinstating the loop therefore *required*
+site-based splitting first, plus the degenerate-box filter that was the known-unfixed half of v4's
+regression (16 of its images got a near-zero-area box from a neighbour's rect grazing the crop edge;
+`MIN_LABEL_SIDE_PX` and `MIN_NEIGHBOR_VISIBLE_FRACTION` now drop those -- verified 0 degenerate and
+0 out-of-`[0,1]` boxes across all 1617).
+
+### Site-based train/val split (`cluster_sites` / `site_val_ids`, 2026-09-14)
+
+Replaces the `i % VAL_FRACTION` round-robin. `samples.jsonl` is in creation order and labeling runs
+site by site, so the round-robin put neighbouring objects -- often inside each other's 80m crop
+window -- on opposite sides of the split. Measured on `fan-unit`: **50 of 51 val samples had a train
+sample within 80m**, median nearest-train distance 10m. Val was scoring memorization of specific
+pixels.
+
+`cluster_sites` is single-linkage union-find over sample centroids at `SITE_LINK_M` (200m, chosen
+as a safe margin over the 80m crop window so two samples in different clusters can never share
+pixels). `site_val_ids` assigns each whole cluster to val when the md5 of its `site_key` --- its
+centroid snapped to a `SITE_KEY_GRID_DEG` (0.01 deg, ~1km) grid --- is divisible by `VAL_FRACTION`.
+
+**The key is geographic, not membership-based, and that matters (fixed 2026-09-14, same day it was
+introduced).** The first version hashed each cluster's sorted member ids and accumulated clusters
+until it hit a `len(samples)/VAL_FRACTION` target. That is deterministic across runs but *not stable
+under adding samples*: a new sample changes its cluster's id string, which changes that cluster's
+hash, which reorders every cluster, which reshuffles the whole split. Observed immediately --- adding
+65 reviewed samples moved 62 of them, plus much of the pre-existing set, across the train/val line,
+so val metrics from before and after were measuring different data and could not be compared. That
+is the exact failure mode site-based splitting exists to prevent, just at a slower cadence. Hashing
+a *location* instead means adding samples to a known site never moves that site, and a brand-new
+site is assigned independently of every other. The cost is that the val fraction is no longer exactly
+1/`VAL_FRACTION` --- it lands near it in expectation and drifts with site sizes, so print the actual
+counts rather than assuming.
+
+Because whole sites move together, every neighbour inside a crop is guaranteed to be in the same
+split as its anchor -- which is what makes the multi-label loop above safe to enable without
+leaking.
+
+Hard negatives are routed by the same split (`_hard_negative_split`): a negative follows the split
+of its nearest positive sample within `HARD_NEGATIVE_SITE_RADIUS_M` (1km), else falls back to a
+deterministic md5 of its own id. Previously every hard negative went to train, so **val contained
+no background images at all and could not measure the false-positive rate** -- the one thing the
+Antwerp probe kept flagging. `fan-unit` now puts 61 in train and 13 in val.
 
 `embedder` built lazily if not passed (avoids loading DINOv2 twice when a caller already has one).
 
@@ -427,6 +499,14 @@ which `"data"` (meant for untrusted archives) rejects. Safe here specifically be
 self-produced by `upload_package` in this same file, never from an untrusted source.
 
 ## train_obb.py / train_obb_kfold.py
+
+**Folds are built from whole sites, not random sample ids (2026-09-14).** `make_folds` bin-packs
+`obb.cluster_sites` output largest-site-first into the emptiest fold, so no site is ever split
+across folds. The previous `random.shuffle` + stride-slice put objects that sit inside each other's
+crop window into different folds, which is the same leakage `site_val_ids` was introduced to fix --
+and k-fold is specifically the tool reached for when a number has to be trustworthy enough to act
+on, so it was the worst place to leave it. Deterministic without a shuffle: sites are ordered by
+(size desc, md5 of seed + member ids).
 
 Trains an OBB model on a class's `dataset_obb/`, deliberately separate from `train.py` (seg) since
 it's a different task/label format. Defaults to `yolo11n-obb.pt` (Ultralytics' DOTAv1

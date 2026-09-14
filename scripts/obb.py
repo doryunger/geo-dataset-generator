@@ -5,6 +5,8 @@ Usage:
     python scripts/obb.py --class fence
 """
 import argparse
+import hashlib
+import json
 import logging
 import math
 import shutil
@@ -90,14 +92,135 @@ SAMPLE_FETCH_ZOOM = 18
 
 SMALL_SAMPLE_THRESHOLD_M = 6.0
 SMALL_SAMPLE_CROP_M = 40.0
-SMALL_SAMPLE_FETCH_ZOOM = 19
 SMALL_SAMPLE_TARGET_GSD_M = common.TARGET_GSD_M / 2
 
+DEFAULT_UNIFORM_CROP_BUCKET = False
 
-def _crop_bucket(obj_extent_m: float) -> tuple[float, int, float]:
-    if obj_extent_m < SMALL_SAMPLE_THRESHOLD_M:
-        return SMALL_SAMPLE_CROP_M, SMALL_SAMPLE_FETCH_ZOOM, SMALL_SAMPLE_TARGET_GSD_M
-    return SAMPLE_CROP_M, SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
+SITE_LINK_M = 200.0
+MIN_NEIGHBOR_VISIBLE_FRACTION = 0.35
+MIN_LABEL_SIDE_PX = 6.0
+
+
+def _crop_bucket(
+    obj_extent_m: float, uniform_bucket: bool = DEFAULT_UNIFORM_CROP_BUCKET,
+    fetch_zoom: int = SAMPLE_FETCH_ZOOM,
+) -> tuple[float, int, float]:
+    if not uniform_bucket and obj_extent_m < SMALL_SAMPLE_THRESHOLD_M:
+        return SMALL_SAMPLE_CROP_M, fetch_zoom + 1, SMALL_SAMPLE_TARGET_GSD_M
+    return SAMPLE_CROP_M, fetch_zoom, common.TARGET_GSD_M
+
+
+def _distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat = (a[1] + b[1]) / 2
+    return math.hypot((a[0] - b[0]) * 111_320 * math.cos(math.radians(lat)), (a[1] - b[1]) * 111_320)
+
+
+def cluster_sites(samples: list[dict], link_m: float = SITE_LINK_M) -> list[list[str]]:
+    n = len(samples)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+
+    centroids = [_polygon_centroid(r["polygon"]) for r in samples]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _distance_m(centroids[i], centroids[j]) <= link_m:
+                union(i, j)
+
+    groups: dict[int, list[str]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(samples[i]["id"])
+    return list(groups.values())
+
+
+SITE_KEY_GRID_DEG = 0.01
+
+
+def site_key(centroid: tuple[float, float]) -> str:
+    lon = round(centroid[0] / SITE_KEY_GRID_DEG)
+    lat = round(centroid[1] / SITE_KEY_GRID_DEG)
+    return f"{lon}:{lat}"
+
+
+def _site_keys(samples: list[dict], link_m: float = SITE_LINK_M) -> list[tuple[str, list[str]]]:
+    by_id = {r["id"]: r for r in samples}
+    out = []
+    for ids in cluster_sites(samples, link_m):
+        centroids = [_polygon_centroid(by_id[i]["polygon"]) for i in ids]
+        centre = (sum(c[0] for c in centroids) / len(centroids), sum(c[1] for c in centroids) / len(centroids))
+        out.append((site_key(centre), ids))
+    return out
+
+
+def choose_val_sites(samples: list[dict], val_fraction: int = VAL_FRACTION, link_m: float = SITE_LINK_M) -> list[str]:
+    sites = _site_keys(samples, link_m)
+    sites.sort(key=lambda kv: hashlib.md5(kv[0].encode()).hexdigest())
+    target = max(1, round(len(samples) / val_fraction))
+    chosen, count = [], 0
+    for key, ids in sites:
+        if count >= target:
+            break
+        if count and count + len(ids) > target * 1.5:
+            continue
+        chosen.append(key)
+        count += len(ids)
+    return sorted(set(chosen))
+
+
+def load_val_sites(class_name: str) -> list[str] | None:
+    path = common.val_sites_path(class_name)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())["sites"]
+
+
+def save_val_sites(class_name: str, keys: list[str]) -> None:
+    path = common.val_sites_path(class_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"grid_deg": SITE_KEY_GRID_DEG, "link_m": SITE_LINK_M, "sites": sorted(keys)}, indent=2))
+
+
+def site_val_ids(
+    samples: list[dict], val_fraction: int = VAL_FRACTION, link_m: float = SITE_LINK_M,
+    class_name: str | None = None,
+) -> set[str]:
+    sites = _site_keys(samples, link_m)
+    keys = load_val_sites(class_name) if class_name else None
+    if keys is None:
+        keys = choose_val_sites(samples, val_fraction, link_m)
+        if class_name:
+            save_val_sites(class_name, keys)
+            logger.info(f"[{class_name}] obb: created held-out site list with {len(keys)} site(s)")
+    held = set(keys)
+    return {i for key, ids in sites for i in ids if key in held}
+
+
+def resolve_val_ids(samples: list[dict], val_ids: set[str] | None, class_name: str | None = None) -> set[str]:
+    return set(val_ids) if val_ids is not None else site_val_ids(samples, class_name=class_name)
+
+
+HARD_NEGATIVE_SITE_RADIUS_M = 1000.0
+
+
+def _hard_negative_split(row: dict, samples: list[dict], val_ids: set[str]) -> str:
+    centroid = _polygon_centroid(row["polygon"])
+    nearest, nearest_m = None, float("inf")
+    for sample in samples:
+        d = _distance_m(centroid, _polygon_centroid(sample["polygon"]))
+        if d < nearest_m:
+            nearest, nearest_m = sample, d
+    if nearest is not None and nearest_m <= HARD_NEGATIVE_SITE_RADIUS_M:
+        return "val" if nearest["id"] in val_ids else "train"
+    return "val" if int(hashlib.md5(row["id"].encode()).hexdigest(), 16) % VAL_FRACTION == 0 else "train"
 
 
 def _polygon_centroid(ring: list[list[float]]) -> tuple[float, float]:
@@ -114,14 +237,14 @@ def _bbox_around(lon: float, lat: float, extent_m: float) -> tuple[float, float,
     return lon - dlon, lat - dlat, lon + dlon, lat + dlat
 
 
-def _normalized_sample_crop(row: dict):
+def _normalized_sample_crop(row: dict, uniform_bucket: bool = DEFAULT_UNIFORM_CROP_BUCKET, fetch_zoom: int = SAMPLE_FETCH_ZOOM):
     lon, lat = _polygon_centroid(row["polygon"])
     lons = [p[0] for p in row["polygon"]]
     lats = [p[1] for p in row["polygon"]]
     mid_lat = (min(lats) + max(lats)) / 2
     width_m = (max(lons) - min(lons)) * 111_320 * math.cos(math.radians(mid_lat))
     height_m = (max(lats) - min(lats)) * 111_320
-    base_crop_m, fetch_zoom, target_gsd_m = _crop_bucket(max(width_m, height_m))
+    base_crop_m, fetch_zoom, target_gsd_m = _crop_bucket(max(width_m, height_m), uniform_bucket, fetch_zoom)
     crop_extent_m = max(base_crop_m, (max(width_m, height_m)) * 1.1)
     west, south, east, north = _bbox_around(lon, lat, crop_extent_m)
     out_path = common.SCRATCH_DIR / "obb_context_crops" / f"{row['id']}.jpg"
@@ -141,12 +264,12 @@ def _grid_positions(length: int, crop: int, n: int) -> list[int]:
 
 
 def hard_negative_crop_bboxes(
-    row: dict, normalize_sample_crop: bool,
+    row: dict, normalize_sample_crop: bool, fetch_zoom: int = SAMPLE_FETCH_ZOOM,
 ) -> tuple[list[tuple[float, float, float, float]], int, float]:
     if not normalize_sample_crop:
-        return [(row["west"], row["south"], row["east"], row["north"])], SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
+        return [(row["west"], row["south"], row["east"], row["north"])], fetch_zoom, common.TARGET_GSD_M
 
-    crop_m, fetch_zoom, target_gsd_m = SAMPLE_CROP_M, SAMPLE_FETCH_ZOOM, common.TARGET_GSD_M
+    crop_m, target_gsd_m = SAMPLE_CROP_M, common.TARGET_GSD_M
     mid_lat = (row["north"] + row["south"]) / 2
     width_m = (row["east"] - row["west"]) * 111_320 * math.cos(math.radians(mid_lat))
     height_m = (row["north"] - row["south"]) * 111_320
@@ -168,11 +291,14 @@ def hard_negative_crop_bboxes(
     return bboxes, fetch_zoom, target_gsd_m
 
 
-def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool) -> int:
-    bboxes, fetch_zoom, target_gsd_m = hard_negative_crop_bboxes(row, normalize_sample_crop)
+def _hard_negative_crop(
+    output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool, split: str = "train",
+    fetch_zoom_override: int = SAMPLE_FETCH_ZOOM,
+) -> int:
+    bboxes, fetch_zoom, target_gsd_m = hard_negative_crop_bboxes(row, normalize_sample_crop, fetch_zoom_override)
     for i, (west, south, east, north) in enumerate(bboxes):
         piece_name = name_prefix if len(bboxes) == 1 else f"{name_prefix}_p{i}"
-        out_path = output_dir / "images" / "train" / f"{piece_name}.jpg"
+        out_path = output_dir / "images" / split / f"{piece_name}.jpg"
         common.fetch_and_crop_bbox(
             fetch_zoom, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT, out_path,
         )
@@ -180,7 +306,7 @@ def _hard_negative_crop(output_dir: Path, name_prefix: str, row: dict, normalize
         with Image.open(out_path) as img:
             resampled = common.resample_to_target_gsd(img.convert("RGB"), native_gsd_m, target_gsd_m)
             resampled.save(out_path, format="JPEG")
-        (output_dir / "labels" / "train" / f"{piece_name}.txt").write_text("")
+        (output_dir / "labels" / split / f"{piece_name}.txt").write_text("")
     return len(bboxes)
 
 
@@ -263,10 +389,6 @@ def polygon_to_obb_corners(
     image: Image.Image | None = None, gsd_m_per_px: float | None = None, embedder=None,
     min_piece_m: float = DEFAULT_MIN_PIECE_M, max_piece_m: float = DEFAULT_MAX_PIECE_M,
 ) -> list[list[tuple[float, float]]]:
-    """Rotated rectangles tightly bounding the ribbon polygon: BEND_PIECES corner cuts first, then
-    real-world-length sub-cuts (only if image/gsd_m_per_px/embedder are all given). min/max_piece_m
-    default to the module-wide defaults but are meant to be overridden per class -- see
-    subclass_graph.node_config()."""
     poly = ShapelyPolygon(pixel_ring)
     if not poly.is_valid:
         poly = poly.buffer(0)
@@ -312,6 +434,45 @@ def _crop_piece(img: Image.Image, rect: list[tuple[float, float]]) -> tuple[Imag
     return img.crop((left, top, right, bottom)), left, top
 
 
+def _rect_min_side(rect: list[tuple[float, float]]) -> float:
+    return min(math.dist(rect[i], rect[(i + 1) % len(rect)]) for i in range(len(rect)))
+
+
+def _neighbor_pixel_rects(
+    rows: list[dict], anchor_id: str, west: float, south: float, east: float, north: float,
+    w: float, h: float,
+) -> list[list[tuple[float, float]]]:
+    window = ShapelyPolygon([(west, south), (east, south), (east, north), (west, north)])
+    rects = []
+    for other in rows:
+        if other["id"] == anchor_id:
+            continue
+        poly = ShapelyPolygon(other["polygon"])
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty or poly.area <= 0 or not window.intersects(poly):
+            continue
+        if window.intersection(poly).area / poly.area < MIN_NEIGHBOR_VISIBLE_FRACTION:
+            continue
+        normalized_ring = common.polygon_to_normalized(other["polygon"], west, south, east, north)
+        pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
+        rects.extend(polygon_to_obb_corners(pixel_ring, BEND_PIECES.get(other["id"], 1)))
+    return rects
+
+
+def _window_label_lines(
+    rects: list[list[tuple[float, float]]], left: float, top: float, right: float, bottom: float,
+) -> list[str]:
+    width, height = right - left, bottom - top
+    lines = []
+    for rect in rects:
+        clipped = _clip_rect_to_window(rect, left, top, right, bottom)
+        if clipped is None or _rect_min_side(clipped) < MIN_LABEL_SIDE_PX:
+            continue
+        lines.append("0 " + " ".join(f"{(x - left) / width:.6f} {(y - top) / height:.6f}" for x, y in clipped))
+    return lines
+
+
 def _clip_rect_to_window(
     rect: list[tuple[float, float]], left: float, top: float, right: float, bottom: float,
 ) -> list[tuple[float, float]] | None:
@@ -339,10 +500,6 @@ def ensure_obb_data_yaml(class_name: str):
 def _generate_pieces_for_class(
     class_name: str, output_dir, embedder, val_ids: set[str] | None = None, on_progress=None,
 ) -> dict:
-    """Writes dataset_obb-shaped images/labels/{train,val} under output_dir from class_name's own
-    samples.jsonl -- the part of dataset generation that's identical whether the output is a
-    class's own permanent dataset_obb/ (generate_obb_package) or a temporary combined dataset
-    pooling several classes together (generate_combined_obb_dataset)."""
     samples = common.load_samples(class_name)
     if not samples:
         raise ValueError(f"'{class_name}' has no samples yet")
@@ -351,15 +508,17 @@ def _generate_pieces_for_class(
     min_piece_m = node_cfg.get("min_piece_m", DEFAULT_MIN_PIECE_M)
     max_piece_m = node_cfg.get("max_piece_m", DEFAULT_MAX_PIECE_M)
     normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
+    uniform_bucket = node_cfg.get("uniform_crop_bucket", DEFAULT_UNIFORM_CROP_BUCKET)
+    sample_fetch_zoom = node_cfg.get("sample_fetch_zoom", SAMPLE_FETCH_ZOOM)
+    val_ids = resolve_val_ids(samples, val_ids, class_name)
 
-    counts = {"train": 0, "val": 0}
+    counts = {"train": 0, "val": 0, "boxes": 0, "neighbor_boxes": 0}
     for i, row in enumerate(samples):
         src = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
         if src is None:
             logger.warning(f"[{class_name}] obb: sample {row['id']} has no crop image on disk, skipping")
             continue
-        split = (row["id"] in val_ids) if val_ids is not None else (i % VAL_FRACTION == 0)
-        split = "val" if split else "train"
+        split = "val" if row["id"] in val_ids else "train"
 
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']})...")
         if on_progress:
@@ -368,7 +527,9 @@ def _generate_pieces_for_class(
         fetch_zoom = row["zoom"]
         target_gsd_m = common.TARGET_GSD_M
         if normalize_sample_crop:
-            img, west, south, east, north, fetch_zoom, target_gsd_m = _normalized_sample_crop(row)
+            img, west, south, east, north, fetch_zoom, target_gsd_m = _normalized_sample_crop(
+                row, uniform_bucket, sample_fetch_zoom,
+            )
         else:
             img = Image.open(src)
         native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
@@ -383,17 +544,21 @@ def _generate_pieces_for_class(
         )
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
 
+        neighbor_rects = _neighbor_pixel_rects(samples, row["id"], west, south, east, north, w, h)
+
         if len(rects) == 1:
-            clipped = _clip_rect_to_window(rects[0], 0, 0, w, h)
-            if clipped is None:
+            own_lines = _window_label_lines(rects, 0, 0, w, h)
+            if not own_lines:
                 logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
                 continue
+            neighbor_lines = _window_label_lines(neighbor_rects, 0, 0, w, h)
             dst = output_dir / "images" / split / f"{row['id']}{src.suffix}"
             img.convert("RGB").save(dst)
-            line = "0 " + " ".join(f"{x/w:.6f} {y/h:.6f}" for x, y in clipped)
             lbl_path = output_dir / "labels" / split / f"{row['id']}.txt"
-            lbl_path.write_text(line + "\n")
+            lbl_path.write_text("\n".join(own_lines + neighbor_lines) + "\n")
             counts[split] += 1
+            counts["boxes"] += len(own_lines) + len(neighbor_lines)
+            counts["neighbor_boxes"] += len(neighbor_lines)
         else:
             for idx, rect in enumerate(rects):
                 piece_img, left, top = _crop_piece(img, rect)
@@ -401,17 +566,13 @@ def _generate_pieces_for_class(
                 dst = output_dir / "images" / split / f"{row['id']}_p{idx}{src.suffix}"
                 piece_img.convert("RGB").save(dst)
 
-                lines = []
-                for other_rect in rects:
-                    clipped = _clip_rect_to_window(other_rect, left, top, left + pw, top + ph)
-                    if clipped is None:
-                        continue
-                    local_rect = [((x - left) / pw, (y - top) / ph) for x, y in clipped]
-                    lines.append("0 " + " ".join(f"{x:.6f} {y:.6f}" for x, y in local_rect))
-
+                own_lines = _window_label_lines(rects, left, top, left + pw, top + ph)
+                neighbor_lines = _window_label_lines(neighbor_rects, left, top, left + pw, top + ph)
                 lbl_path = output_dir / "labels" / split / f"{row['id']}_p{idx}.txt"
-                lbl_path.write_text("\n".join(lines) + "\n")
+                lbl_path.write_text("\n".join(own_lines + neighbor_lines) + "\n")
                 counts[split] += 1
+                counts["boxes"] += len(own_lines) + len(neighbor_lines)
+                counts["neighbor_boxes"] += len(neighbor_lines)
     return counts
 
 
@@ -419,8 +580,6 @@ def generate_obb_package(
     class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
     on_progress=None,
 ) -> dict:
-    """Rebuilds dataset_obb/images|labels/{train,val} from samples.jsonl. Split is decided per
-    original sample, not per piece, so pieces of one fence always land together."""
     if embedder is None:
         from embedder import Embedder
         embedder = Embedder()
@@ -437,16 +596,26 @@ def generate_obb_package(
                 shutil.rmtree(d)
             d.mkdir(parents=True, exist_ok=True)
 
-    counts = _generate_pieces_for_class(class_name, output_dir, embedder, val_ids=val_ids, on_progress=on_progress)
+    samples = common.load_samples(class_name)
+    resolved_val_ids = resolve_val_ids(samples, val_ids, class_name) if samples else set()
+    counts = _generate_pieces_for_class(
+        class_name, output_dir, embedder, val_ids=resolved_val_ids, on_progress=on_progress,
+    )
+    counts["sites"] = len(cluster_sites(samples)) if samples else 0
 
     if include_hard_negatives:
         node_cfg = subclass_graph.node_config(class_name)
         normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
+        sample_fetch_zoom = node_cfg.get("sample_fetch_zoom", SAMPLE_FETCH_ZOOM)
         for row in _hard_negative_rows(class_name):
             if not row.get("enabled", True):
                 continue
-            n = _hard_negative_crop(output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop)
-            counts["negatives"] = counts.get("negatives", 0) + n
+            hn_split = _hard_negative_split(row, samples, resolved_val_ids)
+            n = _hard_negative_crop(
+                output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop, hn_split, sample_fetch_zoom,
+            )
+            key = "negatives" if hn_split == "train" else "val_negatives"
+            counts[key] = counts.get(key, 0) + n
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)
@@ -454,12 +623,6 @@ def generate_obb_package(
 
 
 def generate_combined_obb_dataset(output_dir, class_names: list[str], embedder=None, on_progress=None) -> dict:
-    """Pools several classes' samples into one dataset_obb-shaped directory at output_dir (not
-    tied to any single class's permanent classes/<name>/dataset_obb/) -- for training a parent
-    together with its sub-classes' samples without ever touching either class's own independent
-    dataset. Each source class keeps its own train/val split (same per-class modulo logic as
-    generate_obb_package), so combining doesn't skew the split by class size. output_dir is the
-    caller's responsibility to create and clean up."""
     if embedder is None:
         from embedder import Embedder
         embedder = Embedder()
@@ -505,7 +668,12 @@ def main():
     result = generate_obb_package(args.class_name, args.hard_negatives)
     print(
         f"OBB package: {result['train']} train (+{result.get('negatives', 0)} hard negatives), "
-        f"{result['val']} val -> {common.obb_dataset_dir(args.class_name)}"
+        f"{result['val']} val (+{result.get('val_negatives', 0)} hard negatives) across "
+        f"{result.get('sites', 0)} site(s) -> {common.obb_dataset_dir(args.class_name)}"
+    )
+    print(
+        f"Labeled boxes: {result.get('boxes', 0)} total, of which "
+        f"{result.get('neighbor_boxes', 0)} are neighbouring instances visible in another sample's crop"
     )
     changes = result["changes_since_last_generation"]
     if changes:
