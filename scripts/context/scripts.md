@@ -7,6 +7,22 @@ CLI wrappers, each source file under its own `##`.
 
 ## common.py -- shared helpers
 
+### `WORKSPACE` -- production vs. experiments (2026-09-14)
+
+`WORKSPACE=<subdir>` in the environment scopes `CLASSES_DIR`, `EMBEDDINGS_DIR`, `SCRATCH_DIR`
+and (in `s3_sync`) the S3 `packages/` prefix under `<subdir>/`; unset means the repo root and
+plain `packages/`, i.e. production exactly as before. `MODELS_DIR` and `tiles/` stay shared --
+pretrained bases live in `models/` and model files are named by class so nothing collides, and
+the tile cache is pure cache. Added when `fan-unit` became the production class so experimental
+classes can be worked on without appearing in production's `/manual`, being pulled onto a
+production machine by `pull_classes.py`, or polluting the shared embedding index.
+`run-experiments.{ps1,bat,sh}` start the same app with `WORKSPACE=experiments` on port 8001,
+without killing the production instance on 8000 (`restart.ps1` kills every uvicorn by name, so
+it is production-only). `distillation-column` is the first tenant: copied from
+`archive/classes/` into `experiments/classes/` with its 258 embedding-index entries extracted
+into `experiments/embeddings/`, stale `dataset_obb/` dropped so it regenerates under the fixed
+pipeline. The `archive/` copy is untouched.
+
 Global tile/embedding cache, per-class paths, tile math, jsonl/registry IO, Mapbox tile
 fetch+cache.
 

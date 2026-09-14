@@ -14,10 +14,10 @@ import requests
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-CLASSES_DIR = ROOT / "classes"
-MODELS_DIR = ROOT / "models"  # both pretrained/base checkpoints and this project's own trained
-# output live here together -- one directory, matching convention on other machines this repo
-# runs on (previously split into a separate weights/ for bases only; consolidated 2026-09-03).
+WORKSPACE = os.environ.get("WORKSPACE", "").strip().strip("/\\")
+WORKSPACE_ROOT = ROOT / WORKSPACE if WORKSPACE else ROOT
+CLASSES_DIR = WORKSPACE_ROOT / "classes"
+MODELS_DIR = ROOT / "models"
 LOGS_DIR = ROOT / "logs"
 
 _logging_configured = False
@@ -54,11 +54,11 @@ def setup_logging() -> None:
 TILES_DIR = ROOT / "tiles"
 TILE_IMAGES_DIR = TILES_DIR / "images"
 TILE_MANIFEST_PATH = TILES_DIR / "manifest.jsonl"
-EMBEDDINGS_DIR = ROOT / "embeddings"
+EMBEDDINGS_DIR = WORKSPACE_ROOT / "embeddings"
 INDEX_PATH = EMBEDDINGS_DIR / "index.npy"
 INDEX_IDS_PATH = EMBEDDINGS_DIR / "index_ids.json"
 EMBED_DIM = 384
-SCRATCH_DIR = ROOT / ".scratch"
+SCRATCH_DIR = WORKSPACE_ROOT / ".scratch"
 
 MAPBOX_ACCESS_TOKEN_ENV = "MAPBOX_ACCESS_TOKEN"
 DEFAULT_TILESET = "mapbox.satellite"

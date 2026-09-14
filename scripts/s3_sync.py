@@ -15,6 +15,7 @@ import common
 logger = logging.getLogger(__name__)
 
 _BUCKET = os.environ.get("S3_BUCKET_NAME")
+_PACKAGES_ROOT = f"{common.WORKSPACE}/packages/" if common.WORKSPACE else "packages/"
 
 
 def _client():
@@ -22,7 +23,7 @@ def _client():
 
 
 def _package_prefix(class_name: str) -> str:
-    return f"packages/{class_name}/"
+    return f"{_PACKAGES_ROOT}{class_name}/"
 
 
 def s3_configured() -> bool:
@@ -62,12 +63,12 @@ def list_remote_classes() -> list[str]:
         return []
     class_names = set()
     paginator = _client().get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=_BUCKET, Prefix="packages/"):
+    for page in paginator.paginate(Bucket=_BUCKET, Prefix=_PACKAGES_ROOT):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if not key.endswith(".tar.gz"):
                 continue
-            class_names.add(key.removeprefix("packages/").rsplit("/", 1)[0])
+            class_names.add(key.removeprefix(_PACKAGES_ROOT).rsplit("/", 1)[0])
     return sorted(class_names)
 
 

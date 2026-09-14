@@ -5,6 +5,7 @@ embeddings/
 models/
 classes/
 archive/
+experiments/
 .scratch/
 
 # oil_refinery experiments — probe/benchmark outputs, raw downloaded datasets, and the
