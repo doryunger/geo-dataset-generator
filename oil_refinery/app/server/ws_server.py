@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import classifier  # noqa: E402
+import model_router  # noqa: E402
 import common  # noqa: E402
 import geometry  # noqa: E402
 import site_graph  # noqa: E402
@@ -145,6 +146,11 @@ def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict
     return {"type": "FeatureCollection", "features": features}
 
 
+def _any_site_identified(detections_by_tile: dict[tuple[int, int, int], list[dict]]) -> bool:
+    ref_lat = _ref_lat(detections_by_tile)
+    return bool(classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH))
+
+
 def _center_out_order(keys: set[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
     cx = sum(k[1] for k in keys) / len(keys)
     cy = sum(k[2] for k in keys) / len(keys)
@@ -162,15 +168,27 @@ async def classify_extent(
             "classify_extent: waiting on %d tile(s): %s",
             len(current_keys), [common.tile_id(z, x, y) for z, x, y in current_keys],
         )
-    results = await asyncio.gather(
-        *(tile_server.get_or_process_detections(z, x, y) for z, x, y in current_keys)
-    )
+    futures = [tile_server.get_or_process_detections(z, x, y) for z, x, y in current_keys]
+    detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}
+    awaited = 0
+    for key, future in zip(current_keys, futures):
+        dets = await future
+        awaited += 1
+        if not dets:
+            continue
+        detections_by_tile[key] = dets
+        if model_router.EARLY_EXIT and _any_site_identified(detections_by_tile):
+            await tile_server.prune_pending()
+            logger.info(
+                "classify_extent: site identified after %d/%d tile(s) in %.0fms -- remaining background tiles pruned",
+                awaited, len(current_keys), (time.monotonic() - t0) * 1000,
+            )
+            break
     if current_keys:
         logger.info(
-            "classify_extent: gather done, %d tile(s) in %.0fms",
-            len(current_keys), (time.monotonic() - t0) * 1000,
+            "classify_extent: awaited %d/%d tile(s) in %.0fms",
+            awaited, len(current_keys), (time.monotonic() - t0) * 1000,
         )
-    detections_by_tile = {key: dets for key, dets in zip(current_keys, results) if dets}
 
     for z, x, y in historical_tiles:
         cached = tile_server.get_cached_only(z, x, y)

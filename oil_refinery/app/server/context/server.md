@@ -139,6 +139,62 @@ an exact lookup against the graph's "storage tank" node would silently drop it r
 confidence. **Confirmed live**: a solo DIOR "storagetank" at 0.879 confidence, well above its
 component's 0.75 floor, was being dropped this way before this fix.
 
+### Inference speed: per-model GSD, gating, OpenVINO, early exit (2026-09-14)
+
+Measured on the 8-core AMD box this runs on, CPU inference, one z17 tile through all three models:
+**1,650 ms before, 655 ms on a refinery tile and ~270 ms on an empty tile after**, with identical
+detections on the Brunsbüttel check batch (6 fan-units, 20 vs 19 storage tanks, 2 chimneys). Four
+independent changes, each in `config.json`:
+
+**`model_gsd_m` -- each model gets its own resample target; unlisted means native tile pixels.**
+The old design upscaled every z17 tile 2.83x to `TARGET_GSD_M` for every model, i.e. 12x the
+pixels of the 512 px tile with no new information in them -- that upscale *was* the cost
+(365/923/361 ms per model at 1,792 px vs 41/82/41 at 512). DOTA's `yolo11n-obb` detects storage
+tanks identically at native z17 (0.354 m/px), so it gets no entry. DIOR is **not** fine at native:
+it loses chimneys entirely below ~0.177 m/px (nothing at native/0.30/0.25/0.20, chimney at 0.66
+at 0.177, 0.82 at 0.125; storage tanks unaffected at every setting), so it sits at 0.177 -- z18's
+native resolution, 141 ms instead of 261 at 0.125. Calibrated on one site; if chimneys start going
+missing elsewhere, this is the number to lower. `fan-unit` stays at 0.125 because that is what it
+was trained at. `_source_for_gsd` memoises the resample per (tile, gsd) so models sharing a GSD
+share the image. The `MAX_PREDICT_IMGSZ` guard now checks the *finest* configured GSD.
+
+**`gated_models` -- run the expensive model only where the cheap ones found something.**
+Two phases: every non-gated model runs on the whole batch first; gated models then run only if the
+batch has evidence, where evidence is any graph-relevant detection in any tile of the batch *or*
+in any already-cached neighbour of any tile in the batch. Batch-level rather than per-tile on
+purpose: the first cut gated per tile and a fan bank whose tanks sat one tile over lost every fan
+(Brunsbüttel tile 1 went from 6 fans to none). Batches are spatially local (viewport, centre-out)
+so batch evidence is a reasonable proxy for "industrial area." **Accepted trade-off: a fan-only
+area with no tank or chimney anywhere in the batch or its processed neighbours gets no fan
+detections** (the Antwerp/Berendrecht probe tiles are exactly this -- the pretrained models see
+nothing there, so fans that the old path found at 0.82-0.87 are now not run for). For site
+identification this costs nothing, since the graph needs two component types and such an area
+could never be classified anyway; it only affects the overlay. The per-tile log line records
+`gate open/closed`.
+
+**`inference_backend: "openvino"` -- ~2x on every model, zero accuracy change.** Benchmarked
+PyTorch vs ONNX Runtime vs OpenVINO: ONNX Runtime was no faster than PyTorch on this CPU
+(49/132/367 ms vs 58/118/368); OpenVINO was 27/78/187 static, 248 ms dynamic at 1,792 for
+fan-unit. **Exports are dynamic-shape (`dynamic=True`) and this is load-bearing**: the resampled
+tile size varies with latitude (1,767 px at 53°N, ~2,030 at 45°N), and a static export does not
+letterbox a mismatched input -- it raises inside the OpenVINO backend and kills the tile. Dynamic
+costs ~25% vs static at the export size and is still 1.5x faster than PyTorch. `_load_model`
+looks for `models/<stem>_openvino_model/` next to the `.pt` and exports on first start if it is
+missing (a few seconds per model), so nothing needs to be committed -- `models/` is gitignored
+either way. Ignored on CUDA, where the PyTorch path with fp16 is kept. Needs `openvino` and
+`onnx` from `requirements.txt`.
+
+**`early_exit` -- stop scanning an extent once a site is identified.** `ws_server.classify_extent`
+used to `gather` every tile of the extent and classify once at the end. It now awaits tiles in
+the existing centre-out order and re-runs the classifier as each tile with detections lands
+(`_any_site_identified`); the first time any site is identified it calls
+`tile_server.prune_pending()` and stops awaiting. Verified on the Brunsbüttel batch: identified
+after 2 of 4 tiles (fans in the first, tanks + chimney in the second). `prune_pending` only drops
+non-interactive jobs, so tiles the viewport is actually displaying still get processed and the
+overlay keeps filling in -- only the background extent scan stops. All queued jobs were already
+enqueued when the futures were created, so awaiting sequentially loses no throughput; it only
+changes when the result is looked at.
+
 ### `_padded_tile()` / `HALO_M` -- overlapping tiles (2026-09-14)
 
 Each tile is detected on with a halo of `HALO_M` (20 m) of neighbouring imagery composited around
@@ -374,6 +430,11 @@ sample-review green, which would blend into refinery scenes' own green/gray/beig
 ## Detection pipeline: model_router, classifier, fuser, geometry
 
 ### model_router.py
+
+`config.json` also carries `model_gsd_m` (per-model resample target, metres per pixel; absent =
+native tile pixels), `gated_models` (run only when the batch has evidence), `inference_backend`
+(`openvino` or `pytorch`) and `early_exit` -- see the inference-speed section under
+`tile_server.py` for what each does and the measurements behind them.
 
 Decides which models run against an incoming tile â€” never which classes within a model to look
 for. Every triggered model runs unfiltered, returning whatever classes it detects; nothing here or

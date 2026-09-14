@@ -256,6 +256,86 @@ def _padded_tile(job: Job, halo_px: int) -> tuple[Image.Image, int, int]:
     return composite.crop((w - halo_px, h - halo_px, 2 * w + halo_px, 2 * h + halo_px)), w, h
 
 
+def _source_for_gsd(p: dict, gsd_m: float | None) -> dict:
+    cached = p["sources"].get(gsd_m)
+    if cached is not None:
+        return cached
+    if gsd_m is None:
+        image = p["padded"]
+    else:
+        image = common.resample_to_target_gsd(p["padded"], p["native_gsd_m"], gsd_m)
+    pw, ph = p["padded"].size
+    w, h = image.size
+    p["sources"][gsd_m] = {"image": image, "scale_back_x": pw / w, "scale_back_y": ph / h}
+    return p["sources"][gsd_m]
+
+
+def _predict_models(
+    models: dict[str, YOLO], model_keys: list[str], prepped: list[dict],
+) -> dict[str, list]:
+    if not model_keys or not prepped:
+        return {}
+
+    def _predict(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, list]:
+        gsd_m = model_router.gsd_for(model_key)
+        sources = [_source_for_gsd(p, gsd_m)["image"] for p in prepped]
+        imgsz = max(32, math.ceil(max(img.size[d] for img in sources for d in (0, 1)) / 32) * 32)
+        kwargs = dict(source=sources, conf=CONF_THRESHOLD, imgsz=imgsz, device=INFERENCE_DEVICE, verbose=False)
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                return model_key, models[model_key].predict(quantize=16, **kwargs)
+        return model_key, models[model_key].predict(quantize=(16 if INFERENCE_DEVICE == "cuda" else None), **kwargs)
+
+    use_cuda = INFERENCE_DEVICE == "cuda"
+    streams = [torch.cuda.Stream() for _ in model_keys] if use_cuda else [None] * len(model_keys)
+    futures = [_MODEL_EXECUTOR.submit(_predict, mk, st) for mk, st in zip(model_keys, streams)]
+    return dict(future.result() for future in futures)
+
+
+def _collect(p: dict, model_key: str, r) -> tuple[list[dict], dict[str, int]]:
+    if r.obb is None or len(r.obb) == 0:
+        return [], {}
+    job = p["job"]
+    src = _source_for_gsd(p, model_router.gsd_for(model_key))
+    detections: list[dict] = []
+    counts: dict[str, int] = {}
+    halo_dropped = 0
+    for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
+        class_name = r.names[int(cls_id)]
+        corners = [(pt[0] * src["scale_back_x"] - p["halo_px"], pt[1] * src["scale_back_y"] - p["halo_px"]) for pt in xy]
+        cx = sum(pt[0] for pt in corners) / 4
+        cy = sum(pt[1] for pt in corners) / 4
+        if not (0 <= cx < p["native_w"] and 0 <= cy < p["native_h"]):
+            halo_dropped += 1
+            continue
+        counts[class_name] = counts.get(class_name, 0) + 1
+        detections.append({
+            "tile_id": job.tile_id,
+            "model": model_key,
+            "class_name": class_name,
+            "corners": corners,
+            "confidence": conf,
+            "centroid_px_global": geometry.global_pixel(job.x, job.y, cx, cy),
+        })
+    if halo_dropped:
+        counts["_halo"] = halo_dropped
+    return detections, counts
+
+
+def _neighbour_has_evidence(job: Job) -> bool:
+    cache = _state.get("cache")
+    if cache is None:
+        return False
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            cached = cache.get(common.tile_id(job.z, job.x + dx, job.y + dy))
+            if cached is not None and cached.detections:
+                return True
+    return False
+
+
 def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
     models: dict[str, YOLO] = _state["models"]
 
@@ -267,83 +347,50 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
         native_gsd_m = common.meters_per_pixel(job.z, lat)
         halo_px = int(round(HALO_M / native_gsd_m))
         padded, native_w, native_h = _padded_tile(job, halo_px)
-        padded_w, padded_h = padded.size
-        resampled = common.resample_to_target_gsd(padded, native_gsd_m)
-        resampled_w, resampled_h = resampled.size
-        if max(resampled_w, resampled_h) > MAX_PREDICT_IMGSZ:
+        finest = min((g for g in model_router.MODEL_GSD_M.values() if g is not None), default=None)
+        longest = max(padded.size) * (native_gsd_m / finest if finest else 1.0)
+        if longest > MAX_PREDICT_IMGSZ:
             results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
             continue
         prepped.append({
             "index": i, "job": job, "native_w": native_w, "native_h": native_h, "halo_px": halo_px,
-            "resampled": resampled,
-            "scale_back_x": padded_w / resampled_w, "scale_back_y": padded_h / resampled_h,
+            "native_gsd_m": native_gsd_m, "padded": padded, "sources": {},
+            "raw": [], "counts": {},
         })
 
     if not prepped:
         return [results_by_index[i] for i in range(len(jobs))]
 
-    batch_imgsz = max(32, math.ceil(max(p["resampled"].size[d] for p in prepped for d in (0, 1)) / 32) * 32)
     triggered_models = model_router.models_for_tile(jobs[0].z)
-    source_images = [p["resampled"] for p in prepped]
+    open_models = [mk for mk in triggered_models if not model_router.is_gated(mk)]
+    gated_models = [mk for mk in triggered_models if model_router.is_gated(mk)]
 
-    def _predict_batch(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, list]:
-        model = models[model_key]
-        if stream is not None:
-            with torch.cuda.stream(stream):
-                results = model.predict(
-                    source=source_images, conf=CONF_THRESHOLD, imgsz=batch_imgsz,
-                    device=INFERENCE_DEVICE, quantize=16, verbose=False,
-                )
-        else:
-            results = model.predict(
-                source=source_images, conf=CONF_THRESHOLD, imgsz=batch_imgsz, device=INFERENCE_DEVICE,
-                quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
-            )
-        return model_key, results
+    for model_key, results in _predict_models(models, open_models, prepped).items():
+        for p, r in zip(prepped, results):
+            dets, counts = _collect(p, model_key, r)
+            p["raw"].extend(dets)
+            p["counts"][model_key] = counts
 
-    use_cuda = INFERENCE_DEVICE == "cuda"
-    streams = [torch.cuda.Stream() for _ in triggered_models] if use_cuda else [None] * len(triggered_models)
-    futures = [_MODEL_EXECUTOR.submit(_predict_batch, mk, st) for mk, st in zip(triggered_models, streams)]
-    per_model_results: dict[str, list] = dict(future.result() for future in futures)
+    batch_has_evidence = any(_is_graph_relevant(d) for p in prepped for d in p["raw"]) or any(
+        _neighbour_has_evidence(p["job"]) for p in prepped
+    )
+    passing = prepped if batch_has_evidence else []
+    for p in prepped:
+        p["gate"] = "open" if batch_has_evidence else "closed"
+    for model_key, results in _predict_models(models, gated_models, passing).items():
+        for p, r in zip(passing, results):
+            dets, counts = _collect(p, model_key, r)
+            p["raw"].extend(dets)
+            p["counts"][model_key] = counts
 
-    for tile_idx, p in enumerate(prepped):
+    for p in prepped:
         job = p["job"]
         tile_id = job.tile_id
-        raw_detections: list[dict] = []
-        per_model_counts: dict[str, dict[str, int]] = {}
-        for model_key in triggered_models:
-            r = per_model_results[model_key][tile_idx]
-            if r.obb is None or len(r.obb) == 0:
-                per_model_counts[model_key] = {}
-                continue
-            model_counts: dict[str, int] = {}
-            halo_dropped = 0
-            for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
-                class_name = r.names[int(cls_id)]
-                corners = [
-                    (pt[0] * p["scale_back_x"] - p["halo_px"], pt[1] * p["scale_back_y"] - p["halo_px"]) for pt in xy
-                ]
-                cx = sum(pt[0] for pt in corners) / 4
-                cy = sum(pt[1] for pt in corners) / 4
-                if not (0 <= cx < p["native_w"] and 0 <= cy < p["native_h"]):
-                    halo_dropped += 1
-                    continue
-                model_counts[class_name] = model_counts.get(class_name, 0) + 1
-                raw_detections.append({
-                    "tile_id": tile_id,
-                    "model": model_key,
-                    "class_name": class_name,
-                    "corners": corners,
-                    "confidence": conf,
-                    "centroid_px_global": geometry.global_pixel(job.x, job.y, cx, cy),
-                })
-            if halo_dropped:
-                model_counts["_halo"] = halo_dropped
-            per_model_counts[model_key] = model_counts
-
+        raw_detections = p["raw"]
         logger.info(
-            "Tile %s raw detections by model: %s", tile_id,
-            {mk: (counts or "none") for mk, counts in per_model_counts.items()},
+            "Tile %s raw detections by model: %s (gate %s for %s)", tile_id,
+            {mk: (counts or "none") for mk, counts in p["counts"].items()},
+            p["gate"], gated_models or "nothing",
         )
 
         fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
@@ -428,12 +475,23 @@ async def _worker_loop() -> None:
             in_flight.pop(job.tile_id, None)
 
 
+def _load_model(model_key: str) -> YOLO:
+    pt_path = REPO_ROOT / model_key
+    if model_router.INFERENCE_BACKEND != "openvino" or INFERENCE_DEVICE == "cuda":
+        return YOLO(str(pt_path))
+    export_dir = pt_path.with_name(f"{pt_path.stem}_openvino_model")
+    if not export_dir.exists():
+        logger.info("Exporting %s to OpenVINO (dynamic shapes) at %s", model_key, export_dir)
+        YOLO(str(pt_path)).export(format="openvino", dynamic=True, verbose=False)
+    return YOLO(str(export_dir), task="obb")
+
+
 @asynccontextmanager
 async def lifespan():
     models: dict[str, YOLO] = {}
     for model_key in model_router.MODELS:
-        logger.info("Loading %s (device=%s)", model_key, INFERENCE_DEVICE)
-        model = YOLO(str(REPO_ROOT / model_key))
+        logger.info("Loading %s (device=%s, backend=%s)", model_key, INFERENCE_DEVICE, model_router.INFERENCE_BACKEND)
+        model = _load_model(model_key)
         model.predict(
             source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
             device=INFERENCE_DEVICE, quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,

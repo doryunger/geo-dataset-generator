@@ -12,3 +12,5 @@ uvicorn==0.52.1
 websockets==17.1
 boto3==1.43.78
 ruff==0.16.5
+openvino==2026.3.1
+onnx==1.22.0
