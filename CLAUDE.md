@@ -150,6 +150,75 @@ before assuming the fix itself is wrong — verify the fix in isolation first (a
 -c "import obb; ..."` in a fresh process bypasses the stale cache and confirms the code itself is
 right), then restart to get it into the live server.
 
+## Growing a class: the site-by-site loop (`scripts/loop/`)
+
+This is the method for adding a new detection class, settled on 2026-09-14/19 after fan-unit
+and distillation-column. Read `scripts/loop/context/loop.md` for the measurements behind each
+rule; this section is the runbook. Everything below runs with `WORKSPACE=experiments` (see
+`scripts/common.py`) so production `classes/`, `/manual` on port 8000 and S3 `packages/` are
+never touched; `run-experiments.ps1` serves `/manual` against the experiment workspace on 8001.
+
+**The idea.** Nobody draws a whole class from scratch. A person seeds a few dozen samples,
+a weak model is trained, and from then on the model proposes and the person judges. Each round
+uses one refinery site from the OSM layer and produces samples, hard negatives and a coverage
+number. The class is finished when coverage on a *fresh* site stops improving.
+
+**One round, in order:**
+
+1. Pick a site: `python scripts/loop/sites.py --class <cls> --list`. Prefer sites with
+   `sampled=0` and `sharpness_vs_train` near 1.0; scan a few unscored candidates first, then
+   `--score`. Sharpness is a coarse gate (Mapbox coverage is soft across much of south-east
+   Europe and the model does not transfer to it); obliqueness has to be judged by eye from the
+   scan windows -- tank sides visible means oblique, clean circles means nadir.
+2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
+   Use a low threshold; the human is the filter and reviewers found real objects at 0.26.
+3. Build the review page: `python scripts/loop/pages.py sweep --class <cls> --site ... --model vN --windows 60`
+   and publish the HTML under `<workspace>/loop/<cls>/pages/` as an Artifact. Use `sweep`
+   (draw a polygon round every real object in the densest windows) when you need coverage;
+   use `triage` (yes/no on each proposal) only when the model is already good enough that most
+   proposals are right.
+4. Review it, then click the page's **Download JSON**.
+5. Measure before training on it: `python scripts/loop/coverage.py --class <cls> --site ... --review <json> --models vN`.
+   This is the generalisation number -- coverage on a site the model has not seen. Once the
+   site's polygons are in training, rescanning it only measures memorisation.
+6. Ingest: `python scripts/loop/apply.py --class <cls> --review <json>` (idempotent). Polygons
+   and yeses become samples; noes become *disabled* hard negatives.
+7. Regenerate and train: `python scripts/obb.py --class <cls>` (in the experiment workspace this
+   also uploads to `experiments/packages/`), then
+   `python scripts/train_obb.py --class <cls> --version vN+1 --data-dir <workspace>/classes/<cls>/dataset_obb`.
+8. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
+
+**Rules learned the hard way:**
+
+- **Coverage is the metric, not precision.** Precision on proposals says nothing about what was
+  never proposed; two "0 of 105" triage rounds looked like failure until a sweep showed the model
+  simply wasn't proposing. Track found/drawn per site per model version.
+- **No hard negatives below ~150 positive images.** 42 positives + 49 tight, correct negatives
+  collapsed a model to 0.04-0.09 confidence on its own training data while val metrics barely
+  moved (`v11`). `apply.py` stores rejections disabled; enable deliberately, in small numbers.
+- **Val metrics don't flag collapse.** Ultralytics reports precision/recall at the F1-optimal
+  threshold, which can be near zero. Check max confidence on known positives, and coverage.
+- **Domain matters more than count at this size.** The class spans sharp/soft imagery and
+  oblique/nadir views; a model trained on one corner transfers only to that corner, and adding
+  14 samples from a soft site *reduced* transfer on a sharp one (`v13` 4/10 -> `v14` 1/10 at
+  Godorf). Grow one domain to a stable model before mixing in the next, and always test on a
+  fresh site in the domain you trained on.
+- **Polygons, not points.** Reviewers rejected click and two-click marking; a polygon is what
+  they would draw in `/manual` and needs no fitting. Body only, never the ground shadow (an
+  elongated dark label is the shaft's shaded side seen obliquely).
+- **One round at a time.** Finish and read a round before starting the next; parallel
+  variants confound each other on a shared `dataset_obb/`.
+- **Promotion is explicit.** A class leaves `experiments/` only by a deliberate move of its
+  data and a config change in `oil_refinery/app/server/`; nothing graduates as a side effect
+  of training. Columns, when promoted, go in as a *booster* edge, not a `requires` edge --
+  nadir-orthophoto sites like Płock will never show one.
+
+**State as of 2026-09-19:** `distillation-column` has 107 samples across 21 sites (22 hand-drawn,
+the rest from three sweep rounds and two triage rounds), `v15` training, 181 disabled hard
+negatives, and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft
+oblique) and Godorf (10, sharp oblique). BP Rotterdam is scanned and unused -- the natural next
+fresh sharp-oblique site.
+
 ## S3 backup (`scripts/s3_sync.py`)
 
 `classes/<class>/` (samples.jsonl, crops, bend_review/error_review, dataset_obb — the hand-labeled
