@@ -26,9 +26,20 @@ import obb
 SAMPLE_ZOOM = 20
 
 
-def _add_sample(embedder, class_name: str, polygon: list, origin: dict) -> str:
+def _already_present(class_name: str, polygon: list) -> bool:
+    poly = Polygon(polygon)
+    for r in common.load_samples(class_name):
+        other = Polygon(r["polygon"])
+        if other.intersects(poly) and other.intersection(poly).area / poly.area > 0.95:
+            return True
+    return False
+
+
+def _add_sample(embedder, class_name: str, polygon: list, origin: dict) -> str | None:
     if polygon[0] != polygon[-1]:
         polygon = polygon + [polygon[0]]
+    if _already_present(class_name, polygon):
+        return None
     lons = [p[0] for p in polygon]
     lats = [p[1] for p in polygon]
     west, east, south, north = min(lons), max(lons), min(lats), max(lats)
@@ -97,9 +108,8 @@ def main():
         shutil.copy(common.samples_path(args.class_name), common.samples_path(args.class_name).with_suffix(f".jsonl.bak.{int(time.time())}"))
         from embedder import Embedder
         emb = Embedder()
-        for p in polys:
-            _add_sample(emb, args.class_name, p, origin_base)
-        print(f"samples now {len(common.load_samples(args.class_name))}")
+        added = sum(1 for p in polys if _add_sample(emb, args.class_name, p, origin_base))
+        print(f"added {added} ({len(polys) - added} already present); samples now {len(common.load_samples(args.class_name))}")
         return
 
     yes, no, skip = _triage_items(args.class_name, review)
@@ -111,8 +121,8 @@ def main():
     shutil.copy(common.samples_path(args.class_name), common.samples_path(args.class_name).with_suffix(f".jsonl.bak.{int(time.time())}"))
     from embedder import Embedder
     emb = Embedder()
-    for c in yes:
-        _add_sample(emb, args.class_name, c["polygon"], {**origin_base, "conf": c["conf"], "candidate": c["id"]})
+    added = sum(1 for c in yes if _add_sample(emb, args.class_name, c["polygon"], {**origin_base, "conf": c["conf"], "candidate": c["id"]}))
+    print(f"added {added} ({len(yes) - added} already present)")
     for c in no:
         lons = [p[0] for p in c["polygon"]]
         lats = [p[1] for p in c["polygon"]]
