@@ -57,8 +57,17 @@ def _median_sharpness(files: list[Path], k: int = 60) -> float:
     return statistics.median(_sharpness(f) for f in files)
 
 
-def score(class_name: str) -> list[dict]:
+def recount_sampled(class_name: str) -> list[dict]:
     sites = L.load_sites(class_name)
+    pts = [Point(*obb._polygon_centroid(r["polygon"])) for r in common.load_samples(class_name)]
+    for s in sites:
+        s["sampled"] = sum(shape(s["geometry"]).buffer(0.01).contains(q) for q in pts)
+    L.save_sites(class_name, sites)
+    return sites
+
+
+def score(class_name: str) -> list[dict]:
+    sites = recount_sampled(class_name)
     ref_files = list((common.obb_dataset_dir(class_name) / "images" / "train").glob("*.jpg"))
     ref_files = [f for f in ref_files if not f.stem.startswith("hardneg")]
     if not ref_files:
@@ -88,7 +97,7 @@ def main():
         sites = score(args.class_name)
         print(f"scored {sum(1 for s in sites if 'sharpness_vs_train' in s)} scanned site(s)")
     if args.list or not (args.geojson or args.score):
-        for s in L.load_sites(args.class_name):
+        for s in recount_sampled(args.class_name):
             sharp = s.get("sharpness_vs_train")
             scans = ",".join(sc["model"] for sc in s.get("scans", []))
             print(f"{s['area_km2']:>6.2f} km2  sharp={sharp if sharp is not None else '  -  '}  sampled={s['sampled']:<3} scans=[{scans}]  {s['name']}")
