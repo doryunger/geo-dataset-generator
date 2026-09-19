@@ -31,17 +31,21 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    scan windows -- tank sides visible means oblique, clean circles means nadir.
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    Use a low threshold; the human is the filter and reviewers found real objects at 0.26.
-3. Build the review page: `python scripts/loop/pages.py sweep --class <cls> --site ... --model vN --windows 60`
-   and publish the HTML under `<workspace>/loop/<cls>/pages/` as an Artifact. Use `sweep`
-   (draw a polygon round every real object in the densest windows) when you need coverage;
-   use `triage` (yes/no on each proposal) only when the model is already good enough that most
-   proposals are right.
-4. Review it, then click the page's **Download JSON**.
-5. Measure before training on it: `python scripts/loop/coverage.py --class <cls> --site ... --review <json> --models vN`.
-   This is the generalisation number -- coverage on a site the model has not seen. Once the
-   site's polygons are in training, rescanning it only measures memorisation.
-6. Ingest: `python scripts/loop/apply.py --class <cls> --review <json>` (idempotent). Polygons
-   and yeses become samples; noes become *disabled* hard negatives.
+3. Sweep: `python scripts/loop/pages.py sweep --class <cls> --site ... --model vN --windows 60`,
+   publish the HTML under `<workspace>/loop/<cls>/pages/` as an Artifact. The reviewer polygons
+   every real object that has **no** green proposal on it -- the misses -- and leaves the
+   proposals alone. Download JSON.
+4. Triage the proposals: `python scripts/loop/pages.py triage ... --model vN --min-conf 0.25 --swept-by <sweep json>`
+   builds a yes/no page of the proposals inside the swept windows that aren't on a polygon.
+   Download JSON. Coverage of vN on the site = yeses / (yeses + polygons); precision = yeses /
+   (yeses + noes). This split (misses by drawing, hits by judging) is what reviewers naturally
+   do and is far cheaper than polygoning everything.
+5. `python scripts/loop/coverage.py --class <cls> --site ... --review <sweep json> --extra-truth <triage json> --models vN,vN+1`
+   re-runs any model against that ground truth -- the generalisation number for versions that
+   haven't trained on the site, memorisation for those that have. `--thresholds` matters when
+   comparing versions whose confidence scale differs.
+6. Ingest both JSONs: `python scripts/loop/apply.py --class <cls> --review <json>` (idempotent).
+   Polygons and yeses become samples; noes become *disabled* hard negatives.
 7. Regenerate and train: `python scripts/obb.py --class <cls>` (in the experiment workspace this
    also uploads to `experiments/packages/`), then
    `python scripts/train_obb.py --class <cls> --version vN+1 --data-dir <workspace>/classes/<cls>/dataset_obb`.
@@ -146,7 +150,12 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
-**State as of 2026-09-19 (end of day):** `distillation-column` has 119 samples across 23 sites
+**Round 6, Scholven (2026-09-19), fresh sharp-oblique site, v16 proposing:** reviewer drew 3
+misses and judged 94 proposals -- 29 yes, 44 no, 21 unsure. Coverage **29/32 = 91%**, precision
+40% at >=0.25, 62% at >=0.4, **79% at >=0.5**. Three rounds earlier the same test at Godorf gave
+4/10. Samples 119 -> 151; negatives held at 50 enabled (302 stored); `v18` trained on that.
+
+**State as of 2026-09-19 (earlier that day):** `distillation-column` has 119 samples across 23 sites
 (22 hand-drawn, the rest from four sweeps and three triages), 258 hard negatives of which 50 are
 enabled (25 from sharp training sites, 25 in-place from BP Rotterdam), `v17` training on that,
 and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft oblique), Godorf

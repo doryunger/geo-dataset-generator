@@ -1,12 +1,16 @@
 """
 Build the two review pages of the loop as self-contained HTML files.
 
-    triage: one candidate per screen, yes/no
-    sweep:  one window per screen, draw a polygon around every real object (coverage ground truth)
+    sweep:  one window per screen with the model's proposals drawn; polygon every real object the
+            model has NO proposal on (the misses)
+    triage: one proposal per screen, yes/no; with --swept-by <sweep json> only the proposals inside
+            the swept windows that are not on a drawn polygon (the found-or-not)
+
+    coverage of the model on that site = yeses / (yeses + polygons); precision = yeses / (yeses + noes)
 
 Usage:
-    python scripts/loop/pages.py triage --class distillation-column --site puertollano --model v13 --min-conf 0.4
-    python scripts/loop/pages.py sweep  --class distillation-column --site puertollano --model v13 --windows 60 --show-conf 0.25
+    python scripts/loop/pages.py sweep  --class distillation-column --site scholven --model v16 --windows 60 --show-conf 0.25
+    python scripts/loop/pages.py triage --class distillation-column --site scholven --model v16 --min-conf 0.25 --swept-by ~/Downloads/<sweep>.json
 
 Publish the resulting file (scripts/loop/pages/<name>.html) as an Artifact, review it, then use the
 page's "Download JSON" button and feed the file to apply.py / coverage.py.
@@ -15,6 +19,7 @@ import argparse
 import base64
 import io
 import json
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
@@ -29,16 +34,36 @@ def _candidates(class_name: str, site: dict, version: str) -> list[dict]:
     return json.loads(p.read_text())
 
 
-def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str) -> tuple:
+def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_review: Path) -> list[dict]:
+    from shapely.geometry import Point, Polygon
+    from apply import _sweep_polygons
+
+    review = json.loads(sweep_review.read_text(encoding="utf-8"))
+    windows = {w["n"]: w for w in L.site_windows(site)}
+    swept = [windows[int(k.rsplit("_w", 1)[1])] for k in review["checked"]]
+    polys = [Polygon(p) for p in _sweep_polygons(review)]
+    out = []
+    for c in cands:
+        if not any(w["west"] <= c["lon"] <= w["east"] and w["south"] <= c["lat"] <= w["north"] for w in swept):
+            continue
+        if any(p.contains(Point(c["lon"], c["lat"])) or L.dist_m((c["lon"], c["lat"]), (p.centroid.x, p.centroid.y)) < L.MATCH_M for p in polys):
+            continue
+        out.append(c)
+    return out
+
+
+def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None) -> tuple:
     cands = [c for c in _candidates(class_name, site, version) if c["conf"] >= min_conf]
+    if swept_by:
+        cands = _restrict_to_sweep(class_name, site, cands, swept_by)
     site_slug = L.slug(site["name"])
     html = L.fill("triage.html", {
         "TITLE": f"{site['name']} {label} triage",
         "EYEBROW": f"{class_name} &middot; {site['name']} &middot; model {version} &middot; conf &ge; {min_conf:.2f}",
         "HEADING": "What did the model find here?",
-        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
+        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{' -- only those inside the windows you swept, and not on a polygon you drew' if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
         "YES": label.capitalize(), "NO": f"Not a {label}", "YES_SHORT": label, "NO_SHORT": "not",
-        "DOC": f"reviews/{class_name}-triage-{site_slug[:20]}-{version}", "LS": f"{class_name}-triage-{site_slug[:20]}-{version}",
+        "DOC": f"reviews/{class_name}-triage-{site_slug[:20]}-{version}{'-swept' if swept_by else ''}", "LS": f"{class_name}-triage-{site_slug[:20]}-{version}{'-swept' if swept_by else ''}",
         "META": f'kind: "triage", class: "{class_name}", site: "{site_slug}", model: "{version}", threshold: {min_conf}',
         "FILENAME": f"{class_name}-triage-{site_slug}-{version}.json",
     }, cands)
@@ -86,8 +111,8 @@ def build_sweep(class_name: str, site: dict, version: str, n_windows: int, show_
     html = L.fill("sweep.html", {
         "TITLE": f"{site['name']} {label} sweep",
         "EYEBROW": f"{class_name} &middot; model {version} &middot; {site['name']} &middot; {len(out)} densest windows &middot; proposals shown at &ge; {show_conf:.2f}",
-        "HEADING": f"Mark every {label}, whether or not the model saw it",
-        "LEDE": f"The model's proposals are in <b>green</b> with their confidence, including weak ones. <b>Draw a polygon around each real {label}: click its corners, then click the first point again or press Enter to close.</b> Mark every one you can see, green or not; that is what measures coverage. Click inside a finished polygon to remove it. Windows with none: just go to the next.",
+        "HEADING": f"Find the {label}s the model missed",
+        "LEDE": f"The model's proposals are in <b>green</b> with their confidence, including weak ones; they get judged in a separate yes/no pass, so <b>leave them alone here</b>. <b>Draw a polygon around each real {label} that has no green outline</b>: click its corners, then click the first point again or press Enter to close. Click inside a finished polygon to remove it. Windows with nothing missing: just go to the next.",
         "OBJECT": label, "OBJECTS": f"{label}s",
         "DOC": f"reviews/{class_name}-sweep-{site_slug[:20]}-{version}", "LS": f"{class_name}-sweep-{site_slug[:20]}",
         "META": f'kind: "sweep", class: "{class_name}", site: "{site_slug}", model: "{version}", threshold: {show_conf}',
@@ -106,14 +131,15 @@ def main():
     parser.add_argument("--min-conf", type=float, default=0.4)
     parser.add_argument("--show-conf", type=float, default=0.25)
     parser.add_argument("--windows", type=int, default=60)
+    parser.add_argument("--swept-by", type=Path, default=None, help="triage only: a sweep review JSON; keep proposals inside its windows that are not on its polygons")
     args = parser.parse_args()
     site = L.find_site(args.class_name, args.site)
     label = args.label or args.class_name.replace("-", " ")
     if args.kind == "triage":
-        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label)
+        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label, args.swept_by)
     else:
         html, n = build_sweep(args.class_name, site, args.model, args.windows, args.show_conf, label)
-    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{L.slug(site['name'])}_{args.model}.html"
+    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{L.slug(site['name'])}_{args.model}{'_swept' if args.swept_by else ''}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     print(f"{args.kind}: {n} {'candidates' if args.kind == 'triage' else 'windows'} -> {out} ({out.stat().st_size / 1e6:.1f} MB)")
