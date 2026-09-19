@@ -9,20 +9,73 @@ session scratchpad on 2026-09-19 so it can be run without Claude in the loop. Ev
 `<workspace>/loop/<class>/` -- `sites.json`, `scans/<site>/w*.jpg`, `candidates/`, `sweeps/`,
 `pages/`.
 
-## One round
+## Runbook
 
-1. `sites.py --geojson <osm export>` once per class; `sites.py --list` to pick a site. Prefer
-   unsampled sites with `sharpness_vs_train` near 1 (see below); scan first, then `--score`.
-2. `scan.py --site X --model vN --conf 0.25` -- 120 m windows over the OSM polygon (+60 m pad),
-   z18 imagery resampled to the class GSD, detections not overlapping an existing label, deduped
-   within 8 m. About a minute per 500 windows once tiles are cached.
-3. `pages.py triage|sweep ...` -- writes a self-contained HTML page; publish it as an Artifact.
-   Triage = one candidate per screen, yes/no. Sweep = the N densest windows (Laplacian variance),
-   model proposals drawn in green at a *low* threshold, the reviewer polygons every real object.
-4. Reviewer uses the page's **Download JSON** button; `apply.py --review <json>` turns yeses and
-   polygons into samples (same fields `/manual` writes, plus an `origin` block) and noes into
-   *disabled* hard negatives. Regenerate the package, train the next version.
-5. `coverage.py --review <sweep json> --models vN,vN+1` -- the number the loop is judged on.
+This is the method for adding a new detection class, settled on 2026-09-14/19 after fan-unit
+and distillation-column. The rationale and measurements behind each rule are in the sections
+below this one; this section is the runbook. Everything below runs with `WORKSPACE=experiments` (see
+`scripts/common.py`) so production `classes/`, `/manual` on port 8000 and S3 `packages/` are
+never touched; `run-experiments.ps1` serves `/manual` against the experiment workspace on 8001.
+
+**The idea.** Nobody draws a whole class from scratch. A person seeds a few dozen samples,
+a weak model is trained, and from then on the model proposes and the person judges. Each round
+uses one refinery site from the OSM layer and produces samples, hard negatives and a coverage
+number. The class is finished when coverage on a *fresh* site stops improving.
+
+**One round, in order:**
+
+1. Pick a site: `python scripts/loop/sites.py --class <cls> --list`. Prefer sites with
+   `sampled=0` and `sharpness_vs_train` near 1.0; scan a few unscored candidates first, then
+   `--score`. Sharpness is a coarse gate (Mapbox coverage is soft across much of south-east
+   Europe and the model does not transfer to it); obliqueness has to be judged by eye from the
+   scan windows -- tank sides visible means oblique, clean circles means nadir.
+2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
+   Use a low threshold; the human is the filter and reviewers found real objects at 0.26.
+3. Build the review page: `python scripts/loop/pages.py sweep --class <cls> --site ... --model vN --windows 60`
+   and publish the HTML under `<workspace>/loop/<cls>/pages/` as an Artifact. Use `sweep`
+   (draw a polygon round every real object in the densest windows) when you need coverage;
+   use `triage` (yes/no on each proposal) only when the model is already good enough that most
+   proposals are right.
+4. Review it, then click the page's **Download JSON**.
+5. Measure before training on it: `python scripts/loop/coverage.py --class <cls> --site ... --review <json> --models vN`.
+   This is the generalisation number -- coverage on a site the model has not seen. Once the
+   site's polygons are in training, rescanning it only measures memorisation.
+6. Ingest: `python scripts/loop/apply.py --class <cls> --review <json>` (idempotent). Polygons
+   and yeses become samples; noes become *disabled* hard negatives.
+7. Regenerate and train: `python scripts/obb.py --class <cls>` (in the experiment workspace this
+   also uploads to `experiments/packages/`), then
+   `python scripts/train_obb.py --class <cls> --version vN+1 --data-dir <workspace>/classes/<cls>/dataset_obb`.
+8. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
+9. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
+   negatives by provenance with enabled counts; `--enable/--disable <group> [--limit N]`
+   (add `--negatives` for the negative store) flips a group for the next package; `--versions
+   vA,vB` shows what each trained version contained. To test whether a group hurts: disable it,
+   regenerate, train, re-run `coverage.py` on the same sweeps, decide, re-enable or discard.
+
+**Rules learned the hard way:**
+
+- **Coverage is the metric, not precision.** Precision on proposals says nothing about what was
+  never proposed; two "0 of 105" triage rounds looked like failure until a sweep showed the model
+  simply wasn't proposing. Track found/drawn per site per model version.
+- **No hard negatives below ~150 positive images.** 42 positives + 49 tight, correct negatives
+  collapsed a model to 0.04-0.09 confidence on its own training data while val metrics barely
+  moved (`v11`). `apply.py` stores rejections disabled; enable deliberately, in small numbers.
+- **Val metrics don't flag collapse.** Ultralytics reports precision/recall at the F1-optimal
+  threshold, which can be near zero. Check max confidence on known positives, and coverage.
+- **Domain matters more than count at this size.** The class spans sharp/soft imagery and
+  oblique/nadir views; a model trained on one corner transfers only to that corner, and adding
+  14 samples from a soft site *reduced* transfer on a sharp one (`v13` 4/10 -> `v14` 1/10 at
+  Godorf). Grow one domain to a stable model before mixing in the next, and always test on a
+  fresh site in the domain you trained on.
+- **Polygons, not points.** Reviewers rejected click and two-click marking; a polygon is what
+  they would draw in `/manual` and needs no fitting. Body only, never the ground shadow (an
+  elongated dark label is the shaft's shaded side seen obliquely).
+- **One round at a time.** Finish and read a round before starting the next; parallel
+  variants confound each other on a shared `dataset_obb/`.
+- **Promotion is explicit.** A class leaves `experiments/` only by a deliberate move of its
+  data and a config change in `oil_refinery/app/server/`; nothing graduates as a side effect
+  of training. Columns, when promoted, go in as a *booster* edge, not a `requires` edge --
+  nadir-orthophoto sites like Płock will never show one.
 
 ## Why it is shaped this way
 
@@ -90,3 +143,17 @@ Versions before `v17` have no record.
 First use: `v16` = 25 negatives from the sharp training sites (`triage-rejected:-:v9`, top
 confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejections
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
+
+## Round log and current state
+
+**State as of 2026-09-19 (end of day):** `distillation-column` has 119 samples across 23 sites
+(22 hand-drawn, the rest from four sweeps and three triages), 258 hard negatives of which 50 are
+enabled (25 from sharp training sites, 25 in-place from BP Rotterdam), `v17` training on that,
+and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft oblique), Godorf
+(10, sharp oblique) and BP Rotterdam (5, sharp oblique). Fresh-site coverage in the home domain
+has been ~40% at conf 0.25 (Godorf v13 4/10, BP v15 2/5). Two negative batches (v16: 25 from
+training sites, v17: +25 in-place from BP) shifted confidence upward without improving
+separation at matched false-positive counts, so negatives are parked at 50 and the lever is
+positives again until ~150-200. **Next round: use `v16` as the proposer, not `v17`** -- v17's
+inflated scores flood the candidate list (1,194 at >=0.25 on Puertollano); if v17 must be used,
+show proposals at >=0.5. Expect trends over many rounds, not jumps.
