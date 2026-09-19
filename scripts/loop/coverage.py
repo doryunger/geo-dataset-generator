@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--review", type=Path, required=True, help="the sweep page's downloaded JSON")
     parser.add_argument("--models", required=True, help="comma-separated version tags")
     parser.add_argument("--extra-truth", type=Path, default=None, help="optional triage JSON whose yeses count as ground truth too")
+    parser.add_argument("--thresholds", default="0.25,0.4,0.5", help="comma-separated confidence thresholds to report")
     args = parser.parse_args()
 
     site = L.find_site(args.class_name, args.site)
@@ -56,7 +57,7 @@ def main():
                 cx = sum(q[0] for q in quad) / 4
                 cy = sum(q[1] for q in quad) / 4
                 dets.append((*L.to_geo(w, cx, cy, W, H), float(c)))
-        for thr in (0.25, 0.4, 0.5):
+        for thr in (float(t) for t in args.thresholds.split(",")):
             ds = [d for d in dets if d[2] >= thr]
             found = sum(any(L.dist_m(g, (d[0], d[1])) < L.MATCH_M for d in ds) for g in truth)
             fp = sum(not any(L.dist_m(g, (d[0], d[1])) < L.MATCH_M for g in truth) for d in ds)
