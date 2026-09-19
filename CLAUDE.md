@@ -223,8 +223,12 @@ number. The class is finished when coverage on a *fresh* site stops improving.
 enabled (25 from sharp training sites, 25 in-place from BP Rotterdam), `v17` training on that,
 and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft oblique), Godorf
 (10, sharp oblique) and BP Rotterdam (5, sharp oblique). Fresh-site coverage in the home domain
-has been ~40% at conf 0.25 (Godorf v13 4/10, BP v15 2/5); false positives are the open problem
-and negatives the current focus, per the user. Expect trends over many rounds, not jumps.
+has been ~40% at conf 0.25 (Godorf v13 4/10, BP v15 2/5). Two negative batches (v16: 25 from
+training sites, v17: +25 in-place from BP) shifted confidence upward without improving
+separation at matched false-positive counts, so negatives are parked at 50 and the lever is
+positives again until ~150-200. **Next round: use `v16` as the proposer, not `v17`** -- v17's
+inflated scores flood the candidate list (1,194 at >=0.25 on Puertollano); if v17 must be used,
+show proposals at >=0.5. Expect trends over many rounds, not jumps.
 
 ## S3 backup (`scripts/s3_sync.py`)
 
