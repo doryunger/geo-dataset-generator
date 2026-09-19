@@ -488,9 +488,9 @@ def ensure_obb_data_yaml(class_name: str):
 def _generate_pieces_for_class(
     class_name: str, output_dir, embedder, val_ids: set[str] | None = None, on_progress=None,
 ) -> dict:
-    samples = common.load_samples(class_name)
+    samples = [r for r in common.load_samples(class_name) if r.get("enabled", True)]
     if not samples:
-        raise ValueError(f"'{class_name}' has no samples yet")
+        raise ValueError(f"'{class_name}' has no enabled samples")
 
     node_cfg = subclass_graph.node_config(class_name)
     min_piece_m = node_cfg.get("min_piece_m", DEFAULT_MIN_PIECE_M)
@@ -564,6 +564,21 @@ def _generate_pieces_for_class(
     return counts
 
 
+def group_key(row: dict) -> str:
+    origin = row.get("origin") or {}
+    return ":".join(str(origin.get(k) or "-") for k in ("source", "site", "model")) if origin else "hand"
+
+
+def data_groups(class_name: str) -> dict:
+    out: dict[str, dict] = {"samples": {}, "negatives": {}}
+    for kind, rows in (("samples", common.load_samples(class_name)), ("negatives", common.load_hard_negatives(class_name))):
+        for r in rows:
+            g = out[kind].setdefault(group_key(r), {"total": 0, "enabled": 0})
+            g["total"] += 1
+            g["enabled"] += 1 if r.get("enabled", True) else 0
+    return out
+
+
 def generate_obb_package(
     class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
     on_progress=None,
@@ -584,7 +599,7 @@ def generate_obb_package(
                 shutil.rmtree(d)
             d.mkdir(parents=True, exist_ok=True)
 
-    samples = common.load_samples(class_name)
+    samples = [r for r in common.load_samples(class_name) if r.get("enabled", True)]
     resolved_val_ids = resolve_val_ids(samples, val_ids, class_name) if samples else set()
     counts = _generate_pieces_for_class(
         class_name, output_dir, embedder, val_ids=resolved_val_ids, on_progress=on_progress,
@@ -608,6 +623,7 @@ def generate_obb_package(
             counts["positives_in_negatives"] = counts.get("positives_in_negatives", 0) + kept
 
     ensure_obb_data_yaml(class_name)
+    (output_dir / "groups.json").write_text(json.dumps(data_groups(class_name), indent=1))
     common.touch_marker(marker)
     return {"class_name": class_name, **counts, "changes_since_last_generation": dict(change_counts)}
 

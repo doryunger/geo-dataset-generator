@@ -187,6 +187,11 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    also uploads to `experiments/packages/`), then
    `python scripts/train_obb.py --class <cls> --version vN+1 --data-dir <workspace>/classes/<cls>/dataset_obb`.
 8. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
+9. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
+   negatives by provenance with enabled counts; `--enable/--disable <group> [--limit N]`
+   (add `--negatives` for the negative store) flips a group for the next package; `--versions
+   vA,vB` shows what each trained version contained. To test whether a group hurts: disable it,
+   regenerate, train, re-run `coverage.py` on the same sweeps, decide, re-enable or discard.
 
 **Rules learned the hard way:**
 
@@ -213,11 +218,13 @@ number. The class is finished when coverage on a *fresh* site stops improving.
   of training. Columns, when promoted, go in as a *booster* edge, not a `requires` edge --
   nadir-orthophoto sites like Płock will never show one.
 
-**State as of 2026-09-19:** `distillation-column` has 107 samples across 21 sites (22 hand-drawn,
-the rest from three sweep rounds and two triage rounds), `v15` training, 181 disabled hard
-negatives, and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft
-oblique) and Godorf (10, sharp oblique). BP Rotterdam is scanned and unused -- the natural next
-fresh sharp-oblique site.
+**State as of 2026-09-19 (end of day):** `distillation-column` has 119 samples across 23 sites
+(22 hand-drawn, the rest from four sweeps and three triages), 258 hard negatives of which 50 are
+enabled (25 from sharp training sites, 25 in-place from BP Rotterdam), `v17` training on that,
+and sweeps with ground truth at La Rábida (32, nadir), Puertollano (12, soft oblique), Godorf
+(10, sharp oblique) and BP Rotterdam (5, sharp oblique). Fresh-site coverage in the home domain
+has been ~40% at conf 0.25 (Godorf v13 4/10, BP v15 2/5); false positives are the open problem
+and negatives the current focus, per the user. Expect trends over many rounds, not jumps.
 
 ## S3 backup (`scripts/s3_sync.py`)
 

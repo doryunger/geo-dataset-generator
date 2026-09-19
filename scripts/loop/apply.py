@@ -65,12 +65,14 @@ def _triage_items(class_name: str, review: dict) -> tuple[list, list, list]:
     site_slug, version = review["site"], review["model"]
     cands = json.loads((L.loop_dir(class_name) / "candidates" / f"{site_slug}_{version}.json").read_text())
     by_id = {unicodedata.normalize("NFC", c["id"]): c for c in cands}
+    decisions = review["decisions"]
+    pairs = decisions.items() if isinstance(decisions, dict) else ((d["id"], d["verdict"]) for d in decisions)
     yes, no, skip = [], [], []
-    for d in review["decisions"]:
-        c = by_id.get(unicodedata.normalize("NFC", d["id"]))
+    for cid, verdict in pairs:
+        c = by_id.get(unicodedata.normalize("NFC", cid))
         if c is None:
             continue
-        {"yes": yes, "no": no}.get(d["verdict"], skip).append(c)
+        {"yes": yes, "no": no}.get(verdict, skip).append(c)
     return yes, no, skip
 
 

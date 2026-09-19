@@ -64,3 +64,29 @@ artifact store (document ids reject non-ASCII); `loop_common.slug` strips them.
 computed, so a sweep's window ids, a scan's candidates and a later coverage run line up exactly
 across model versions. Changing `WINDOW_M` or `PAD_M` invalidates comparability with earlier
 sweeps of the same site.
+
+## groups.py -- control over what trains (2026-09-19)
+
+Added after the user set the requirement that the process must let them "discard samples or hard
+negatives that are reducing the performance of the model." Every sample and negative written by
+the loop carries an `origin` block; `obb.group_key` collapses it to `<source>:<site>:<model>`
+(`hand` for the original `/manual` samples). `groups.py` lists those groups with enabled counts,
+flips a whole group (or its first N rows, `--limit`) on or off, and `--versions` shows the
+enabled count per group for each trained version -- read next to a `coverage.py` table across the
+same versions, that is the ablation view.
+
+Samples now honour an `enabled` flag exactly as hard negatives do; `generate_obb_package` drops
+disabled samples before anything else happens, so a disabled sample gets no crop *and* is not
+drawn as a neighbour label in other crops. That second part is deliberate: a sample is disabled
+either because it is wrong (then labelling it anywhere is wrong too) or because its whole group
+is under test (then it must be absent, not half-present). The side effect -- a real object that
+was disabled for the second reason trains as background wherever it is visible -- is accepted as
+the price of a clean ablation; re-enable the group afterwards.
+
+`generate_obb_package` writes `dataset_obb/groups.json` and `train_obb.py` copies it into
+`<class>_obb_vN_metrics.json` under `groups`, so every version records what it was trained on.
+Versions before `v17` have no record.
+
+First use: `v16` = 25 negatives from the sharp training sites (`triage-rejected:-:v9`, top
+confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejections
+(`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.

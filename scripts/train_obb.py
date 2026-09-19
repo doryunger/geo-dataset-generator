@@ -117,9 +117,11 @@ def train_obb_class(
     out_pt = common.MODELS_DIR / f"{slug}_obb_{version}.pt"
     shutil.copy(best_pt, out_pt)
 
+    groups_path = Path(data_yaml).parent / "groups.json"
     metrics = {
         "class": class_name, "version": version, "base_model": base_model,
         "epochs": epochs, "imgsz": imgsz, "metrics": getattr(results, "results_dict", {}),
+        "groups": json.loads(groups_path.read_text()) if groups_path.exists() else None,
     }
     metrics_path = common.MODELS_DIR / f"{slug}_obb_{version}_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2))
