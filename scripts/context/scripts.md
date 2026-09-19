@@ -265,6 +265,24 @@ can't silently reappear via `/manual`'s "Generate Package" merge checkbox pullin
 snapshot that still has them. If that button is ever used for this class, its "include latest
 available entry" checkbox needs to be off.
 
+### Hard negatives collapse a small model -- measured (2026-09-14)
+
+Root `CLAUDE.md` says hard negatives destabilised `fence-face` at 13 positives + 6 negatives and
+to revisit only once positives comfortably outnumber negatives. Re-confirmed on
+`distillation-column` in the experiments workspace, with numbers, after ignoring that rule:
+`v11` trained on 42 positive images + 49 negative crops (55 triage-rejected shapes, each a tight
+polygon on a real confusable, with known positives inside their crops preserved -- i.e. the
+*good* kind of negative) and its max confidence on ten of its **own training columns** fell to
+0.04-0.09, against 0.5-0.8 for `v9` (22 samples, no negatives) and 0.3-0.5 for `v10` (50
+samples, no negatives). It produced zero detections at conf 0.25 on five whole refinery sites,
+including a training site. The val metrics (precision 0.41 / recall 0.35) did not flag this:
+ultralytics reports them at whatever confidence maximises F1, which for a collapsed model is
+near zero, so a class can look "fine" on val while being undeployable at any real threshold.
+Check max confidence on known positives, not val precision, when adding negatives. The 55 shapes
+are kept in `hard_negatives.jsonl` (enabled) for later; `v12` was trained with
+`include_hard_negatives=False`. Rule of thumb from these three runs: at under ~100 positive
+images, no negatives at all.
+
 ### HARD_NEGATIVE_TILES (legacy dict, mostly superseded -- see Hard negatives section below)
 
 Keyed by tile id -> tuple of class names it's a negative *for* (changed from a flat shared list

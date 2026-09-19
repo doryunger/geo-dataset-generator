@@ -274,9 +274,10 @@ def hard_negative_crop_bboxes(
 
 def _hard_negative_crop(
     output_dir: Path, name_prefix: str, row: dict, normalize_sample_crop: bool, split: str = "train",
-    fetch_zoom_override: int = SAMPLE_FETCH_ZOOM,
-) -> int:
+    fetch_zoom_override: int = SAMPLE_FETCH_ZOOM, samples: list[dict] | None = None,
+) -> tuple[int, int]:
     bboxes, fetch_zoom, target_gsd_m = hard_negative_crop_bboxes(row, normalize_sample_crop, fetch_zoom_override)
+    positives_kept = 0
     for i, (west, south, east, north) in enumerate(bboxes):
         piece_name = name_prefix if len(bboxes) == 1 else f"{name_prefix}_p{i}"
         out_path = output_dir / "images" / split / f"{piece_name}.jpg"
@@ -287,8 +288,14 @@ def _hard_negative_crop(
         with Image.open(out_path) as img:
             resampled = common.resample_to_target_gsd(img.convert("RGB"), native_gsd_m, target_gsd_m)
             resampled.save(out_path, format="JPEG")
-        (output_dir / "labels" / split / f"{piece_name}.txt").write_text("")
-    return len(bboxes)
+            w, h = resampled.size
+        lines: list[str] = []
+        if samples:
+            rects = _neighbor_pixel_rects(samples, "", west, south, east, north, w, h)
+            lines = _window_label_lines(rects, 0, 0, w, h)
+        positives_kept += len(lines)
+        (output_dir / "labels" / split / f"{piece_name}.txt").write_text("\n".join(lines) + ("\n" if lines else ""))
+    return len(bboxes), positives_kept
 
 
 def _axis_projection(pixel_ring: list[tuple[float, float]]):
@@ -592,11 +599,13 @@ def generate_obb_package(
             if not row.get("enabled", True):
                 continue
             hn_split = _hard_negative_split(row, samples, resolved_val_ids)
-            n = _hard_negative_crop(
+            n, kept = _hard_negative_crop(
                 output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop, hn_split, sample_fetch_zoom,
+                samples=samples,
             )
             key = "negatives" if hn_split == "train" else "val_negatives"
             counts[key] = counts.get(key, 0) + n
+            counts["positives_in_negatives"] = counts.get("positives_in_negatives", 0) + kept
 
     ensure_obb_data_yaml(class_name)
     common.touch_marker(marker)
