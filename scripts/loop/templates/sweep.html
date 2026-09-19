@@ -1,0 +1,323 @@
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground: #e9edf1; --surface: #ffffff; --surface-2: #f3f6f9;
+    --ink: #16202b; --muted: #5d6b7a; --line: #cbd5e0;
+    --accent: #1f8b3d; --accent-soft: #e2f3e6;
+    --marker: #d98c00; --marker-soft: #fff1d6;
+    --shadow: 0 1px 2px rgba(22,32,43,.08), 0 8px 24px rgba(22,32,43,.06);
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e141a; --surface: #161e27; --surface-2: #1d2731;
+      --ink: #dce5ee; --muted: #8a9aab; --line: #2b3742;
+      --accent: #4cc264; --accent-soft: #16301f;
+      --marker: #ffb020; --marker-soft: #3a2a08;
+      --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e141a; --surface: #161e27; --surface-2: #1d2731;
+    --ink: #dce5ee; --muted: #8a9aab; --line: #2b3742;
+    --accent: #4cc264; --accent-soft: #16301f;
+    --marker: #ffb020; --marker-soft: #3a2a08;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; padding: 0 16px; padding-block: 20px 40px; }
+  .wrap { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; flex-direction: column; gap: 10px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  .lede { margin: 0; color: var(--muted); font-size: 14px; max-width: 70ch; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  .legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 22px; height: 14px; border-radius: 3px; border: 3px solid; flex: none; }
+  .sw.known { border-color: #40dc6e; }
+  .sw.miss { border-color: var(--marker); border-radius: 50%; width: 16px; height: 16px; }
+
+  .rail { display: flex; gap: 1px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line); }
+  .seg { flex: 1 1 0; background: var(--line); transition: background .15s; }
+  .seg.clean { background: var(--accent); }
+  .seg.marked { background: var(--marker); }
+  .seg.at { background: var(--ink); }
+  .tally { display: flex; gap: 18px; font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .tally b { color: var(--ink); font-weight: 600; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; }
+  .stage { position: relative; background: var(--surface-2); line-height: 0; cursor: crosshair; user-select: none; }
+  .stage img { width: 100%; height: auto; display: block; }
+  .mark { position: absolute; transform: translate(-50%, -50%); border: 2px solid var(--marker); border-radius: 50%; background: rgba(0,0,0,.5); pointer-events: none; }
+  .mark.first { border-width: 3px; box-shadow: 0 0 0 3px rgba(255,255,255,.6); }
+  .axis { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  .axis polygon { fill: rgba(255,176,32,.12); stroke: var(--marker); stroke-width: 3; stroke-linejoin: round; filter: drop-shadow(0 0 2px rgba(0,0,0,.7)); }
+  .axis polyline { fill: none; stroke: var(--marker); stroke-width: 2; stroke-dasharray: 6 4; }
+  .meta { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .meta div { padding: 10px 12px; min-width: 0; }
+  .meta div + div { border-left: 1px solid var(--line); }
+  .meta dt { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 2px; }
+  .meta dd { margin: 0; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta a { color: var(--ink); }
+  .here { padding: 8px 12px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .here b { color: var(--marker); font-weight: 600; }
+
+  .actions { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; }
+  button { font-family: var(--sans); font-size: 15px; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 13px 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); transition: transform .06s; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button kbd { font-family: var(--mono); font-size: 11px; opacity: .7; margin-left: 6px; }
+  .btn-next { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .btn-quiet { color: var(--muted); font-weight: 500; }
+
+  .done { padding: 20px; text-align: center; display: none; flex-direction: column; gap: 14px; }
+  .done.on { display: flex; }
+  .done h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .done p { margin: 0; color: var(--muted); font-size: 14px; }
+  .stat-row { display: flex; justify-content: center; gap: 22px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .stat b { display: block; font-size: 26px; font-weight: 600; line-height: 1.1; }
+  .stat span { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .minor-row { display: flex; gap: 10px; justify-content: center; }
+  .status { font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 7px; justify-content: center; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--accent); }
+  .dot.warn { background: var(--marker); }
+  pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font-family: var(--mono); font-size: 11px; overflow-x: auto; max-height: 220px; text-align: left; margin: 0; }
+  @media (max-width: 640px) {
+    .meta { grid-template-columns: 1fr 1fr; }
+    .meta div:nth-child(3), .meta div:nth-child(4) { border-top: 1px solid var(--line); }
+    .meta div:nth-child(3) { border-left: none; }
+    .actions { grid-template-columns: 1fr 1fr; }
+    .actions .btn-next { grid-column: 1 / -1; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">__EYEBROW__</div>
+    <h1>__HEADING__</h1>
+    <p class="lede">__LEDE__</p>
+    <div class="legend">
+      <span><i class="sw known"></i>model proposal (with confidence)</span>
+      <span><i class="sw miss"></i>your polygon: a real __OBJECT__</span>
+    </div>
+    <div class="rail" id="rail"></div>
+    <div class="tally">
+      <span><b id="t-done">0</b>/<span id="t-all">0</span> windows checked</span>
+      <span>__OBJECTS__ marked <b id="t-marks">0</b></span>
+      <span>windows with __OBJECTS__ <b id="t-winm">0</b></span>
+    </div>
+  </header>
+
+  <section class="card" id="review">
+    <div class="stage" id="stage"><img id="shot" alt="Aerial window with known fan units outlined" draggable="false" /></div>
+    <dl class="meta">
+      <div><dt>Area</dt><dd id="m-area">—</dd></div>
+      <div><dt>Window</dt><dd id="m-grid">—</dd></div>
+      <div><dt>Proposals here</dt><dd id="m-known">—</dd></div>
+      <div><dt>Map</dt><dd><a id="m-map" href="#" target="_blank" rel="noopener">open</a></dd></div>
+    </dl>
+    <div class="here"><span id="m-pos">—</span><span>marked here: <b id="m-here">0</b></span></div>
+  </section>
+
+  <div class="actions" id="actions">
+    <button class="btn-quiet" id="b-back" type="button">Back<kbd>&larr;</kbd></button>
+    <button class="btn-next" id="b-next" type="button">Checked, next window<kbd>&rarr;</kbd></button>
+    <button class="btn-quiet" id="b-undo" type="button">Undo point / polygon<kbd>Z</kbd></button>
+  </div>
+
+  <section class="card done" id="done">
+    <h2>Sweep complete</h2>
+    <div class="stat-row">
+      <div class="stat"><b id="d-win">0</b><span>windows</span></div>
+      <div class="stat"><b id="d-marks">0</b><span>__OBJECTS__</span></div>
+      <div class="stat"><b id="d-winm">0</b><span>windows with __OBJECTS__</span></div>
+    </div>
+    <p>Saved. Reopen any time to revise.</p>
+    <div class="minor-row">
+      <button class="btn-quiet" id="b-again" type="button">Go through again</button>
+      <button class="btn-quiet" id="b-dl" type="button">Download JSON</button>
+    </div>
+    <pre id="d-json" hidden></pre>
+  </section>
+
+  <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span><span id="pending" style="margin-left:10px;color:var(--marker)"></span></div>
+</div>
+
+<script id="window-data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var WINS = JSON.parse(document.getElementById("window-data").textContent);
+  var DOC = "__DOC__";
+  var LS = "__LS__";
+  var MARK_FRAC = 0.11; var draft = [];
+
+  var checked = {}, marks = {};
+  var idx = 0, db = null, saveTimer = null;
+  var $ = function (id) { return document.getElementById(id); };
+  var rail = $("rail"), stage = $("stage"), shot = $("shot");
+  var segs = WINS.map(function () { var s = document.createElement("div"); s.className = "seg"; rail.appendChild(s); return s; });
+
+  function loadLocal() { try { var r = JSON.parse(localStorage.getItem(LS) || "null"); if (r) { checked = r.checked || {}; marks = r.marks || {}; } } catch (e) {} }
+  function saveLocal() { try { localStorage.setItem(LS, JSON.stringify({ checked: checked, marks: marks })); } catch (e) {} }
+  function setStatus(t, c) { $("status").textContent = t; $("dot").className = "dot" + (c ? " " + c : ""); }
+  function payload() { return { __META__, windows: WINS.length, checked: checked, marks: marks, updatedAt: Date.now() }; }
+  function queueRemote() {
+    if (!db) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      db.doc(DOC).set(payload()).then(function () { setStatus("Saved · " + totalMarks() + " marks, " + Object.keys(checked).length + " windows checked", "ok"); })
+        .catch(function () { setStatus("Saved on this device only", "warn"); });
+    }, 500);
+  }
+  function totalMarks() { return Object.keys(marks).reduce(function (n, k) { return n + marks[k].length; }, 0); }
+  function winsWithMarks() { return Object.keys(marks).filter(function (k) { return marks[k].length > 0; }).length; }
+  function firstUnchecked() { for (var i = 0; i < WINS.length; i++) if (!checked[WINS[i].id]) return i; return WINS.length; }
+
+  function migrate(list) {
+    return list.map(function (m) {
+      if (m.pts) return m;
+      if (m.x1 !== undefined) {
+        var dx = m.x2 - m.x1, dy = m.y2 - m.y1, len = Math.hypot(dx, dy) || 0.01, nx = -dy / len * 0.012, ny = dx / len * 0.012;
+        return { pts: [{x: m.x1 + nx, y: m.y1 + ny}, {x: m.x2 + nx, y: m.y2 + ny}, {x: m.x2 - nx, y: m.y2 - ny}, {x: m.x1 - nx, y: m.y1 - ny}] };
+      }
+      var r = 0.02;
+      return { pts: [{x: m.x - r, y: m.y - r}, {x: m.x + r, y: m.y - r}, {x: m.x + r, y: m.y + r}, {x: m.x - r, y: m.y + r}] };
+    });
+  }
+  function inside(pt, poly) {
+    var c = false;
+    for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      if ((poly[i].y > pt.y) !== (poly[j].y > pt.y) && pt.x < (poly[j].x - poly[i].x) * (pt.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x) c = !c;
+    }
+    return c;
+  }
+  function withGeo(w, pts) {
+    return pts.map(function (q) { return { x: q.x, y: q.y, lon: w.west + q.x * (w.east - w.west), lat: w.north - q.y * (w.north - w.south) }; });
+  }
+  function drawMarks() {
+    Array.prototype.slice.call(stage.querySelectorAll(".mark, .axis")).forEach(function (m) { m.remove(); });
+    var w = WINS[idx]; if (!w) return;
+    marks[w.id] = migrate(marks[w.id] || []).map(function (m) { return m.pts[0].lon !== undefined ? m : { pts: withGeo(w, m.pts) }; });
+    var list = marks[w.id];
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "axis"); svg.setAttribute("viewBox", "0 0 100 100"); svg.setAttribute("preserveAspectRatio", "none");
+    list.forEach(function (m) {
+      var pg = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+      pg.setAttribute("points", m.pts.map(function (q) { return (q.x * 100) + "," + (q.y * 100); }).join(" "));
+      pg.setAttribute("vector-effect", "non-scaling-stroke"); svg.appendChild(pg);
+    });
+    if (draft.length) {
+      var pl = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      pl.setAttribute("points", draft.map(function (q) { return (q.x * 100) + "," + (q.y * 100); }).join(" "));
+      pl.setAttribute("vector-effect", "non-scaling-stroke"); svg.appendChild(pl);
+    }
+    stage.appendChild(svg);
+    var rect = shot.getBoundingClientRect();
+    var size = Math.max(10, rect.width * 0.018);
+    draft.forEach(function (q, i) {
+      var el = document.createElement("div");
+      el.className = "mark" + (i === 0 ? " first" : "");
+      el.style.left = (q.x * 100) + "%"; el.style.top = (q.y * 100) + "%";
+      el.style.width = size + "px"; el.style.height = size + "px";
+      stage.appendChild(el);
+    });
+    $("pending").textContent = draft.length ? (draft.length < 3 ? "keep clicking corners" : "click the first point or press Enter to close") : "";
+    $("m-here").textContent = list.length;
+  }
+
+  function render() {
+    var done = Object.keys(checked).length;
+    $("t-done").textContent = done; $("t-all").textContent = WINS.length;
+    $("t-marks").textContent = totalMarks(); $("t-winm").textContent = winsWithMarks();
+    segs.forEach(function (s, i) {
+      var id = WINS[i].id, cls = "seg";
+      if (checked[id]) cls += (marks[id] && marks[id].length) ? " marked" : " clean";
+      if (i === idx) cls += " at";
+      s.className = cls;
+    });
+    var finished = idx >= WINS.length;
+    $("review").hidden = finished; $("actions").hidden = finished;
+    $("done").classList.toggle("on", finished);
+    if (finished) { $("d-win").textContent = WINS.length; $("d-marks").textContent = totalMarks(); $("d-winm").textContent = winsWithMarks(); return; }
+    var w = WINS[idx];
+    shot.src = "data:image/jpeg;base64," + w.img;
+    $("m-area").textContent = w.area + " · cluster " + w.cluster;
+    $("m-grid").textContent = w.grid + "  (" + (idx + 1) + "/" + WINS.length + ")";
+    $("m-known").textContent = w.labels + " labels · " + w.detections + " det.";
+    $("m-map").href = "https://www.google.com/maps/@" + w.lat.toFixed(6) + "," + w.lon.toFixed(6) + ",200m/data=!3m1!1e3";
+    $("m-pos").textContent = w.lat.toFixed(5) + ", " + w.lon.toFixed(5);
+    if (shot.complete) drawMarks(); else shot.onload = drawMarks;
+  }
+
+  function persist() { saveLocal(); queueRemote(); }
+
+  function closeDraft() {
+    var w = WINS[idx]; if (!w || draft.length < 3) return;
+    (marks[w.id] = marks[w.id] || []).push({ pts: withGeo(w, draft) });
+    draft = []; persist(); drawMarks(); render();
+  }
+  stage.addEventListener("click", function (e) {
+    var w = WINS[idx]; if (!w) return;
+    var rect = shot.getBoundingClientRect();
+    var x = (e.clientX - rect.left) / rect.width, y = (e.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+    if (draft.length >= 3 && Math.hypot(x - draft[0].x, y - draft[0].y) < 0.02) { closeDraft(); return; }
+    if (!draft.length) {
+      var list = marks[w.id] || [];
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (inside({x: x, y: y}, list[i].pts)) { list.splice(i, 1); marks[w.id] = list; persist(); drawMarks(); render(); return; }
+      }
+    }
+    draft.push({ x: x, y: y }); drawMarks();
+  });
+
+  function next() { draft = []; var w = WINS[idx]; if (w) { checked[w.id] = true; persist(); } idx = Math.min(idx + 1, WINS.length); render(); }
+  function back() { draft = []; idx = Math.max(0, idx - 1); render(); }
+  function undo() { if (draft.length) { draft.pop(); drawMarks(); return; } var w = WINS[idx]; if (w && marks[w.id] && marks[w.id].length) { marks[w.id].pop(); persist(); render(); } }
+
+  $("b-next").addEventListener("click", next);
+  $("b-back").addEventListener("click", back);
+  $("b-undo").addEventListener("click", undo);
+  $("b-again").addEventListener("click", function () { idx = 0; render(); });
+  $("b-dl").addEventListener("click", function () {
+    var text = JSON.stringify(payload(), null, 2);
+    claude.use("downloads").then(function (dl) {
+      if (!dl) { $("d-json").hidden = false; $("d-json").textContent = text; return; }
+      return dl.save({ filename: "__FILENAME__", data: text });
+    }).catch(function () { $("d-json").hidden = false; $("d-json").textContent = text; });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k === "enter") { e.preventDefault(); closeDraft(); }
+    else if (k === "escape") { e.preventDefault(); draft = []; drawMarks(); }
+    else if (k === "arrowright" || k === " " || k === "n") { e.preventDefault(); next(); }
+    else if (k === "arrowleft") { e.preventDefault(); back(); }
+    else if (k === "z" || k === "u") { e.preventDefault(); undo(); }
+  });
+  window.addEventListener("resize", drawMarks);
+
+  loadLocal(); idx = firstUnchecked(); render(); setStatus("Saved on this device", "warn");
+  if (window.claude && window.claude.use) {
+    window.claude.use("db").then(function (d) {
+      if (!d) return;
+      db = d;
+      return db.doc(DOC).get().then(function (doc) {
+        if (doc && doc.checked && Object.keys(doc.checked).length >= Object.keys(checked).length) {
+          checked = doc.checked || {}; marks = doc.marks || {}; saveLocal(); idx = firstUnchecked();
+        }
+        render(); setStatus("Synced · " + totalMarks() + " marks, " + Object.keys(checked).length + " windows checked", "ok");
+      });
+    }).catch(function () {});
+  }
+})();
+</script>

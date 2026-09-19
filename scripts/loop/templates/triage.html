@@ -1,0 +1,369 @@
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground: #e9edf1;
+    --surface: #ffffff;
+    --surface-2: #f3f6f9;
+    --ink: #16202b;
+    --muted: #5d6b7a;
+    --line: #cbd5e0;
+    --accent: #1f8b3d;
+    --accent-soft: #e2f3e6;
+    --reject: #c0394d;
+    --reject-soft: #fae5e8;
+    --marker: #b58100;
+    --shadow: 0 1px 2px rgba(22, 32, 43, .08), 0 8px 24px rgba(22, 32, 43, .06);
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  :root:not([data-theme="light"]) {
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e141a;
+      --surface: #161e27;
+      --surface-2: #1d2731;
+      --ink: #dce5ee;
+      --muted: #8a9aab;
+      --line: #2b3742;
+      --accent: #4cc264;
+      --accent-soft: #16301f;
+      --reject: #e06072;
+      --reject-soft: #331a1f;
+      --marker: #ffd640;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e141a;
+    --surface: #161e27;
+    --surface-2: #1d2731;
+    --ink: #dce5ee;
+    --muted: #8a9aab;
+    --line: #2b3742;
+    --accent: #4cc264;
+    --accent-soft: #16301f;
+    --reject: #e06072;
+    --reject-soft: #331a1f;
+    --marker: #ffd640;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .35);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 0 16px;
+    padding-block: 20px 40px;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+
+  header { display: flex; flex-direction: column; gap: 12px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -.01em; text-wrap: balance; }
+  .lede { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .rail { display: flex; gap: 1px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line); }
+  .seg { flex: 1 1 0; background: var(--line); transition: background .15s; }
+  .seg.yes { background: var(--accent); }
+  .seg.no { background: var(--reject); }
+  .seg.skip { background: var(--marker); }
+  .seg.at { background: var(--ink); }
+
+  .tally {
+    display: flex; gap: 16px; font-family: var(--mono); font-size: 12px;
+    color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .tally b { color: var(--ink); font-weight: 600; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  figure { margin: 0; background: var(--surface-2); display: grid; place-items: center; padding: 14px; }
+  figure img {
+    width: 100%; max-width: 420px; aspect-ratio: 1; border-radius: 6px; display: block;
+    border: 1px solid var(--line);
+  }
+  .meta {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--line); font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+  .meta div { padding: 10px 12px; }
+  .meta div + div { border-left: 1px solid var(--line); }
+  .meta dt { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 2px; }
+  .meta dd { margin: 0; font-size: 14px; font-weight: 500; }
+  .coords { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 0 12px 10px; word-break: break-all; }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  button {
+    font-family: var(--sans); font-size: 15px; font-weight: 600; cursor: pointer;
+    border-radius: 8px; padding: 13px 14px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink); transition: transform .06s, background .15s;
+  }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .btn-yes { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .btn-no { background: var(--reject-soft); border-color: var(--reject); color: var(--reject); }
+  .btn-yes kbd, .btn-no kbd, .minor kbd { font-family: var(--mono); font-size: 11px; opacity: .75; margin-left: 6px; }
+  .minor-row { display: flex; gap: 10px; }
+  .minor { flex: 1; font-size: 13px; font-weight: 500; padding: 9px; color: var(--muted); }
+
+  .done { padding: 20px; text-align: center; display: none; flex-direction: column; gap: 14px; }
+  .done.on { display: flex; }
+  .done h2 { margin: 0; font-size: 18px; font-weight: 600; }
+  .done p { margin: 0; color: var(--muted); font-size: 14px; }
+  .stat-row { display: flex; justify-content: center; gap: 22px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .stat b { display: block; font-size: 26px; font-weight: 600; line-height: 1.1; }
+  .stat span { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+
+  .status {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 7px; justify-content: center;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--accent); }
+  .dot.warn { background: var(--marker); }
+
+  pre {
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; font-family: var(--mono); font-size: 11px; overflow-x: auto;
+    max-height: 220px; text-align: left; margin: 0;
+  }
+  @media (max-width: 430px) {
+    .meta { grid-template-columns: 1fr 1fr; }
+    .meta div:nth-child(3) { border-left: none; border-top: 1px solid var(--line); grid-column: 1 / -1; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">__EYEBROW__</div>
+    <h1>__HEADING__</h1>
+    <p class="lede">__LEDE__</p>
+    <div class="rail" id="rail"></div>
+    <div class="tally">
+      <span><b id="t-done">0</b>/<span id="t-all">0</span> reviewed</span>
+      <span>__YES_SHORT__ <b id="t-yes">0</b></span>
+      <span>__NO_SHORT__ <b id="t-no">0</b></span>
+      <span>unsure <b id="t-skip">0</b></span>
+    </div>
+  </header>
+
+  <section class="card" id="review">
+    <figure><img id="shot" alt="Aerial crop with the candidate detection outlined" /></figure>
+    <dl class="meta">
+      <div><dt>Confidence</dt><dd id="m-conf">—</dd></div>
+      <div><dt>Long side</dt><dd id="m-size">—</dd></div>
+      <div><dt>Candidate</dt><dd id="m-idx">—</dd></div>
+    </dl>
+    <div class="coords" id="m-pos">—</div>
+  </section>
+
+  <div class="actions" id="actions">
+    <button class="btn-yes" id="b-yes" type="button">__YES__<kbd>F</kbd></button>
+    <button class="btn-no" id="b-no" type="button">__NO__<kbd>N</kbd></button>
+  </div>
+  <div class="minor-row">
+    <button class="minor" id="b-back" type="button">Back<kbd>&larr;</kbd></button>
+    <button class="minor" id="b-skip" type="button">Unsure<kbd>S</kbd></button>
+  </div>
+
+  <section class="card done" id="done">
+    <h2>Review complete</h2>
+    <div class="stat-row">
+      <div class="stat"><b id="d-yes">0</b><span>__YES_SHORT__</span></div>
+      <div class="stat"><b id="d-no">0</b><span>__NO_SHORT__</span></div>
+      <div class="stat"><b id="d-skip">0</b><span>unsure</span></div>
+    </div>
+    <p id="d-note">Decisions are saved. You can reopen this page to revise any of them.</p>
+    <div class="minor-row">
+      <button class="minor" id="b-again" type="button">Review again</button>
+      <button class="minor" id="b-dl" type="button">Download JSON</button>
+    </div>
+    <pre id="d-json" hidden></pre>
+  </section>
+
+  <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span></div>
+</div>
+
+<script id="candidate-data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var CANDS = JSON.parse(document.getElementById("candidate-data").textContent);
+  var DOC = "__DOC__";
+  var LS = "__LS__";
+
+  var decisions = {};
+  var idx = 0;
+  var db = null;
+  var saveTimer = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var rail = $("rail");
+  var segs = CANDS.map(function () {
+    var s = document.createElement("div");
+    s.className = "seg";
+    rail.appendChild(s);
+    return s;
+  });
+
+  function loadLocal() {
+    try {
+      var raw = localStorage.getItem(LS);
+      if (raw) decisions = JSON.parse(raw) || {};
+    } catch (e) { /* private mode */ }
+  }
+  function saveLocal() {
+    try { localStorage.setItem(LS, JSON.stringify(decisions)); } catch (e) { /* ignore */ }
+  }
+
+  function setStatus(text, cls) {
+    $("status").textContent = text;
+    $("dot").className = "dot" + (cls ? " " + cls : "");
+  }
+
+  function queueRemote() {
+    if (!db) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      db.doc(DOC).set({
+        __META__, total: CANDS.length,
+        decisions: decisions, updatedAt: Date.now()
+      }).then(function () {
+        setStatus("Saved " + Object.keys(decisions).length + " decisions", "ok");
+      }).catch(function () {
+        setStatus("Saved on this device only", "warn");
+      });
+    }, 500);
+  }
+
+  function counts() {
+    var c = { yes: 0, no: 0, skip: 0 };
+    Object.keys(decisions).forEach(function (k) { if (c[decisions[k]] !== undefined) c[decisions[k]]++; });
+    return c;
+  }
+
+  function firstUndecided() {
+    for (var i = 0; i < CANDS.length; i++) if (!decisions[CANDS[i].id]) return i;
+    return CANDS.length;
+  }
+
+  function render() {
+    var c = counts();
+    var total = c.yes + c.no + c.skip;
+    $("t-done").textContent = total;
+    $("t-all").textContent = CANDS.length;
+    $("t-yes").textContent = c.yes;
+    $("t-no").textContent = c.no;
+    $("t-skip").textContent = c.skip;
+
+    segs.forEach(function (s, i) {
+      var d = decisions[CANDS[i].id];
+      s.className = "seg" + (d ? " " + d : "") + (i === idx ? " at" : "");
+    });
+
+    var finished = idx >= CANDS.length;
+    $("review").hidden = finished;
+    $("actions").hidden = finished;
+    document.querySelector(".minor-row").hidden = finished;
+    $("done").classList.toggle("on", finished);
+
+    if (finished) {
+      $("d-yes").textContent = c.yes;
+      $("d-no").textContent = c.no;
+      $("d-skip").textContent = c.skip;
+      return;
+    }
+
+    var it = CANDS[idx];
+    $("shot").src = "data:image/jpeg;base64," + it.img;
+    $("m-conf").textContent = it.conf.toFixed(2);
+    $("m-size").textContent = it.size_m.toFixed(1) + " m";
+    $("m-idx").textContent = (idx + 1) + " / " + CANDS.length;
+    $("m-pos").textContent = it.lat.toFixed(6) + ", " + it.lon.toFixed(6) + "  ·  from sample " + it.source_sample;
+    $("b-yes").classList.toggle("btn-yes", true);
+  }
+
+  function decide(verdict) {
+    if (idx >= CANDS.length) return;
+    decisions[CANDS[idx].id] = verdict;
+    saveLocal();
+    queueRemote();
+    idx = Math.min(idx + 1, CANDS.length);
+    render();
+  }
+
+  function back() {
+    idx = Math.max(0, idx - 1);
+    render();
+  }
+
+  $("b-yes").addEventListener("click", function () { decide("yes"); });
+  $("b-no").addEventListener("click", function () { decide("no"); });
+  $("b-skip").addEventListener("click", function () { decide("skip"); });
+  $("b-back").addEventListener("click", back);
+  $("b-again").addEventListener("click", function () { idx = 0; render(); });
+
+  $("b-dl").addEventListener("click", function () {
+    var payload = JSON.stringify({
+      __META__,
+      decisions: CANDS.map(function (c) {
+        return { id: c.id, verdict: decisions[c.id] || null, lon: c.lon, lat: c.lat, conf: c.conf, polygon: c.polygon };
+      })
+    }, null, 2);
+    claude.use("downloads").then(function (dl) {
+      if (!dl) { $("d-json").hidden = false; $("d-json").textContent = payload; return; }
+      return dl.save({ filename: "__FILENAME__", data: payload });
+    }).catch(function () {
+      $("d-json").hidden = false;
+      $("d-json").textContent = payload;
+    });
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key.toLowerCase();
+    if (k === "f" || k === "y" || k === "k" || k === "arrowright") { e.preventDefault(); decide("yes"); }
+    else if (k === "n" || k === "x" || k === "d") { e.preventDefault(); decide("no"); }
+    else if (k === "s") { e.preventDefault(); decide("skip"); }
+    else if (k === "arrowleft" || k === "u") { e.preventDefault(); back(); }
+  });
+
+  loadLocal();
+  idx = firstUndecided();
+  render();
+  setStatus("Saved on this device", "warn");
+
+  if (window.claude && window.claude.use) {
+    window.claude.use("db").then(function (d) {
+      if (!d) { setStatus("Saved on this device", "warn"); return; }
+      db = d;
+      return db.doc(DOC).get().then(function (doc) {
+        var remote = doc && doc.decisions;
+        if (remote && Object.keys(remote).length > Object.keys(decisions).length) {
+          decisions = remote;
+          saveLocal();
+          idx = firstUndecided();
+        }
+        render();
+        setStatus("Synced · " + Object.keys(decisions).length + " decisions saved", "ok");
+      });
+    }).catch(function () { setStatus("Saved on this device", "warn"); });
+  }
+})();
+</script>
