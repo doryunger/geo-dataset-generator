@@ -81,7 +81,7 @@ def _log_training_status_periodically(run_dir: Path, stop_event: threading.Event
 
 def train_obb_class(
     class_name: str, version: str, base_model: str = str(common.MODELS_DIR / "yolo11n-obb.pt"), epochs: int = 100, imgsz: int = 640,
-    patience: int = 30, data_yaml_override: Path | None = None,
+    patience: int = 30, data_yaml_override: Path | None = None, lr0: float | None = None,
 ) -> dict:
     """data_yaml_override points training at a dataset other than class_name's own permanent
     dataset_obb/ -- e.g. a temporary combined dataset pooling a parent class with its
@@ -100,14 +100,7 @@ def train_obb_class(
         results = model.train(
             data=str(data_yaml), epochs=epochs, imgsz=imgsz, patience=patience,
             project=str(common.MODELS_DIR), name=f"{slug}_obb_{version}_run", exist_ok=True,
-            # ultralytics defaults degrees=0.0/flipud=0.0 -- built for ground-level photography,
-            # where rotating or vertically flipping a training image produces an unnatural one
-            # (sky at the bottom). None of that holds for this repo's top-down aerial imagery: an
-            # object viewed from directly overhead is equally valid at any rotation, and a
-            # vertical flip is exactly as realistic as the horizontal flip ultralytics already
-            # enables by default (fliplr=0.5). At the sample counts every class here trains on,
-            # leaving this off throws away free, valid augmentation diversity.
-            degrees=180, flipud=0.5,
+            degrees=180, flipud=0.5, **({"lr0": lr0, "optimizer": "AdamW"} if lr0 is not None else {}),
         )
     finally:
         stop_event.set()
@@ -137,6 +130,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--patience", type=int, default=30)
+    parser.add_argument("--lr0", type=float, default=None, help="initial learning rate with optimizer=AdamW; omitted means ultralytics' auto optimizer, which picks its own rate")
     parser.add_argument(
         "--data-dir", default=None,
         help="Train against this dataset_obb-shaped directory's data.yaml instead of <class>'s own "
@@ -161,7 +155,7 @@ def main():
 
     result = train_obb_class(
         args.class_name, args.version, args.base_model, args.epochs, args.imgsz, args.patience,
-        data_yaml_override=data_yaml_override,
+        data_yaml_override=data_yaml_override, lr0=args.lr0,
     )
     print(f"\nSaved {result['path']}")
 

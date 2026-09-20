@@ -557,6 +557,22 @@ self-produced by `upload_package` in this same file, never from an untrusted sou
 
 ## train_obb.py / train_obb_kfold.py
 
+**`degrees=180, flipud=0.5`** override ultralytics' `degrees=0.0/flipud=0.0` defaults, which are
+built for ground-level photography where a rotated or vertically flipped image is unnatural (sky
+at the bottom). Top-down imagery has no such orientation: an object is equally valid at any
+rotation and a vertical flip is as realistic as the horizontal flip ultralytics already enables
+(`fliplr=0.5`). At this repo's sample counts, leaving them off throws away free augmentation.
+
+**`--lr0`** (2026-09-20) sets the initial learning rate *and* `optimizer=AdamW`, because with the
+default `optimizer=auto` ultralytics ignores `lr0` entirely and derives its own rate (AdamW at
+`0.002*5/(4+nc)` = 0.002 for a one-class model on runs under 10k iterations -- which is what
+every version in this repo has actually trained at, whatever `args.yaml` says under `lr0`).
+Added for fine-tuning a class's own earlier version (`--base-model models/<class>_obb_vN.pt`) as
+a nudge rather than a rewrite: `distillation-column` `v24` (40 epochs) and `v25` (20 epochs),
+both fine-tuned from `v18` at the auto rate on +47 samples, each lost 5-10 of v18's 21
+confident hits at Scholven, multiplied Godorf's false positives and let a factory site cross
+0.7 -- at the auto rate a fine-tune moves the model as far as training from scratch does.
+
 **Folds are built from whole sites, not random sample ids (2026-09-14).** `make_folds` bin-packs
 `obb.cluster_sites` output largest-site-first into the emptiest fold, so no site is ever split
 across folds. The previous `random.shuffle` + stride-slice put objects that sit inside each other's

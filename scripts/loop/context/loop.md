@@ -31,7 +31,12 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    `sampled=0` and `sharpness_vs_train` near 1.0; scan a few unscored candidates first, then
    `--score`. Sharpness is a coarse gate (Mapbox coverage is soft across much of south-east
    Europe and the model does not transfer to it); obliqueness has to be judged by eye from the
-   scan windows -- tank sides visible means oblique, clean circles means nadir.
+   scan windows -- tank sides visible means oblique, clean circles means nadir. **Selection is a
+   queue, not a search** (rule set 2026-09-20 after a round was spent scanning for a site
+   sharper than 0.85 that does not exist): score a batch of ~5 unsampled sites, work them
+   top-down by score, and defer anything under the floor of **0.6** until every site above it is
+   done. Don't scan for a better site than the head of the queue. Current queue: Wesseling 0.75,
+   Heide 0.72, Normandie 0.72, Lingen 0.65, Gelsenkirchen Horst 0.64, Mitteldeutschland 0.61.
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    The substring must match exactly one site (`esso` hits Esso Belgium too, `Rotterdam` hits
    three -- `"Esso Raf"` works). Use a low threshold; the human is the filter and reviewers found
@@ -64,8 +69,16 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    silently left out, whatever `groups.py` shows; in the experiment workspace this also uploads
    to `experiments/packages/`), then
    `python scripts/train_obb.py --class <cls> --version vN+1 --data-dir <workspace>/classes/<cls>/dataset_obb`.
-8. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
-9. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
+8. **Gate the new version** (2026-09-20): `python scripts/loop/benchmark.py --class <cls>
+   --models vN,vN+1` prints hits / false positives at >=0.5 and the >=0.7 count on every swept
+   site, plus counts and max confidence on the negative (factory) sites listed in
+   `<workspace>/loop/<cls>/benchmark.json`. The incumbent is replaced only on a clear win
+   (more hits at no more false positives, no factory crossing 0.7); otherwise it keeps proposing
+   and the new data waits for the next round. Prefer training the candidate as a fine-tune of
+   the incumbent (`train_obb.py --base-model models/<cls>_obb_vN.pt --epochs 20 --lr0 0.0002`)
+   over a fresh run from `yolo11n-obb.pt`; see the log below for why.
+9. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
+10. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
    negatives by provenance with enabled counts; `--enable/--disable <group> [--limit N]`
    (add `--negatives` for the negative store) flips a group for the next package; `--versions
    vA,vB` shows what each trained version contained. To test whether a group hurts: disable it,
@@ -174,6 +187,64 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 8, Shell Wesseling (2026-09-20), fresh site (0.75, head of the queue), v18 proposing:**
+77 proposals at >=0.25 (18 at >=0.5). Reviewer drew 12 misses and judged 42 proposals -- 14 yes,
+17 no, 11 unsure; 26 ground-truth objects. v18 fresh-site: 6 hits / 8 FP at >=0.5, 16/26 = 62%
+at 0.25 with 28 FP (v16 46%/82 FP; v19 27%/54 FP). Samples 172 -> 198 across 38 sites,
+negatives 50/346; `v23` trained on that and its confidence *collapsed* -- at >=0.5 it puts 0-2
+boxes on BP, Godorf and Wesseling and 7 on Scholven where v18 puts 21. Between `v17` (up),
+`v18` (calibrated), `v19` (up) and `v23` (down), every ~20-sample batch has swung the confidence
+scale wholesale; `v18` at 151 samples is the well-calibrated one and stays the working model.
+
+**Site-level reading (the user's frame, 2026-09-20).** The class exists to feed the refinery
+classifier as a booster, so what matters is that confident (>=0.5) boxes land on refineries with
+few false positives, not per-object coverage. By that measure `v18` is already usable: 3-21
+confident hits per refinery seen so far at roughly 50% precision, and its unsures are
+column-like objects at refineries. The remaining check before wiring it in is negative sites:
+scan a few non-refinery industrial areas (chemical plants, power stations, ports) with `v18` and
+confirm >=0.5 detections stay sparse. Coverage rounds continue only if that check passes and
+there is appetite for more labelling; the queue (Heide, Normandie, Lingen, Horst,
+Mitteldeutschland) is recorded in step 1.
+
+**Challengers to v18 on the 198-sample package (2026-09-20), all rejected by `benchmark.py`:**
+`v23` from scratch (confidence collapsed, 0-2 confident hits per refinery); `v24` fine-tuned from
+v18 for 40 epochs and `v25` for 20, both at ultralytics' auto rate (identical behaviour to a
+fresh run: Scholven 21 -> 11/16 hits, Godorf FP 5 -> 17/24, a factory crossing 0.7 -- and
+`--lr0` was silently ignored until it also forced `optimizer=AdamW`, see `scripts.md`); `v26`
+fine-tuned 20 epochs at AdamW 0.0002 -- the first that behaves as a nudge: +2 hits at Wesseling,
++5 at Esso, four of six factories quieter, but Godorf 6 -> 3 hits at 24 FP and Scholven 21 ->
+16, 42 hits / 59 FP total against v18's 43 / 44. Net: 198 samples has not yet beaten 151; the
+fine-tune + gate mechanism is the way each further round is tested.
+
+**Negative-site check (2026-09-20), v18, same scan geometry everywhere.** A second OSM layer
+(`industrial=factory` polygons, `~/Downloads/factories.geojson`) was merged into `sites.json`
+with `sites.py --geojson ... --layer factories` (added that day: `--layer` merges by osm id
+instead of overwriting, and `--list --layer` filters; the refinery rows have no `layer` key and
+count as `refineries`). Six refineries not all in training vs six factories chosen to be as
+refinery-like as the layer offers (steelworks, glass, sugar, wood panels, car plant with its own
+power station, Continental):
+
+| site | ≥0.5 | ≥0.7 | max |
+|---|---|---|---|
+| TotalEnergies Antwerpen (1.96 km²) | 24 | 4 | 0.78 |
+| Shell Wesseling (1.29) | 18 | 4 | 0.84 |
+| Raffinerie Heide (1.00) | 16 | 2 | 0.73 |
+| Esso Rotterdam (1.78) | 12 | 1 | 0.71 |
+| BP Lingen (1.26, sharp 0.65) | 8 | 0 | 0.61 |
+| BP Gelsenkirchen Horst (1.44) | 8 | 1 | 0.70 |
+| VW Wolfsburg (5.31) | 9 | 0 | 0.65 |
+| Swiss Krono (0.49) | 4 | 0 | 0.64 |
+| Ardagh Glass (0.28) | 3 | 0 | 0.56 |
+| Stahlwerk Georgsmarienhütte (0.66) | 3 | 0 | 0.55 |
+| Continental AG (0.51) | 2 | 0 | 0.60 |
+| Suikerfabriek Vierverlaten (0.13) | 1 | 0 | 0.52 |
+
+No factory reached 0.7; five of six refineries did. A site rule of "any detection ≥0.7, or ≥10
+at ≥0.5" separates this table with BP Lingen as the one refinery miss (soft imagery) -- which is
+what the booster-edge role tolerates. This is the POC-level evidence that `v18` is usable as a
+refinery signal; the factory detections are unlabelled, so they are "not confident", not
+"confirmed false".
 
 **Round 7, Esso Rotterdam (2026-09-19), fresh sharp site (0.78), v18 proposing:** 66 proposals at
 >=0.25 (12 at >=0.5 -- v18's scale is sane). Reviewer drew 12 misses and judged 42 proposals --

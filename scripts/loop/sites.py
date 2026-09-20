@@ -4,8 +4,9 @@ scanned sites' imagery sharpness against the class's own training crops.
 
 Usage:
     python scripts/loop/sites.py --class distillation-column --geojson ~/Downloads/refinery-polygon.geojson
+    python scripts/loop/sites.py --class distillation-column --geojson ~/Downloads/factories.geojson --layer factories
     python scripts/loop/sites.py --class distillation-column --score
-    python scripts/loop/sites.py --class distillation-column --list
+    python scripts/loop/sites.py --class distillation-column --list [--layer factories]
 """
 import argparse
 import json
@@ -21,14 +22,17 @@ import loop_common as L
 import common
 import obb
 
+DEFAULT_LAYER = "refineries"
 
-def build(class_name: str, geojson: Path) -> list[dict]:
+
+def build(class_name: str, geojson: Path, layer: str | None = None) -> list[dict]:
     g = json.loads(geojson.read_text(encoding="utf-8"))
     samples = common.load_samples(class_name)
     pts = [Point(*obb._polygon_centroid(r["polygon"])) for r in samples]
-    sites = []
+    sites = L.load_sites(class_name) if layer else []
+    known = {s.get("osm_id") for s in sites}
     for f in g["features"]:
-        if f["geometry"]["type"] != "Polygon":
+        if f["geometry"]["type"] != "Polygon" or (f.get("properties") or {}).get("@id") in known:
             continue
         geom = shape(f["geometry"])
         c = geom.centroid
@@ -38,7 +42,7 @@ def build(class_name: str, geojson: Path) -> list[dict]:
             "osm_id": p.get("@id"), "name": p.get("name:en") or p.get("name") or f"(unnamed {p.get('@id')})",
             "lat": round(c.y, 6), "lon": round(c.x, 6), "area_km2": round(area_km2, 2),
             "sampled": sum(geom.buffer(0.01).contains(q) for q in pts),
-            "geometry": f["geometry"], "scans": [],
+            "geometry": f["geometry"], "scans": [], "layer": layer or DEFAULT_LAYER,
         })
     sites.sort(key=lambda s: -s["area_km2"])
     L.save_sites(class_name, sites)
@@ -88,16 +92,19 @@ def main():
     parser.add_argument("--geojson", type=Path)
     parser.add_argument("--score", action="store_true")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--layer")
     args = parser.parse_args()
 
     if args.geojson:
-        sites = build(args.class_name, args.geojson)
+        sites = build(args.class_name, args.geojson, args.layer)
         print(f"{len(sites)} polygon sites -> {L.sites_path(args.class_name)} ({sum(1 for s in sites if s['sampled'])} already sampled)")
     if args.score:
         sites = score(args.class_name)
         print(f"scored {sum(1 for s in sites if 'sharpness_vs_train' in s)} scanned site(s)")
     if args.list or not (args.geojson or args.score):
         for s in recount_sampled(args.class_name):
+            if args.layer and s.get("layer", DEFAULT_LAYER) != args.layer:
+                continue
             sharp = s.get("sharpness_vs_train")
             scans = ",".join(sc["model"] for sc in s.get("scans", []))
             print(f"{s['area_km2']:>6.2f} km2  sharp={sharp if sharp is not None else '  -  '}  sampled={s['sampled']:<3} scans=[{scans}]  {s['name']}")
