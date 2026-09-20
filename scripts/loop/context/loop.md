@@ -204,6 +204,22 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Round 11, BP Lingen (2026-09-20), fresh, soft (0.65), v18 proposing:** 188 proposals (8 at
+>=0.5), 19 inside the 60 swept windows. Reviewer drew 19 misses, judged 19 inside (7 yes, 10 no,
+2 unsure) and 169 outside (all no); 26 truth. v18 fresh: 7/26 = 27% -- its lowest, on its
+softest site. Samples 249 -> 275 across 46 sites, negatives stored 652. `v29` (fine-tune, 50
+negatives): the flood pattern at full volume -- Wolfsburg 79 detections with 12 above 0.7,
+every port and power station lit. Rejected. **`v30`: same 275 samples + 140 enabled negatives
+(the 50 plus the 15 highest-confidence rejections from each of Scholven, Esso, Wesseling,
+Heide, Normandie, Lingen), fine-tuned from v18 at AdamW 0.0002 / 20 epochs.** First candidate
+that moves the right way: 68 hits / 47 FP on the eight refineries against v18's 54 / 56, every
+fresh site up (Lingen 1 -> 8, Normandie 2 -> 4, Heide 8 -> 14, Wesseling 6 -> 10, Esso 3 -> 7),
+the three oldest training sites down (Scholven 21 -> 15, Godorf 6 -> 4, BP 7 -> 6), 12 of 16
+negatives quieter, Niederaussem 0.72 -> 0.67 while Wolfsburg has one detection at exactly 0.70
+and Chane max 0.70. The lesson: with positives at ~5x the enabled negatives, every fine-tune
+inflated; at ~2x it stopped. Negatives are back on as a lever, in this proportion. **v30 adopted as incumbent (2026-09-20)**;
+v18 stays on disk as the fallback. Round 12 proposes with v30.
+
 **Round 10, TotalEnergies Normandie (2026-09-20), fresh, soft (0.72), 3.2 km2 / 308 windows,
 v18 proposing:** 112 proposals (7 at >=0.5), 29 inside the 60 swept windows. Reviewer drew 11
 misses, judged 28 inside (6 yes, 21 no, 1 unsure) and, on the new `--outside-sweep` page, 83
@@ -254,6 +270,18 @@ fine-tuned 20 epochs at AdamW 0.0002 -- the first that behaves as a nudge: +2 hi
 +5 at Esso, four of six factories quieter, but Godorf 6 -> 3 hits at 24 FP and Scholven 21 ->
 16, 42 hits / 59 FP total against v18's 43 / 44. Net: 198 samples has not yet beaten 151; the
 fine-tune + gate mechanism is the way each further round is tested.
+
+**Look-alike layer (2026-09-20).** Ten sites pulled from Overpass (power=plant coal/gas,
+landuse=harbour, industrial=port/oil/oil_storage within DE/NL/BE) and merged as
+`sites.py --layer lookalikes` from `experiments/loop/distillation-column/lookalikes.geojson`:
+power stations Weisweiler, Niederaussem, Gersteinwerk, Datteln 4; ports Bremerhaven, Dortmund,
+Tollerort; tank-only terminals Nord-West Oelleitung, Grosstanklager, Chane Nieuwe Maas. Shell
+Pernis / Moerdijk and Dow Schkopau came back tagged `industrial=oil` but are refineries or
+crackers and were left out; Kraftwerk Scholven sits inside the Scholven refinery fence, also
+out. All ten are in `benchmark.json`. v18: tank farms and three power stations max 0.38-0.44,
+ports 0.49-0.66, **Niederaussem 0.72** -- four ~10 m round hopper/silo tops in near-nadir
+imagery, the known nadir-circle confusion, not a refinery-vs-plant one. v28 is worse on 14 of
+the 16 negatives (Niederaussem four above 0.7, Chane 0.76), confirming its rejection.
 
 **Negative-site check (2026-09-20), v18, same scan geometry everywhere.** A second OSM layer
 (`industrial=factory` polygons, `~/Downloads/factories.geojson`) was merged into `sites.json`

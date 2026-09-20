@@ -41,10 +41,11 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
    stays enabled. Candidate *models* are rejected freely; candidate *data* is disabled only with
    evidence strong enough to be certain, and a single ablation run is not that (see rule 6).
    `groups.py --disable` exists for data that is known to be wrong.
-3. **Hard negatives are stored, not used, until positives clearly outnumber them.** The
-   reviewer's "no" verdicts are saved as disabled negatives. Around 50 are enabled at the
-   moment; adding more shifted confidence without improving separation. Revisit at several
-   hundred positives.
+3. **Hard negatives are used in proportion, not parked.** The reviewer's "no" verdicts are
+   saved as disabled negatives; enable the highest-confidence ones per site so that enabled
+   negatives stay at roughly half the positive count. Below ~150 positives, none at all (42
+   positives + 49 negatives collapsed a model); at 275 positives, 50 negatives let every
+   fine-tune inflate its confidence and 140 stopped it (`v29` vs `v30`).
 4. **The incumbent model keeps its job until a challenger beats it.** Every round trains a
    candidate; the benchmark (section 4) decides. A rejected candidate costs one GPU run and
    nothing else — the new data stays and is in the next candidate.
@@ -102,10 +103,12 @@ Negative layers, in the order they are being added:
 
 1. **Factories** (`industrial=factory` OSM polygons) — in place. Six sites; no version other than
    the incumbent has kept all six under 0.7.
-2. **Ports, tank terminals, power stations** — next. These share storage tanks and chimneys with
-   refineries, so only the columns tell them apart; this is exactly the discrimination the class
-   is for. Export the same way (`sites.py --geojson <file> --layer <name>` merges without
-   touching the refinery list), scan once, add to `benchmark.json`.
+2. **Ports, tank terminals, power stations** — in place (`lookalikes` layer, ten sites from an
+   Overpass export of `power=plant`, `landuse=harbour`, `industrial=port|oil|oil_storage`).
+   These share storage tanks and chimneys with refineries, so only the columns tell them apart;
+   this is exactly the discrimination the class is for. Check an export by name before merging
+   — `industrial=oil` also tags refineries and crackers. `sites.py --geojson <file> --layer
+   <name>` merges without touching the refinery list; scan once, add to `benchmark.json`.
 3. **The site classifier itself** — once the class is wired into `oil_refinery` as a booster
    edge alongside tanks, chimneys and fan units, the end-to-end check is whether the
    classifier's verdict changes on the benchmark sites and the negatives when the class model
