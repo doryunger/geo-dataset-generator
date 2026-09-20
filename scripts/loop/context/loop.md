@@ -11,6 +11,10 @@ session scratchpad on 2026-09-19 so it can be run without Claude in the loop. Ev
 
 ## Runbook
 
+The process as a whole -- roles, rules, the round table, the gate, adding a class from zero --
+is written up for readers in `docs/training-a-new-class.md`; keep the two in step. This section
+is the operator's command-level version.
+
 This is the method for adding a new detection class, settled on 2026-09-14/19 after fan-unit
 and distillation-column. The rationale and measurements behind each rule are in the sections
 below this one; this section is the runbook. Everything below runs with `WORKSPACE=experiments` (see
@@ -58,6 +62,12 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    Coverage of vN on the site = yeses / (yeses + polygons); precision = yeses /
    (yeses + noes). This split (misses by drawing, hits by judging) is what reviewers naturally
    do and is far cheaper than polygoning everything.
+   On a site much bigger than the swept 60 windows (Normandie: 308 windows, 112 proposals of
+   which 29 inside the sweep), also build `--swept-by <sweep json> --outside-sweep`: the
+   proposals in the unswept windows, as a separate page and JSON (`-outside`). `apply.py` ingests
+   it like any triage; it is never passed to `coverage.py`/`benchmark.py`, since those windows
+   have no drawn misses to measure against. Added 2026-09-20 after the reviewer asked why the
+   triage showed 28 boxes when the site had over a hundred.
 5. `python scripts/loop/coverage.py --class <cls> --site ... --review <sweep json> --extra-truth <triage json> --models vN,vN+1`
    re-runs any model against that ground truth -- the generalisation number for versions that
    haven't trained on the site, memorisation for those that have. `--thresholds` matters when
@@ -114,6 +124,12 @@ number. The class is finished when coverage on a *fresh* site stops improving.
   in root `CLAUDE.md` applies to `groups.py` ablations. Use `groups.py` to *remove data you know
   is wrong*; to test whether correct data *hurts*, average over several folds or accept that the
   answer is a trend over rounds. (`v20` duplicates `v19`; `v21` duplicates `v18`.)
+- **Data is never dropped on suspicion (user's rule, 2026-09-20).** Columns vary by site, so
+  the class needs many rounds of site-varied samples before versions stop swinging; until then
+  every sample from every round stays enabled, and a group is disabled only with evidence
+  strong enough to be certain -- which, given the determinism/instability rule above, a single
+  ablation run does not provide. Candidate *models* are rejected freely by the benchmark;
+  candidate *data* is not.
 - **Promotion is explicit.** A class leaves `experiments/` only by a deliberate move of its
   data and a config change in `oil_refinery/app/server/`; nothing graduates as a side effect
   of training. Columns, when promoted, go in as a *booster* edge, not a `requires` edge --
@@ -187,6 +203,28 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 10, TotalEnergies Normandie (2026-09-20), fresh, soft (0.72), 3.2 km2 / 308 windows,
+v18 proposing:** 112 proposals (7 at >=0.5), 29 inside the 60 swept windows. Reviewer drew 11
+misses, judged 28 inside (6 yes, 21 no, 1 unsure) and, on the new `--outside-sweep` page, 83
+outside (5 yes, 76 no, 2 unsure); 17 truth. v18 fresh: 7/17 = 41% at 0.25 -- its weakest site,
+and 97 of 111 proposals were rejected. Samples 227 -> 249 across 44 sites, negatives 50/473.
+Candidate `v28` (v18 fine-tuned, AdamW 0.0002, 20 epochs, 249): hits 53 -> 86 on the seven
+benchmark sites but FP 53 -> 142 and three factories above 0.7 (Wolfsburg 0.83); matched point
+29 hits / 18 FP. **Rejected; v18 remains.** Fresh-site coverage of v18 so far: Esso 48%,
+Wesseling 62%, Heide 59%, Normandie 41%. Next in queue: Lingen (0.65), Gelsenkirchen Horst
+(0.64), Mitteldeutschland (0.61).
+
+**Round 9, Raffinerie Heide (2026-09-20), fresh (0.72), v18 proposing:** 73 proposals (16 at
+>=0.5); reviewer drew 12 misses, judged 52 -- 17 yes, 30 no, 5 unsure; 29 truth. v18 fresh:
+17/29 = 59% at 0.25, 8 hits / 7 FP at 0.5 (v26 on the same: 12/29). Samples 198 -> 227 across
+40 sites. Candidate `v27` = v18 fine-tuned 20 epochs at AdamW 0.0002 on 227: hits 51 -> 73 on
+the six benchmark sites but FP 51 -> 136 and Wolfsburg 8 -> 30 detections with five above 0.7
+(max 0.82); at the matched point (v27 at >=0.7 vs v18 at >=0.5) 34 hits / 29 FP against 51 /
+51 with a factory now outranking a refinery. **Rejected; v18 remains.** Running tally: 151
+samples (v18) has beaten every challenger trained on 172, 198 and 227 -- from scratch and as
+fine-tunes at two rates. v18's fresh-site coverage: Esso 48%, Wesseling 62%, Heide 59%. Next in
+queue: Normandie (0.72).
 
 **Round 8, Shell Wesseling (2026-09-20), fresh site (0.75, head of the queue), v18 proposing:**
 77 proposals at >=0.25 (18 at >=0.5). Reviewer drew 12 misses and judged 42 proposals -- 14 yes,

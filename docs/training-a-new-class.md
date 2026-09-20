@@ -1,0 +1,137 @@
+# Training a new detection class
+
+This is the process this repo exists to support: taking an object class that no pretrained
+model knows (a distillation column, a fan unit), and growing a detector for it from a few dozen
+hand-drawn samples to a model that is useful in the site classifier — without anyone drawing
+the whole class by hand. It was worked out on `distillation-column` over ten rounds in
+September 2026; the measurements and dead ends behind each rule are in
+`scripts/loop/context/loop.md`, which is also where the per-round log lives. This document is
+the process itself.
+
+Two people-roles appear below. The **reviewer** looks at imagery and says what is there; ten
+minutes per round. The **operator** runs the commands; may be a person or Claude. They are
+usually the same person.
+
+## 1. The idea
+
+A model proposes, a person judges, the judgements become training data, and the model is
+re-trained — one refinery site per round. Two numbers are tracked:
+
+- **Coverage** — of the objects really present on a site the model has never seen, what
+  fraction does it find. This is the loop's own progress metric.
+- **Site-level separation** — does the model put confident detections on the kind of site the
+  class belongs to (refineries) and not on look-alikes (factories, ports, power stations). This
+  is what makes the model useful, and it is the metric a candidate has to win on.
+
+Precision of proposals alone is not a metric: it says nothing about what was never proposed.
+
+The class is **stable** when a new version trained on more data beats the incumbent on the
+benchmark more often than not, and **done** when fresh-site coverage stops improving. Until
+then, rounds continue, and no data collected in earlier rounds is dropped.
+
+## 2. Ground rules
+
+These were each learned by getting it wrong once; the evidence is in `loop.md`.
+
+1. **Everything runs in the experiments workspace.** `WORKSPACE=experiments` for every command,
+   `.env` sourced (`set -a && source .env && set +a`). Production `classes/`, the `/manual`
+   editor on port 8000 and the S3 `packages/` prefix are never touched until a class is
+   promoted deliberately.
+2. **Data is never dropped on suspicion.** Every sample and every triage "yes" from every round
+   stays enabled. Candidate *models* are rejected freely; candidate *data* is disabled only with
+   evidence strong enough to be certain, and a single ablation run is not that (see rule 6).
+   `groups.py --disable` exists for data that is known to be wrong.
+3. **Hard negatives are stored, not used, until positives clearly outnumber them.** The
+   reviewer's "no" verdicts are saved as disabled negatives. Around 50 are enabled at the
+   moment; adding more shifted confidence without improving separation. Revisit at several
+   hundred positives.
+4. **The incumbent model keeps its job until a challenger beats it.** Every round trains a
+   candidate; the benchmark (section 4) decides. A rejected candidate costs one GPU run and
+   nothing else — the new data stays and is in the next candidate.
+5. **Polygons, not points.** The reviewer draws the object body as they would in `/manual`.
+   For columns: the shaft only, never the ground shadow.
+6. **Training is deterministic but not stable.** The trainer is seeded, so re-training the same
+   package gives the same weights; but a change of ~20 samples reshuffles the whole model at
+   this size. Don't re-train to "check for variance", and don't attribute a regression to the
+   last batch from one run per variant.
+7. **Site selection is a queue, not a search.** Score a batch of candidate sites, work
+   top-down, defer those below a floor (0.6) until everything above is done. Imagery quality is
+   what it is.
+8. **One round at a time.** Finish and read a round before starting the next.
+9. **Promotion is explicit.** A class leaves `experiments/` by a deliberate move of its data and
+   a config change in `oil_refinery/app/server/`; nothing graduates as a side effect.
+
+## 3. One round
+
+All paths are under `experiments/loop/<class>/`. Commands are `python scripts/loop/<tool>.py
+--class <class> ...`; on Windows prefix `PYTHONIOENCODING=utf-8`.
+
+| step | who | command / action |
+|---|---|---|
+| 1. Pick the site | operator | `sites.py --list` — the top unsampled site by `sharpness_vs_train` at or above the floor. New candidates: scan a batch, then `sites.py --score`. |
+| 2. Scan | operator | `scan.py --site "<unique substring>" --model vN --conf 0.25` — low threshold on purpose; the reviewer is the filter. |
+| 3. Sweep | operator → reviewer | `pages.py sweep --site ... --model vN --windows 60`; publish `pages/sweep_*.html` as an Artifact with `capabilities: {db: {}, downloads: true}`. Reviewer draws a polygon on every real object **without** a green proposal and leaves proposals alone. |
+| 4. Collect | operator | Read the page's store (Artifact `read_db`, collection `reviews`) or take the downloaded JSON; save as `reviews/<class>-sweep-<site>-vN.json`. |
+| 5. Triage | operator → reviewer | `pages.py triage --site ... --model vN --min-conf 0.25 --swept-by <sweep json>`; publish the same way. Reviewer answers yes / no / unsure for each proposal. Collect as `reviews/<class>-triage-<site>-vN-swept.json`. |
+| 5b. Triage the rest (large sites) | operator → reviewer | When the site has many more windows than were swept, `pages.py triage ... --swept-by <sweep json> --outside-sweep` shows the proposals in the unswept windows. Judge them the same way; collect as `reviews/<class>-triage-<site>-vN-outside.json`. These verdicts become samples and negatives but are **never** ground truth — they have no matching sweep. |
+| 6. Measure | operator | `coverage.py --site ... --review <sweep> --extra-truth <triage> --models vN` — the fresh-site coverage of the incumbent. Record it in `loop.md`. |
+| 7. Ingest | operator | `apply.py --review <sweep json>` then `apply.py --review <triage json>` (idempotent). Polygons and yeses become samples; noes become disabled negatives. |
+| 8. Package | operator | `python scripts/obb.py --class <class> --hard-negatives` — the flag is what includes the enabled negatives. Check the printed train/val counts. |
+| 9. Train a candidate | operator | `python scripts/train_obb.py --class <class> --version vN+1 --base-model models/<class>_obb_vN.pt --epochs 20 --lr0 0.0002 --data-dir experiments/classes/<class>/dataset_obb` — a low-rate fine-tune of the incumbent. A from-scratch run (no `--base-model`, no `--lr0`) is a legitimate second candidate when there is time. |
+| 10. Gate | operator | `benchmark.py --models vN,vN+1` (section 4). Adopt or reject; log the table in `loop.md`. |
+| 11. Add the site to the benchmark | operator | Append the sweep/triage pair to `benchmark.json` so every future candidate is measured on it too. |
+
+The reviewer's share is steps 3 and 5: roughly ten minutes for 60 windows and 30–50 proposals.
+
+## 4. The gate: `benchmark.py`
+
+`benchmark.json` lists two things: **positives** — every swept site with its sweep and triage
+files, so ground truth grows by one site per round — and **negatives** — sites of the kind the
+class must *not* fire on. For each model version it prints, per positive site, hits and false
+positives at ≥ 0.5 and the count at ≥ 0.7; per negative site, the count at ≥ 0.5 and ≥ 0.7 and
+the maximum confidence.
+
+A candidate is **adopted** only on a clear win: at least as many hits at no more false
+positives, and no negative site crossing 0.7. Anything else is a rejection, and the incumbent
+keeps proposing. Where a candidate's confidence scale has visibly shifted (all numbers up or
+all down), re-run it at a matched operating point (`--thr 0.7 --strong 0.85`) before deciding
+— but note the site rule in the classifier uses a fixed threshold, so scale drift is itself a
+cost.
+
+Negative layers, in the order they are being added:
+
+1. **Factories** (`industrial=factory` OSM polygons) — in place. Six sites; no version other than
+   the incumbent has kept all six under 0.7.
+2. **Ports, tank terminals, power stations** — next. These share storage tanks and chimneys with
+   refineries, so only the columns tell them apart; this is exactly the discrimination the class
+   is for. Export the same way (`sites.py --geojson <file> --layer <name>` merges without
+   touching the refinery list), scan once, add to `benchmark.json`.
+3. **The site classifier itself** — once the class is wired into `oil_refinery` as a booster
+   edge alongside tanks, chimneys and fan units, the end-to-end check is whether the
+   classifier's verdict changes on the benchmark sites and the negatives when the class model
+   is swapped. Same gate, one level up.
+
+## 5. Adding a class from zero
+
+Before the loop can run, a class needs a seed:
+
+1. Draw 20–40 samples in `/manual` on port 8001 (`run-experiments.ps1`) across at least three
+   sites; body only, generous crop margin. Add `classes/<class>/subclass_graph.json` with a large
+   `max_piece_m` for compact objects.
+2. `obb.py --class <class>` and `train_obb.py --version v1` from `yolo11n-obb.pt`.
+3. Build `sites.json` from an OSM export of the sites the class lives on:
+   `sites.py --geojson <file>`. Scan a batch, `--score`, and start the queue.
+4. Create `benchmark.json` with an empty positives list and the negative sites, then run round
+   one. From round two on, the previous round's sweep is a positive site.
+
+Expect the first few rounds to look bad — coverage of 20–40 % and versions that swing. That is
+the class finding its feet, not a verdict on the class.
+
+## 6. What "the model is usable" looks like
+
+For `distillation-column` after ten rounds: the incumbent finds half to two-thirds of the
+columns on a refinery it has never seen, about half of its confident boxes are right, and it
+puts at least one detection above 0.7 on every refinery scanned while no factory reaches 0.7.
+That is enough to act as a "this looks like a refinery" signal in the site classifier, which
+is the job. Per-object recall keeps improving through further rounds; it is not the bar for
+wiring the class in.

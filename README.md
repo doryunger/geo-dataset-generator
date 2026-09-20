@@ -1,3 +1,11 @@
+# What this repo is for
+
+A process and the tooling for teaching a detector a new object class from a few dozen
+hand-drawn samples, one site at a time, with a person judging what the model proposes. The
+process is written up in **[docs/training-a-new-class.md](docs/training-a-new-class.md)** —
+start there. The per-class history, measurements and round log are in
+`scripts/loop/context/loop.md`.
+
 # Setup / deploy to a new machine
 
 Only two things are machine-specific and can't be reconstructed: the code, and `.env`

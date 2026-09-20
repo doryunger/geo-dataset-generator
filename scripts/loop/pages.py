@@ -34,7 +34,7 @@ def _candidates(class_name: str, site: dict, version: str) -> list[dict]:
     return json.loads(p.read_text())
 
 
-def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_review: Path) -> list[dict]:
+def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_review: Path, outside: bool = False) -> list[dict]:
     from shapely.geometry import Point, Polygon
     from apply import _sweep_polygons
 
@@ -44,7 +44,8 @@ def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_rev
     polys = [Polygon(p) for p in _sweep_polygons(review)]
     out = []
     for c in cands:
-        if not any(w["west"] <= c["lon"] <= w["east"] and w["south"] <= c["lat"] <= w["north"] for w in swept):
+        inside = any(w["west"] <= c["lon"] <= w["east"] and w["south"] <= c["lat"] <= w["north"] for w in swept)
+        if inside == outside:
             continue
         if any(p.contains(Point(c["lon"], c["lat"])) or L.dist_m((c["lon"], c["lat"]), (p.centroid.x, p.centroid.y)) < L.MATCH_M for p in polys):
             continue
@@ -52,18 +53,19 @@ def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_rev
     return out
 
 
-def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None) -> tuple:
+def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None, outside: bool = False) -> tuple:
     cands = [c for c in _candidates(class_name, site, version) if c["conf"] >= min_conf]
     if swept_by:
-        cands = _restrict_to_sweep(class_name, site, cands, swept_by)
+        cands = _restrict_to_sweep(class_name, site, cands, swept_by, outside)
     site_slug = L.slug(site["name"])
+    suffix = "-outside" if outside else ("-swept" if swept_by else "")
     html = L.fill("triage.html", {
         "TITLE": f"{site['name']} {label} triage",
         "EYEBROW": f"{class_name} &middot; {site['name']} &middot; model {version} &middot; conf &ge; {min_conf:.2f}",
         "HEADING": "What did the model find here?",
-        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{' -- only those inside the windows you swept, and not on a polygon you drew' if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
+        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{(' -- only those outside the windows you swept' if outside else ' -- only those inside the windows you swept, and not on a polygon you drew') if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
         "YES": label.capitalize(), "NO": f"Not a {label}", "YES_SHORT": label, "NO_SHORT": "not",
-        "DOC": f"reviews/{class_name}-triage-{site_slug[:20]}-{version}{'-swept' if swept_by else ''}", "LS": f"{class_name}-triage-{site_slug[:20]}-{version}{'-swept' if swept_by else ''}",
+        "DOC": f"reviews/{class_name}-triage-{site_slug[:20]}-{version}{suffix}", "LS": f"{class_name}-triage-{site_slug[:20]}-{version}{suffix}",
         "META": f'kind: "triage", class: "{class_name}", site: "{site_slug}", model: "{version}", threshold: {min_conf}',
         "FILENAME": f"{class_name}-triage-{site_slug}-{version}.json",
     }, cands)
@@ -132,14 +134,16 @@ def main():
     parser.add_argument("--show-conf", type=float, default=0.25)
     parser.add_argument("--windows", type=int, default=60)
     parser.add_argument("--swept-by", type=Path, default=None, help="triage only: a sweep review JSON; keep proposals inside its windows that are not on its polygons")
+    parser.add_argument("--outside-sweep", action="store_true", help="triage only, with --swept-by: the complement -- proposals outside the swept windows, judged for samples/negatives but never used as ground truth")
     args = parser.parse_args()
     site = L.find_site(args.class_name, args.site)
     label = args.label or args.class_name.replace("-", " ")
     if args.kind == "triage":
-        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label, args.swept_by)
+        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label, args.swept_by, args.outside_sweep)
     else:
         html, n = build_sweep(args.class_name, site, args.model, args.windows, args.show_conf, label)
-    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{L.slug(site['name'])}_{args.model}{'_swept' if args.swept_by else ''}.html"
+    tag = "_outside" if args.outside_sweep else ("_swept" if args.swept_by else "")
+    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{L.slug(site['name'])}_{args.model}{tag}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     print(f"{args.kind}: {n} {'candidates' if args.kind == 'triage' else 'windows'} -> {out} ({out.stat().st_size / 1e6:.1f} MB)")
