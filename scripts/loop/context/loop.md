@@ -218,6 +218,22 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Round 17, Fos-sur-Mer (2026-09-21), fresh (0.81, reviewer called the imagery low), v33
+proposing:** 21 proposals, 19 inside; reviewer drew only 4 misses, judged 18 (9 yes, 6 no, 3
+unsure); 13 truth. v33 fresh: 10/13 = 77% at 0.25, **3 hits / 0 FP at 0.5**. Samples 377 ->
+390 across 56 sites, negatives 201/738. `v36` = v33 fine-tuned: 7 clean at 0.87 vs v33's 18.
+Rejected. Three consecutive fine-tunes of v33 (v34 15, v35 13, v36 7 clean) have each kept
+fewer reliable detections -- the fine-tune lineage looks to be drifting rather than the data
+failing, so a from-scratch candidate on the same package was tried: **`v37` (yolo11n-obb.pt,
+390 + 201, early-stopped) keeps 52 clean detections at 0.78 (74 at FP<=2), look-alike ceiling
+0.75 -- against v33's 18 at 0.84. Adopted 2026-09-21, operating threshold 0.78.** Round 18
+proposes with v37 at Grandpuits (0.72), the last site in the queue.
+
+Lineage so far: v18 (scratch, 151) -> v30 (fine-tune, +negatives) -> v32 (fine-tune) -> v33
+(fine-tune) -> v37 (scratch, 390). Fine-tunes won while the base was young; three in a row
+lost once the base was three fine-tunes deep. From here every round trains both a fine-tune of
+the incumbent and a from-scratch run, and the reliable-detections table picks.
+
 **Round 16, Gunvor Rotterdam (2026-09-21), fresh, sharp (0.84), v33 proposing:** 15 proposals,
 10 inside the sweep; reviewer drew 8 misses, judged 10 (3 yes, 5 no, 2 unsure); 11 truth. v33
 fresh: 3/11 = 27% at 0.25 -- poor for a sharp site. Samples 366 -> 377 across 55 sites,
