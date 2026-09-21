@@ -42,11 +42,14 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    2026-09-21 after the reviewer found Mitteldeutschland at 0.61 too soft and oblique to label
    reliably -- the floor is where the *reviewer* stops being able to see columns, not where the
    model does) until every site above it is done. Don't scan for a better site than the head of
-   the queue. Current queue (2026-09-21, after round 18): Tarragona 1.08, Castello 0.89, A Coruna 0.78;
-   then score a new batch. Deferred (below 0.65): Sarlux 0.64, Mitteldeutschland 0.61, Sines
-   0.44. The score and the reviewer's eye disagree sometimes -- Fos (0.81) and Tarragona (1.08)
+   the queue. Current queue (2026-09-21, after round 20): Gdansk 1.32, Schwechat 1.16, Port-Jerome 0.87,
+   Litvinov 0.81, Grangemouth 0.80. Skipped: A Coruna 0.78 (Spain). Deferred (below 0.65):
+   Sarlux 0.64, Mitteldeutschland 0.61, Sines 0.44. The score and the reviewer's eye disagree sometimes -- Fos (0.81) and Tarragona (1.08)
    both looked blurry to the reviewer; the Laplacian score rewards contrast, not clarity, so the
-   floor stays a reviewer's call and the score only orders the queue.
+   floor stays a reviewer's call and the score only orders the queue. Castello (0.89) was worse
+   still; the reviewer's verdict after rounds 19-20: Spanish Mapbox coverage is blurry whatever
+   the score says, so A Coruna is skipped and the next batch comes from northern Europe (UK,
+   Denmark, Sweden, Poland's non-orthophoto sites).
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    The substring must match exactly one site (`esso` hits Esso Belgium too, `Rotterdam` hits
    three -- `"Esso Raf"` works). Use a low threshold; the human is the filter and reviewers found
@@ -192,6 +195,20 @@ computed, so a sweep's window ids, a scan's candidates and a later coverage run 
 across model versions. Changing `WINDOW_M` or `PAD_M` invalidates comparability with earlier
 sweeps of the same site.
 
+## Sites flagged blurry by the reviewer (candidates for a later ablation)
+
+The reviewer said these looked blurry despite their scores, and asked (2026-09-21) that their
+samples be droppable later if they turn out to confuse the model. Their groups, for
+`groups.py --disable` (and `--negatives` for the rejected ones):
+
+- Fos-sur-Mer (0.81, "quite low" but the model found most columns): `loop-sweep:rhone_energies_fos_sur_mer_refin:v33`, `loop-triage:rhone_energies_fos_sur_mer_refin:v33`, `loop-triage-rejected:rhone_energies_fos_sur_mer_refin:v33`
+- Tarragona (1.08): `loop-sweep:repsol_tarragona_refinery:v37`, `loop-triage:repsol_tarragona_refinery:v37`, `loop-triage-rejected:repsol_tarragona_refinery:v37`
+- Castello (0.89, "could be even worse"): `loop-sweep:refineria_de_castello:v37`, `loop-triage:refineria_de_castello:v37`, `loop-triage-rejected:refineria_de_castello:v37`
+
+The test is the usual one: disable, repackage, train both candidates, `benchmark.py` against
+the incumbent. Under the no-drop rule this is the one case where disabling is justified -- the
+reviewer's own judgement that the labels are unreliable.
+
 ## groups.py -- control over what trains (2026-09-19)
 
 Added after the user set the requirement that the process must let them "discard samples or hard
@@ -219,6 +236,15 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 20, Castello (2026-09-21), fresh (0.89 by score, "could be even worse" than Tarragona
+by eye), v37 proposing:** 93 proposals, 64 inside; reviewer drew 4 misses, judged 63 (7 yes,
+33 no, 23 unsure -- Unsure used liberally on purpose); 11 truth. v37 fresh: 8/11 = 73% at 0.25
+but 59 FP (precision 0.13): blur shows up as false positives, not misses. Samples 433 -> 444
+across 59 sites, negatives 241/831. Gate: `v42` (fine-tune) 47, `v43` (scratch) 13 vs v37 52.
+Rejected; v37 remains. Spanish sites are done with (see step 1); northern batch scored: Gdansk
+1.32, Schwechat 1.16, Port-Jerome 0.87, Litvinov 0.81, Grangemouth 0.80; Coryton 1.45 is a
+demolished refinery (10 proposals on 2.6 km2) and is held back as a possible negative site.
 
 **Round 19, Repsol Tarragona (2026-09-21), fresh (1.08 by score, blurry by eye), v37
 proposing:** 84 proposals, 54 inside; reviewer drew 7 misses, judged 54 inside (20 yes, 29 no,
