@@ -100,6 +100,13 @@ number. The class is finished when coverage on a *fresh* site stops improving.
 
 **Rules learned the hard way:**
 
+- **The end game is precision at a chosen threshold (user, 2026-09-21).** "Even if we might miss
+  some detections, the detections themselves should be reliable." `benchmark.py` ends with a
+  *reliable detections* table per version -- hits at the lowest threshold that silences every
+  look-alike and keeps refinery FP within 0 / 2 / 5 -- and the FP<=0 column is the adoption
+  criterion. First use, round 14: v18 4, v30 3, v32 4, **v33 18** (at 0.84); v32 had looked best
+  on the 0.5 tables and v33 worst, so the old gate would have got this one backwards. Coverage (next
+  rule) is still how a round's progress is measured; it is not what decides a version.
 - **Coverage is the metric, not precision.** Precision on proposals says nothing about what was
   never proposed; two "0 of 105" triage rounds looked like failure until a sweep showed the model
   simply wasn't proposing. Track found/drawn per site per model version.
@@ -128,6 +135,9 @@ number. The class is finished when coverage on a *fresh* site stops improving.
   in root `CLAUDE.md` applies to `groups.py` ablations. Use `groups.py` to *remove data you know
   is wrong*; to test whether correct data *hurts*, average over several folds or accept that the
   answer is a trend over rounds. (`v20` duplicates `v19`; `v21` duplicates `v18`.)
+- **Scope is sharp imagery (user's decision, 2026-09-21).** "We cannot expect to have a class
+  that will work in any condition." Soft-site coverage (Lingen 27%, Normandie 41%) is not a
+  caveat on reliability and gets no rounds; the queue floor is the scope boundary.
 - **Data is never dropped on suspicion (user's rule, 2026-09-20).** Columns vary by site, so
   the class needs many rounds of site-varied samples before versions stop swinging; until then
   every sample from every round stays enabled, and a group is disabled only with evidence
@@ -207,6 +217,16 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 14, Zeeland revisit (2026-09-21), sharp (1.06), v32 proposing:** 14 proposals, all
+inside the sweep; reviewer drew 14 misses (2 already samples), judged 14 (4 yes, 7 no, 3
+unsure); 18 truth. v32 10/18 = 56% at 0.25, 4 hits / 1 FP at 0.5. Samples 319 -> 335 across 48
+sites, negatives 170/682. `v33` = v32 fine-tuned: on the 0.5 tables it looked like another
+inflation (hits 95 -> 141, FP 49 -> 110, three look-alikes above 0.7), but on the new
+reliable-detections table it is the best version yet -- **18 true detections with zero false
+positives and every look-alike silent, at threshold 0.84** (v32: 4 at 0.77; v30: 3; v18: 4).
+**v33 adopted, operating threshold 0.84.** Round 15 proposes with v33 at TotalEnergies
+Antwerpen (0.99).
 
 **Round 13, Esso Belgium (2026-09-21), fresh, sharp (1.16), v30 proposing:** 37 proposals (6 at
 >=0.5), 34 inside the sweep. Reviewer drew 11 misses, judged 34 (14 yes, 16 no, 4 unsure); 25

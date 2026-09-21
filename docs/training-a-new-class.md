@@ -55,12 +55,17 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
    package gives the same weights; but a change of ~20 samples reshuffles the whole model at
    this size. Don't re-train to "check for variance", and don't attribute a regression to the
    last batch from one run per variant.
-7. **Site selection is a queue, not a search.** Score a batch of candidate sites, work
+7. **Scope is sharp imagery.** A class is expected to work where a person can see the objects;
+   soft or strongly oblique coverage (much of south-east Europe; individual sites like Leuna,
+   Lingen, Puertollano) is outside the target, not a gap to close. Low coverage there is not a
+   finding against the model, and no round is spent to improve it. Samples a soft site already
+   contributed stay (rule 2); new effort goes to sharp sites.
+8. **Site selection is a queue, not a search.** Score a batch of candidate sites, work
    top-down, defer those below a floor (0.65) until everything above is done. Imagery quality is
    what it is — but the floor is set by the reviewer: a site where a person can't reliably see
    the objects produces labels worse than none, and is deferred whatever its score.
-8. **One round at a time.** Finish and read a round before starting the next.
-9. **Promotion is explicit.** A class leaves `experiments/` by a deliberate move of its data and
+9. **One round at a time.** Finish and read a round before starting the next.
+10. **Promotion is explicit.** A class leaves `experiments/` by a deliberate move of its data and
    a config change in `oil_refinery/app/server/`; nothing graduates as a side effect.
 
 ## 3. One round
@@ -93,12 +98,18 @@ class must *not* fire on. For each model version it prints, per positive site, h
 positives at ≥ 0.5 and the count at ≥ 0.7; per negative site, the count at ≥ 0.5 and ≥ 0.7 and
 the maximum confidence.
 
-A candidate is **adopted** only on a clear win: at least as many hits at no more false
-positives, and no negative site crossing 0.7. Anything else is a rejection, and the incumbent
-keeps proposing. Where a candidate's confidence scale has visibly shifted (all numbers up or
-all down), re-run it at a matched operating point (`--thr 0.7 --strong 0.85`) before deciding
-— but note the site rule in the classifier uses a fixed threshold, so scale drift is itself a
-cost.
+The table that decides is the last one, **reliable detections**: for each version and each
+false-positive budget (0, 2, 5 wrong boxes across all refineries), the lowest threshold that
+silences every negative site and stays within the budget, and how many true detections survive
+above it. This is the end game as the user set it on 2026-09-21 — *the
+detections must be reliable at the chosen threshold; missing some is acceptable, a wrong
+confident box is not.* A candidate is **adopted** when it keeps more true detections than the
+incumbent in the FP ≤ 0 column (FP ≤ 2 as the tie-break); the threshold in that cell becomes its
+operating threshold. Confidence scale does not matter here, only ranking — `v33` fires far more
+than `v32` at 0.5 and lights three look-alikes, yet its top 18 detections are all real columns
+on refineries (v32's top 4), so it wins. The fixed-threshold tables above are for seeing *where*
+a version changed. `--dump <json>` saves the raw detections so other operating points can be
+read off without re-running.
 
 Negative layers, in the order they are being added:
 
