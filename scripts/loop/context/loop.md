@@ -218,6 +218,19 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Round 18, Grandpuits (2026-09-21), fresh (0.72), v37 proposing:** 10 proposals, all inside;
+reviewer drew 10 misses, judged 10 (4 yes, 5 no, 1 unsure); 14 truth. v37 fresh: 4/14 = 29% at
+0.25 (v33 6/14). Samples 390 -> 404 across 57 sites, negatives 206/743. Both candidates
+rejected: `v38` (v37 fine-tuned) 23 clean at 0.87, `v39` (from scratch on 404) 14 at 0.77,
+against v37's 52 at 0.78 (75 at FP<=2). v39 vs v37 -- same recipe, +14 samples, a quarter of
+the reliable detections -- is the instability rule again, now for from-scratch runs too. v37
+remains. Queue exhausted; next batch to score: Tarragona, Castello, Sines, Sarlux, A Coruna.
+
+v37's fresh-site record so far: Grandpuits 29% (0.72). Incumbent fresh-site coverage by site
+and proposer, sharp sites only (>=0.8): Horst 79% (v30, 0.64 -- soft but the reviewer could
+label it), Esso Belgium 56% (v30, 1.16), Antwerpen 74% (v33, 0.99), Gunvor 27% (v33, 0.84),
+Fos 77% (v33, 0.81).
+
 **Round 17, Fos-sur-Mer (2026-09-21), fresh (0.81, reviewer called the imagery low), v33
 proposing:** 21 proposals, 19 inside; reviewer drew only 4 misses, judged 18 (9 yes, 6 no, 3
 unsure); 13 truth. v33 fresh: 10/13 = 77% at 0.25, **3 hits / 0 FP at 0.5**. Samples 377 ->
