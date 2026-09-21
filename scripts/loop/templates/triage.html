@@ -65,6 +65,26 @@
     padding-block: 20px 40px;
   }
   .wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+  .side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  @media (min-width: 1000px) {
+    html, body { height: 100%; }
+    body { padding: 0; overflow: hidden; }
+    .wrap { max-width: none; margin: 0; display: grid; grid-template-columns: 380px minmax(0, 1fr); height: 100vh; gap: 0; }
+    .side { order: -1; padding: 14px 16px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface); }
+    .side .card { border: none; box-shadow: none; border-radius: 0; background: none; }
+    #review { background: none; border: none; box-shadow: none; border-radius: 0; height: 100vh; overflow: hidden; line-height: 0; }
+    #review figure { display: block; padding: 0; background: none; margin: 0; height: 100vh; }
+    #review figure img { display: block; height: 100vh; width: auto; max-width: 100%; max-height: 100vh; aspect-ratio: auto; border-radius: 0; border: none; object-fit: contain; object-position: left top; }
+    .side .meta { grid-template-columns: 1fr 1fr 1fr; border-top: 1px solid var(--line); }
+    .side .meta div { padding: 6px 0 6px 10px; }
+    .side .meta div:first-child { padding-left: 0; }
+    .side .coords { padding: 0 0 6px; }
+    .side .actions { display: flex; flex-direction: column; gap: 8px; }
+    .side .actions button, .side .minor-row button { width: 100%; padding: 11px 12px; font-size: 14px; }
+    .side .minor-row { display: flex; flex-direction: column; gap: 8px; }
+    h1 { font-size: 17px; }
+    .lede { font-size: 12.5px; line-height: 1.4; }
+  }
 
   header { display: flex; flex-direction: column; gap: 12px; }
   .eyebrow {
@@ -150,6 +170,11 @@
 </style>
 
 <div class="wrap">
+  <section class="card" id="review">
+    <figure><img id="shot" alt="Aerial crop with the candidate detection outlined" /></figure>
+  </section>
+
+  <div class="side">
   <header>
     <div class="eyebrow">__EYEBROW__</div>
     <h1>__HEADING__</h1>
@@ -163,8 +188,7 @@
     </div>
   </header>
 
-  <section class="card" id="review">
-    <figure><img id="shot" alt="Aerial crop with the candidate detection outlined" /></figure>
+  <section class="card" id="info">
     <dl class="meta">
       <div><dt>Confidence</dt><dd id="m-conf">—</dd></div>
       <div><dt>Long side</dt><dd id="m-size">—</dd></div>
@@ -198,6 +222,7 @@
   </section>
 
   <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span></div>
+  </div>
 </div>
 
 <script id="candidate-data" type="application/json">__DATA__</script>
@@ -278,7 +303,7 @@
     });
 
     var finished = idx >= CANDS.length;
-    $("review").hidden = finished;
+    $("review").hidden = finished; $("info").hidden = finished;
     $("actions").hidden = finished;
     document.querySelector(".minor-row").hidden = finished;
     $("done").classList.toggle("on", finished);

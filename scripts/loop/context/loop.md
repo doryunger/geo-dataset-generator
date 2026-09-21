@@ -42,9 +42,9 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    2026-09-21 after the reviewer found Mitteldeutschland at 0.61 too soft and oblique to label
    reliably -- the floor is where the *reviewer* stops being able to see columns, not where the
    model does) until every site above it is done. Don't scan for a better site than the head of
-   the queue. Current queue: Esso Belgium 1.16, Zeeland 1.06 (revisit -- only a 20-window v13
-   sweep and 10 samples), TotalEnergies Antwerpen 0.99; then score Gunvor Rotterdam,
-   Grandpuits, Fos-sur-Mer. Deferred: Mitteldeutschland 0.61.
+   the queue. Current queue (2026-09-21, after rounds 13-15 used Esso Belgium, Zeeland, Antwerpen):
+   Gunvor Rotterdam 0.84, Fos-sur-Mer 0.81, Grandpuits 0.72; then score a new batch. Deferred:
+   Mitteldeutschland 0.61.
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    The substring must match exactly one site (`esso` hits Esso Belgium too, `Rotterdam` hits
    three -- `"Esso Raf"` works). Use a low threshold; the human is the filter and reviewers found
@@ -217,6 +217,25 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 16, Gunvor Rotterdam (2026-09-21), fresh, sharp (0.84), v33 proposing:** 15 proposals,
+10 inside the sweep; reviewer drew 8 misses, judged 10 (3 yes, 5 no, 2 unsure); 11 truth. v33
+fresh: 3/11 = 27% at 0.25 -- poor for a sharp site. Samples 366 -> 377 across 55 sites,
+negatives 195/732. `v35` = v33 fine-tuned: 13 clean detections at 0.86 vs v33's 18 at 0.84
+(25 vs 22 at FP<=2). Rejected on the FP<=0 column; v33 remains. Review pages were rebuilt this
+round to the reviewer's layout: a plain 380 px panel on the left, image filling the rest of
+one viewport, nothing below the image (`templates/sweep.html`, `templates/triage.html`).
+
+**Round 15, TotalEnergies Antwerpen (2026-09-21), fresh, sharp (0.99), v33 proposing:** 86
+proposals (42 at >=0.5), 62 inside the sweep. Reviewer drew only 8 misses, judged 61 inside (19
+yes, 29 no, 13 unsure) and 24 outside (4 yes, 16 no); 27 truth. v33 fresh: 20/27 = 74% at 0.25,
+14/27 at 0.5 with 19 FP -- and 0 hits at its 0.84 operating threshold: the clean point is
+conservative enough that a new site can contribute nothing to it. Samples 335 -> 366 across 50
+sites; negatives 190/727 (20 of Antwerpen's). `v34` = v33 fine-tuned: 15 clean detections at
+0.85 against v33's 18 at 0.84. Rejected; v33 remains. The issue is now separation, not
+ranking: real columns and the best look-alike confusables (hopper tops at 0.81-0.83) overlap on
+the confidence scale, and only more confirmed negatives of that kind plus more sharp positives
+widen the gap.
 
 **Round 14, Zeeland revisit (2026-09-21), sharp (1.06), v32 proposing:** 14 proposals, all
 inside the sweep; reviewer drew 14 misses (2 already samples), judged 14 (4 yes, 7 no, 3
