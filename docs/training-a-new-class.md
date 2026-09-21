@@ -56,8 +56,9 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
    this size. Don't re-train to "check for variance", and don't attribute a regression to the
    last batch from one run per variant.
 7. **Site selection is a queue, not a search.** Score a batch of candidate sites, work
-   top-down, defer those below a floor (0.6) until everything above is done. Imagery quality is
-   what it is.
+   top-down, defer those below a floor (0.65) until everything above is done. Imagery quality is
+   what it is — but the floor is set by the reviewer: a site where a person can't reliably see
+   the objects produces labels worse than none, and is deferred whatever its score.
 8. **One round at a time.** Finish and read a round before starting the next.
 9. **Promotion is explicit.** A class leaves `experiments/` by a deliberate move of its data and
    a config change in `oil_refinery/app/server/`; nothing graduates as a side effect.

@@ -38,9 +38,13 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    scan windows -- tank sides visible means oblique, clean circles means nadir. **Selection is a
    queue, not a search** (rule set 2026-09-20 after a round was spent scanning for a site
    sharper than 0.85 that does not exist): score a batch of ~5 unsampled sites, work them
-   top-down by score, and defer anything under the floor of **0.6** until every site above it is
-   done. Don't scan for a better site than the head of the queue. Current queue: Wesseling 0.75,
-   Heide 0.72, Normandie 0.72, Lingen 0.65, Gelsenkirchen Horst 0.64, Mitteldeutschland 0.61.
+   top-down by score, and defer anything under the floor of **0.65** (raised from 0.6 on
+   2026-09-21 after the reviewer found Mitteldeutschland at 0.61 too soft and oblique to label
+   reliably -- the floor is where the *reviewer* stops being able to see columns, not where the
+   model does) until every site above it is done. Don't scan for a better site than the head of
+   the queue. Current queue: Esso Belgium 1.16, Zeeland 1.06 (revisit -- only a 20-window v13
+   sweep and 10 samples), TotalEnergies Antwerpen 0.99; then score Gunvor Rotterdam,
+   Grandpuits, Fos-sur-Mer. Deferred: Mitteldeutschland 0.61.
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    The substring must match exactly one site (`esso` hits Esso Belgium too, `Rotterdam` hits
    three -- `"Esso Raf"` works). Use a low threshold; the human is the filter and reviewers found
@@ -203,6 +207,34 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 13, Esso Belgium (2026-09-21), fresh, sharp (1.16), v30 proposing:** 37 proposals (6 at
+>=0.5), 34 inside the sweep. Reviewer drew 11 misses, judged 34 (14 yes, 16 no, 4 unsure); 25
+truth. v30 fresh: 14/25 = 56% at 0.25 (v18 the same), and at 0.5 **6 hits / 0 FP**. Samples
+294 -> 319 across 49 sites; negatives 163/675 (Esso Belgium's 16 added). `v32` = v30
+fine-tuned (AdamW 0.0002, 20 epochs): 91 hits / 48 FP on the ten refineries against v30's 79 /
+51, **no look-alike above 0.7 (max 0.61)**, Niederaussem 0.67 -> 0.55, Wolfsburg 0.70 -> 0.58;
+Scholven 15 -> 21, Horst 5 -> 8, Lingen 8 -> 6, Heide 14 -> 11. First clean pass of the gate.
+**v32 adopted (2026-09-21)**; v30 and v18 stay on disk. Round 14 proposes with v32 at Zeeland.
+
+Fresh-site coverage by proposer so far: v18 -- Esso 48, Wesseling 62, Heide 59, Normandie 41,
+Lingen 27; v30 -- Horst 79, Esso Belgium 56 (v18 on the same two: 42, 56).
+
+**Round 13 attempt, Mitteldeutschland/Leuna (2026-09-21):** v30 made 3 proposals on 2.8 km2;
+the reviewer found the imagery too soft and oblique to label and the site was deferred (floor
+raised to 0.65). Round 13 moves to Esso Belgium (1.16).
+
+**Round 12, BP Gelsenkirchen Horst (2026-09-20), fresh, soft (0.64), v30 proposing:** 26
+proposals (9 at >=0.5), 23 inside the sweep. Reviewer drew only 5 misses (previous rounds
+11-19), judged 22 inside (14 yes, 4 no, 4 unsure) and 3 outside (all no); 19 truth. **v30
+fresh: 15/19 = 79% at 0.25, 8 FP, precision 0.67; v18 on the same ground 8/19 = 42%** -- the
+first fresh-site head-to-head between two incumbents, and the adopted one nearly doubled
+coverage on a soft site. Samples 275 -> 294 across 48 sites; negatives 147/659 enabled
+(Horst's 7 added to keep ~half). `v31` = v30 fine-tuned (AdamW 0.0002, 20 epochs): hits 73 ->
+108 but FP 51 -> 119, Bremerhaven 0.82 (four above 0.7), Niederaussem 0.81, Chane 0.76.
+Rejected -- inflation returned at the same 2:1 ratio, so the ratio was necessary for v30 but is
+not sufficient; note v31 is a fine-tune of a fine-tune. v30 remains. Next: Mitteldeutschland
+(0.61), the last site above the floor; then score a new batch.
 
 **Round 11, BP Lingen (2026-09-20), fresh, soft (0.65), v18 proposing:** 188 proposals (8 at
 >=0.5), 19 inside the 60 swept windows. Reviewer drew 19 misses, judged 19 inside (7 yes, 10 no,
