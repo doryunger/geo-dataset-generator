@@ -237,6 +237,19 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Round 21, Gdansk (2026-09-21), fresh, sharp (1.32), v37 proposing:** 35 proposals, 29
+inside; reviewer drew 10 misses, judged 29 (18 yes, 4 no, 7 unsure) and 6 outside (5 no);
+28 truth. v37 fresh: 18/28 = 64% at 0.25, 6 hits / 1 FP at 0.5. Samples 444 -> 472 across 62
+sites, negatives 250/840. Gate (18 refineries, 16 look-alikes): `v44` 3, `v45` 0 clean vs v37
+52. Rejected; v37 remains -- five candidates in a row since round 17. `benchmark.json` was
+rebuilt with ASCII site keys after a cp1252 crash on "Gdansk" corrupted it; use ASCII
+substrings there.
+
+**State at the end of the agreed three-site queue (Tarragona, Castello, Gdansk):** v37, 390
+samples at training time, 52 zero-FP detections with every look-alike silent at 0.78. Next
+step is integration, not another site: wire v37 into `oil_refinery` as the booster edge and
+test refinery vs look-alike end to end; revisit the graph radius there.
+
 **Round 20, Castello (2026-09-21), fresh (0.89 by score, "could be even worse" than Tarragona
 by eye), v37 proposing:** 93 proposals, 64 inside; reviewer drew 4 misses, judged 63 (7 yes,
 33 no, 23 unsure -- Unsure used liberally on purpose); 11 truth. v37 fresh: 8/11 = 73% at 0.25
