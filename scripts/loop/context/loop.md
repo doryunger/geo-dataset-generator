@@ -42,9 +42,11 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    2026-09-21 after the reviewer found Mitteldeutschland at 0.61 too soft and oblique to label
    reliably -- the floor is where the *reviewer* stops being able to see columns, not where the
    model does) until every site above it is done. Don't scan for a better site than the head of
-   the queue. Current queue (2026-09-21, after rounds 13-15 used Esso Belgium, Zeeland, Antwerpen):
-   Gunvor Rotterdam 0.84, Fos-sur-Mer 0.81, Grandpuits 0.72; then score a new batch. Deferred:
-   Mitteldeutschland 0.61.
+   the queue. Current queue (2026-09-21, after round 18): Tarragona 1.08, Castello 0.89, A Coruna 0.78;
+   then score a new batch. Deferred (below 0.65): Sarlux 0.64, Mitteldeutschland 0.61, Sines
+   0.44. The score and the reviewer's eye disagree sometimes -- Fos (0.81) and Tarragona (1.08)
+   both looked blurry to the reviewer; the Laplacian score rewards contrast, not clarity, so the
+   floor stays a reviewer's call and the score only orders the queue.
 2. Scan it: `python scripts/loop/scan.py --class <cls> --site <name substring> --model vN --conf 0.25`.
    The substring must match exactly one site (`esso` hits Esso Belgium too, `Rotterdam` hits
    three -- `"Esso Raf"` works). Use a low threshold; the human is the filter and reviewers found
@@ -217,6 +219,13 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Round 19, Repsol Tarragona (2026-09-21), fresh (1.08 by score, blurry by eye), v37
+proposing:** 84 proposals, 54 inside; reviewer drew 7 misses, judged 54 inside (20 yes, 29 no,
+5 unsure) and 30 outside (2 yes, 26 no); 27 truth. v37 fresh: 20/27 = 74% at 0.25, 8 hits / 3
+FP at 0.5. Samples 404 -> 433 across 58 sites, negatives 226/798. Gate: `v40` (v37 fine-tuned)
+47 clean at 0.85 -- 89 at FP<=2 and 114 at FP<=5, the strongest challenger yet on the looser
+budgets but 5 short on the one that counts; `v41` (scratch) 24. v37 remains. Next: Castello.
 
 **Round 18, Grandpuits (2026-09-21), fresh (0.72), v37 proposing:** 10 proposals, all inside;
 reviewer drew 10 misses, judged 10 (4 yes, 5 no, 1 unsure); 14 truth. v37 fresh: 4/14 = 29% at
