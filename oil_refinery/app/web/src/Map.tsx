@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties,
 } from './api'
+import { classColorExpression } from './classColors'
 import { extentSocket } from './socket'
 import {
   gestureStarted, layersPainted,
@@ -14,6 +15,7 @@ import {
 const MIN_DETECT_ZOOM = 16
 const DETECT_ZOOM = 17
 const MIN_VISIBLE_ZOOM = 12
+const REPAINT_INTERVAL_MS = 350
 
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
@@ -40,7 +42,8 @@ function remainingSeconds(
   if (progress.done < 1 || progress.startedAt === 0) return null
   const perTileMs = (progress.updatedAt - progress.startedAt) / progress.done
   const remainingAtUpdate = perTileMs * (progress.total - progress.done)
-  return Math.max(0, (remainingAtUpdate - (now - progress.updatedAt)) / 1000)
+  const elapsedSinceUpdate = now - progress.updatedAt
+  return (remainingAtUpdate - elapsedSinceUpdate) / 1000
 }
 
 function currentViewport(map: maplibregl.Map): Viewport {
@@ -109,6 +112,7 @@ export default function Map() {
   const siteSeenInViewRef = useRef<string | null>(null)
   const [hasRoamed, setHasRoamed] = useState(false)
   const [arrivedGeneration, setArrivedGeneration] = useState(0)
+  const lastPaintAtRef = useRef(0)
 
   useEffect(() => {
     if (sitePhase !== 'processing') return
@@ -273,7 +277,7 @@ export default function Map() {
     map.addSource('detections', { type: 'geojson', data: EMPTY_DETECTIONS })
     map.addLayer({
       id: 'detection-outline', type: 'line', source: 'detections',
-      paint: { 'line-color': '#ff00aa', 'line-width': 2 },
+      paint: { 'line-color': classColorExpression() as maplibregl.ExpressionSpecification, 'line-width': 2 },
     })
     map.addLayer({
       id: 'detection-label', type: 'symbol', source: 'detections', minzoom: MIN_DETECT_ZOOM,
@@ -281,7 +285,11 @@ export default function Map() {
         'text-field': ['get', 'label'], 'text-size': 11, 'text-font': ['Open Sans Semibold'],
         'text-anchor': 'top', 'text-offset': [0, 0.4],
       },
-      paint: { 'text-color': '#fff', 'text-halo-color': '#ff00aa', 'text-halo-width': 1.5 },
+      paint: {
+        'text-color': '#101010',
+        'text-halo-color': classColorExpression() as maplibregl.ExpressionSpecification,
+        'text-halo-width': 1.6,
+      },
     })
     map.addSource('site-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })
     map.addLayer({
@@ -295,14 +303,24 @@ export default function Map() {
     const map = mapRef.current
     if (!map || !isMapLoaded || readyGeneration === paintedGeneration) return
 
-    const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
-    const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
-    boundariesSource?.setData(sites)
-    labelsSource?.setData(labelsFrom(sites))
-    const detectionsSource = map.getSource('detections') as maplibregl.GeoJSONSource | undefined
-    detectionsSource?.setData(detections)
+    const paint = () => {
+      const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
+      const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
+      boundariesSource?.setData(sites)
+      labelsSource?.setData(labelsFrom(sites))
+      const detectionsSource = map.getSource('detections') as maplibregl.GeoJSONSource | undefined
+      detectionsSource?.setData(detections)
+      lastPaintAtRef.current = performance.now()
+      dispatch(layersPainted(readyGeneration))
+    }
 
-    dispatch(layersPainted(readyGeneration))
+    const sinceLastPaint = performance.now() - lastPaintAtRef.current
+    if (sinceLastPaint >= REPAINT_INTERVAL_MS) {
+      paint()
+      return
+    }
+    const timer = setTimeout(paint, REPAINT_INTERVAL_MS - sinceLastPaint)
+    return () => clearTimeout(timer)
   }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, sites, detections])
 
   return (
@@ -326,7 +344,8 @@ export default function Map() {
           <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
             {(() => {
               const left = remainingSeconds(siteProgress, now)
-              return left === null ? 'estimating…' : `about ${Math.ceil(left)} s left`
+              if (left === null) return 'estimating…'
+              return left < 1.5 ? 'almost done…' : `about ${Math.ceil(left)} s left`
             })()}
           </div>
         </div>

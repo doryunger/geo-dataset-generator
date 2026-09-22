@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { ComponentSummary } from './api'
+import { classColor } from './classColors'
 import { type RootState, useAppSelector } from './store'
 
 const GREY = '#3a3a3a'
@@ -16,9 +17,11 @@ function childColor(c: ComponentSummary): string {
   return GREY
 }
 
-function node(color: string, wide: boolean): CSSProperties {
+function node(color: string, wide: boolean, outline?: string): CSSProperties {
   return {
-    background: color, color: '#fff', borderRadius: 8, padding: wide ? '8px 18px' : '6px 10px',
+    background: color, color: '#fff', borderRadius: 8,
+    padding: wide ? '8px 18px' : '5px 9px',
+    borderStyle: 'solid', borderWidth: outline ? 2 : 0, borderColor: outline ?? 'transparent',
     fontWeight: wide ? 'bold' : 'normal', fontSize: wide ? 14 : 12, textAlign: 'center',
     minWidth: wide ? 140 : 96, boxShadow: '0 1px 4px rgba(0,0,0,0.5)', transition: 'background 300ms',
   }
@@ -57,7 +60,7 @@ export default function GraphPanel() {
         {components.map((c) => (
           <div key={c.component} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <div style={connector} />
-            <div style={node(childColor(c), false)}>
+            <div style={node(childColor(c), false, classColor(c.component))}>
               <div>{c.component}</div>
               <div style={{ fontSize: 11, opacity: 0.85 }}>
                 {c.count}{c.min_count > 1 ? ` / ${c.min_count}` : ''}
