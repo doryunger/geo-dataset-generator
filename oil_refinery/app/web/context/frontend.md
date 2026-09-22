@@ -93,12 +93,35 @@ ms/tile since `siteProcessingStarted` times the tiles left, counting down betwee
 the user asked for the time only (2026-09-22). A cached site finishes before the first tick, which
 is fine.
 
+## classColors.ts
+
+One colour per component class -- storage tank cyan, fan-unit amber, distillation-column magenta --
+used in two places that must agree: `classColorExpression()` is the MapLibre `match` expression for
+the detection outline and label halo, and `classColor()` gives the same colour to each child node's
+border in `GraphPanel`. Both spellings a model can emit are listed in the match (`fan-unit` and
+`fanunit`, etc.), because `fuser` keeps whichever label won the merge. Everything was one pink
+before; per-class colours make it readable which component a box is without reading its label.
+
+## Painting
+
 Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `detection-label`
 symbols from zoom 16) fed from each result's `detections` collection, replacing the raster
 `/api/detections` overlay that only existed at z17 -- a whole site sits at z14-15 and the boxes
 have to be visible there as tiles finish. The only polygon drawn is the classifier's hull of the
 detections (`site-boundaries`); the site's own OSM polygon is deliberately not drawn (see the
 server doc).
+
+Repaints are coalesced to one every `REPAINT_INTERVAL_MS` (350 ms): a site sends a message per
+tile, and calling `setData` with the whole accumulated collection 50-90 times in a run made
+MapLibre reparse and re-index it each time. Measured main-thread cost is small either way (~400 ms
+of long tasks across a whole run, worst 90 ms), so the coalescing is about leaving the browser room
+rather than fixing a stall. The stutter seen during a run is GPU contention: inference pins the
+card at 100% and the browser composites on the same GPU, which is inherent to running both on one
+machine.
+
+The countdown never shows "0 s left" -- under 1.5 s it reads "almost done...", because sitting on
+zero for the last seconds of a run reads as a hung spinner. It still steps unevenly (7 -> 3 -> 2)
+because tiles arrive in batches of 16, not one at a time.
 
 ## store.ts
 
