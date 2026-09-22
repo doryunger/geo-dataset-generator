@@ -46,7 +46,16 @@ placeholder row of grey nodes keeps the layout stable once a site is selected bu
 back yet. It renders nothing at all when no site is selected and no component has a count, so the
 app opens as a bare map with the site list -- the first thing the user saw on a cold start was
 otherwise an all-zero graph plus a "zoom in to 16+" banner, which reads like something is wrong.
-That banner is likewise suppressed until the user has actually moved the map (`hasRoamed`).
+That banner is likewise suppressed until the user has actually moved the map -- `hasRoamed` is set
+only from a `movestart` carrying an `originalEvent`, so the intro flight and site landings do not
+count as roaming.
+
+The app opens at zoom 1 over the Atlantic (`INITIAL_ZOOM`, `INITIAL_CENTER`) and, once
+`GET /api/sites` returns, flies to the first site over 4 s (`flyToRequested`, a camera move with no
+selection, so nothing is processed until the user picks a site). Starting the camera already
+parked over a refinery made the demo look pre-arranged, which is what the user objected to;
+`flyTo` with `cameraForBounds` gives the arc out of the globe view, and `durationMs` on the action
+keeps the intro (4 s) separate from a site landing (1.6 s).
 
 ## Site flow (store + Map.tsx)
 

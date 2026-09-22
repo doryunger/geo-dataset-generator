@@ -85,7 +85,7 @@ export async function fetchSites(): Promise<Site[]> {
   return res.json()
 }
 
-export const INITIAL_ZOOM = 14
+export const INITIAL_ZOOM = 1
 
 export interface ExtentSocketHandlers {
   onServerReady: () => void

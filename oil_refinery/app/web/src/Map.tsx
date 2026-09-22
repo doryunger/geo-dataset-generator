@@ -19,7 +19,7 @@ function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
 }
 
-const INITIAL_CENTER: [number, number] = [9.9517431, 53.4770211]
+const INITIAL_CENTER: [number, number] = [0, 20]
 
 function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
   const n = 2 ** z
@@ -190,9 +190,9 @@ export default function Map() {
       moveEndDebounceTimer = setTimeout(() => dispatch(viewportSettled(currentViewport(map))), 300)
     })
 
-    map.on('movestart', () => {
+    map.on('movestart', (e) => {
       clearTimeout(moveEndDebounceTimer)
-      setHasRoamed(true)
+      if ((e as { originalEvent?: unknown }).originalEvent) setHasRoamed(true)
       dispatch(gestureStarted())
     })
 
@@ -213,7 +213,8 @@ export default function Map() {
     const map = mapRef.current
     if (!map || !isMapLoaded || !flyTo) return
     const [west, south, east, north] = flyTo.bbox
-    map.fitBounds([[west, south], [east, north]], { padding: 40, maxZoom: DETECT_ZOOM, duration: 1200 })
+    const camera = map.cameraForBounds([[west, south], [east, north]], { padding: 40, maxZoom: DETECT_ZOOM })
+    if (camera) map.flyTo({ ...camera, duration: flyTo.durationMs, essential: true })
   }, [isMapLoaded, flyTo])
 
   useEffect(() => {

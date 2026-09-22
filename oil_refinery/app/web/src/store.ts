@@ -30,7 +30,7 @@ interface MapState {
   paintedGeneration: number
   viewport: Viewport | null
   gestureActive: boolean
-  flyTo: { bbox: [number, number, number, number]; generation: number } | null
+  flyTo: { bbox: [number, number, number, number]; durationMs: number; generation: number } | null
   selectedSite: Site | null
   sitePhase: SitePhase | null
   siteProgress: { done: number; total: number; startedAt: number; updatedAt: number }
@@ -104,6 +104,9 @@ const mapSlice = createSlice({
     layersPainted(state, action: PayloadAction<number>) {
       state.paintedGeneration = Math.max(state.paintedGeneration, action.payload)
     },
+    flyToRequested(state, action: PayloadAction<{ bbox: [number, number, number, number]; durationMs: number }>) {
+      state.flyTo = { ...action.payload, generation: (state.flyTo?.generation ?? 0) + 1 }
+    },
     siteSelected(state, action: PayloadAction<Site>) {
       state.selectedSite = action.payload
       state.sitePhase = 'landing'
@@ -112,7 +115,7 @@ const mapSlice = createSlice({
       state.sites = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
       state.readyGeneration += 1
-      state.flyTo = { bbox: action.payload.bbox, generation: (state.flyTo?.generation ?? 0) + 1 }
+      state.flyTo = { bbox: action.payload.bbox, durationMs: 1600, generation: (state.flyTo?.generation ?? 0) + 1 }
     },
     siteProcessingStarted(state) {
       state.sitePhase = 'processing'
@@ -131,7 +134,7 @@ const mapSlice = createSlice({
 
 export const {
   zoomChanged, mapLoaded, gestureStarted, viewportSettled,
-  resultReceived, layersPainted, siteSelected, siteProcessingStarted, siteCleared, reset,
+  resultReceived, layersPainted, flyToRequested, siteSelected, siteProcessingStarted, siteCleared, reset,
 } = mapSlice.actions
 
 interface ConnectionState {
