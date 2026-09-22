@@ -44,7 +44,6 @@ export interface Site {
   kind: 'refinery' | 'look-alike'
   type: string
   bbox: [number, number, number, number]
-  geometry: { type: 'Polygon'; coordinates: number[][][] }
   tiles: number
 }
 

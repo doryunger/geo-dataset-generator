@@ -34,12 +34,6 @@ function intersects(v: Viewport, bbox: [number, number, number, number]): boolea
   return v.west < east && v.east > west && v.south < north && v.north > south
 }
 
-const EMPTY_POLYGON = { type: 'FeatureCollection', features: [] } as const
-
-function polygonFeature(geometry: { type: 'Polygon'; coordinates: number[][][] }) {
-  return { type: 'FeatureCollection' as const, features: [{ type: 'Feature' as const, geometry, properties: {} }] }
-}
-
 function remainingSeconds(
   progress: { done: number; total: number; startedAt: number; updatedAt: number }, now: number,
 ): number | null {
@@ -257,11 +251,6 @@ export default function Map() {
       id: 'site-outline', type: 'line', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
       paint: { 'line-color': '#ff00aa', 'line-width': 4 },
     })
-    map.addSource('site-area', { type: 'geojson', data: EMPTY_POLYGON })
-    map.addLayer({
-      id: 'site-area-outline', type: 'line', source: 'site-area',
-      paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.8 },
-    })
     map.addSource('detections', { type: 'geojson', data: EMPTY_DETECTIONS })
     map.addLayer({
       id: 'detection-outline', type: 'line', source: 'detections',
@@ -296,13 +285,6 @@ export default function Map() {
 
     dispatch(layersPainted(readyGeneration))
   }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, sites, detections])
-
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map || !isMapLoaded) return
-    const siteAreaSource = map.getSource('site-area') as maplibregl.GeoJSONSource | undefined
-    siteAreaSource?.setData(selectedSite ? polygonFeature(selectedSite.geometry) : EMPTY_POLYGON)
-  }, [isMapLoaded, selectedSite])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

@@ -63,7 +63,7 @@ export default function SitesPanel() {
       <div style={{ opacity: 0.7, lineHeight: 1.5 }}>
         Pick a site. The map fits it, then every zoom-17 tile inside it is run through the detectors,
         live. Detections appear as tiles finish; the graph on the map fills in as components reach
-        their required count. A refinery is all four components together, within 300 m.
+        their required count. A refinery is all four components together, within 200 m.
       </div>
       <SiteList
         title="Refineries" sites={sites.filter((s) => s.kind === 'refinery')}

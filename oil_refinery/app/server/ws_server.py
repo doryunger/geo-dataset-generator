@@ -238,7 +238,8 @@ async def _prefetch_with_ring(tiles: list[tuple[int, int, int]]) -> None:
 
 async def process_site(websocket: WebSocket, site: dict, session: "_Session") -> None:
     tiles = _center_out_order(set(sites.site_tiles(site)))
-    session.known_tiles |= set(tiles)
+    session.known_tiles = set(tiles)
+    session.tracker = site_tracker.SiteTracker()
     t0 = time.monotonic()
     logger.info("process_site: %s -- %d tile(s)", site["id"], len(tiles))
     await _prefetch_with_ring(tiles)

@@ -696,6 +696,26 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Proximity radius and the drawn polygon (2026-09-22)
+
+`default_max_distance_m` / `merge_distance_m` are **200 m**, down from 300. The user asked for
+150; measured on the cached 57-site benchmark (`eval_sites.py --max-distance-m`), refineries
+identified were 18/18 at 300 and 200, 14/18 at 150, 9/18 at 100, with 0/39 look-alikes at every
+radius. 200 m is the tightest setting that keeps every refinery, so it was taken instead of 150.
+Re-run that sweep before changing it again -- the look-alike side has slack, the refinery side
+does not.
+
+The map draws only `classifier.polygon_for`'s hull of the detections (buffered by
+`BOUNDARY_BUFFER_M`, 100 m). The OSM site polygon used to be drawn as a dashed outline while a
+site was selected; it was removed because the point of the demo is what the detector found, not
+what OSM says is there, and `GET /api/sites` no longer sends `geometry` at all (only `bbox`, for
+the camera fit).
+
+`process_site` resets `session.tracker` and `session.known_tiles` for each run. The tracker is
+built for roaming -- it keeps every site it has ever seen so a site doesn't vanish when you pan
+away -- which meant selecting a look-alike still showed the polygons and readout cards of
+refineries selected earlier in the session, in a different country.
+
 ## ws_server.py -- streaming (site and roam)
 
 Both paths stream per tile. `classify_extent` (free roam) takes the websocket and sends an

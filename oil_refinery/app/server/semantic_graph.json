@@ -3,10 +3,10 @@
     "oil_refinery": {
       "kind": "site",
       "min_types_present": 4,
-      "default_max_distance_m": 300,
+      "default_max_distance_m": 200,
       "default_min_distance_m": 0,
       "default_boost": 0.1,
-      "merge_distance_m": 300
+      "merge_distance_m": 200
     },
     "storage tank": {
       "kind": "component"

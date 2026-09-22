@@ -82,6 +82,6 @@ def detection_features(detections_by_tile: dict[tuple[int, int, int], list[dict]
 @router.get("/api/sites")
 def list_sites():
     return [
-        {**{k: s[k] for k in ("id", "name", "kind", "type", "bbox", "geometry")}, "tiles": len(site_tiles(s))}
+        {**{k: s[k] for k in ("id", "name", "kind", "type", "bbox")}, "tiles": len(site_tiles(s))}
         for s in SITES
     ]

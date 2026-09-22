@@ -64,8 +64,9 @@ is fine.
 Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `detection-label`
 symbols from zoom 16) fed from each result's `detections` collection, replacing the raster
 `/api/detections` overlay that only existed at z17 -- a whole site sits at z14-15 and the boxes
-have to be visible there as tiles finish. The selected site's polygon is drawn as a dashed white
-outline (`site-area`).
+have to be visible there as tiles finish. The only polygon drawn is the classifier's hull of the
+detections (`site-boundaries`); the site's own OSM polygon is deliberately not drawn (see the
+server doc).
 
 ## store.ts
 
