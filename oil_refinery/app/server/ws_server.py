@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 GRAPH: dict = site_graph.load_graph()
 MAX_RELEVANT_DISTANCE_M = site_graph.max_relevant_distance_m(GRAPH)
+DEFAULT_REF_LAT = 50.0
 
 
 @dataclass
@@ -127,11 +128,11 @@ def _ref_lat_from_detections(detections: list[dict], z: int) -> float:
 
 def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker) -> dict:
     fresh_matches = []
+    ref_lat = _ref_lat(detections_by_tile) if detections_by_tile else DEFAULT_REF_LAT
     if detections_by_tile:
-        ref_lat = _ref_lat(detections_by_tile)
         fresh_matches = classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH)
 
-    tracked = tracker.reconcile(fresh_matches, GRAPH, tile_server.DETECT_ZOOM)
+    tracked = tracker.reconcile(fresh_matches, GRAPH, tile_server.DETECT_ZOOM, ref_lat)
     features = []
     for r in tracked:
         site_ref_lat = _ref_lat_from_detections(r["detections"], tile_server.DETECT_ZOOM)
@@ -157,11 +158,17 @@ def _result_payload(
     kind: str, detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker, **extra,
 ) -> dict:
     all_detections = [d for dets in detections_by_tile.values() for d in dets]
+    ref_lat = _ref_lat(detections_by_tile) if detections_by_tile else DEFAULT_REF_LAT
     return {
         "type": kind,
         "sites": _feature_collection(detections_by_tile, tracker),
-        "detections": {"type": "FeatureCollection", "features": sites.detection_features(detections_by_tile)},
-        "components": sites.component_summary(all_detections, GRAPH),
+        "detections": {
+            "type": "FeatureCollection",
+            "features": sites.detection_features(
+                detections_by_tile, sites.qualifying_keys(detections_by_tile, GRAPH, ref_lat),
+            ),
+        },
+        "components": sites.component_summary(all_detections, GRAPH, ref_lat),
         **extra,
     }
 
@@ -257,6 +264,7 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
     }
     detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}
     all_detections: list[dict] = []
+    site_ref_lat = _ref_lat(set(tiles))
     done = 0
     last_classified_at = 0.0
     while pending:
@@ -271,7 +279,7 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
             message = {
                 "type": "site_tile", "site": site["id"], "tile": common.tile_id(*key), "done": done, "total": len(tiles),
                 "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets or []})},
-                "components": sites.component_summary(all_detections, GRAPH),
+                "components": sites.component_summary(all_detections, GRAPH, site_ref_lat),
             }
             if time.monotonic() - last_classified_at >= SITE_CLASSIFY_INTERVAL_S:
                 message["sites"] = _feature_collection(detections_by_tile, session.tracker)
@@ -281,7 +289,13 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
     await websocket.send_json({
         "type": "site_done", "site": site["id"],
         "sites": _feature_collection(detections_by_tile, session.tracker),
-        "components": sites.component_summary(all_detections, GRAPH),
+        "detections": {
+            "type": "FeatureCollection",
+            "features": sites.detection_features(
+                detections_by_tile, sites.qualifying_keys(detections_by_tile, GRAPH, site_ref_lat),
+            ),
+        },
+        "components": sites.component_summary(all_detections, GRAPH, site_ref_lat),
     })
 
 

@@ -53,7 +53,7 @@ class SiteTracker:
         self._counters[site] = self._counters.get(site, 0) + 1
         return f"{site}_{self._counters[site]}"
 
-    def reconcile(self, fresh_results: list[dict], graph: dict, z: int) -> list[dict]:
+    def reconcile(self, fresh_results: list[dict], graph: dict, z: int, ref_lat: float) -> list[dict]:
         by_site: dict[str, list[dict]] = {}
         for sid, tracked in self._sites.items():
             by_site.setdefault(tracked["site"], []).append({"id": sid, "detections": tracked["detections"]})
@@ -104,6 +104,6 @@ class SiteTracker:
 
         out = []
         for sid, tracked in self._sites.items():
-            scored = classifier.score(tracked["detections"], tracked["site"], graph)
+            scored = classifier.score(tracked["detections"], tracked["site"], graph, z, ref_lat)
             out.append({"id": sid, **scored, "site": tracked["site"], "detections": tracked["detections"]})
         return out

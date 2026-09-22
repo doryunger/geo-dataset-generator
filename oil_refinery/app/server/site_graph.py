@@ -18,6 +18,13 @@ def _validate(raw: dict) -> dict:
             raise ValueError(f"node {name!r} has no valid kind (site/component): {cfg!r}")
         if kind == "site" and any(f not in cfg for f in SITE_DEFAULT_FIELDS):
             raise ValueError(f"site node {name!r} is missing one of {SITE_DEFAULT_FIELDS}: {cfg!r}")
+        if kind == "site" and "group_within_m" in cfg:
+            raise ValueError(
+                f"site node {name!r} has 'group_within_m': that is a component's own member spacing, "
+                "site nodes use default_max_distance_m for the distance between different components"
+            )
+        if kind == "component" and cfg.get("group_within_m") is not None and cfg["group_within_m"] <= 0:
+            raise ValueError(f"component {name!r} has a non-positive 'group_within_m': {cfg!r}")
 
     required_components: dict[str, set[str]] = {}
     for edge in raw.get("edges", []):
@@ -55,6 +62,11 @@ def _validate(raw: dict) -> dict:
 
 def requirements_for(graph: dict, site: str) -> list[dict]:
     return [e for e in graph["edges"] if e["relation"] == "requires" and e["from"] == site]
+
+
+def group_within_m(graph: dict, component: str) -> "float | None":
+    """How close two detections of this class must be to count as one group. None means any distance."""
+    return graph["nodes"].get(component, {}).get("group_within_m")
 
 
 def proximity_for(graph: dict, site: str) -> list[dict]:

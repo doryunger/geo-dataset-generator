@@ -104,6 +104,14 @@ before; per-class colours make it readable which component a box is without read
 
 ## Painting
 
+Detections come with a `qualifies` property. Two line layers read it: `detection-outline` (solid,
+2 px) filtered to everything not explicitly false, and `detection-outline-weak` (dashed 2/2,
+1.5 px, 45% opacity) filtered to `qualifies == false`; labels drop to 50% opacity for the same
+features. So a fan with no neighbouring fan within 20 m is visible but visibly not counted. The
+property arrives only on whole collections (`extent`, `site_done`); per-tile deltas leave it
+undefined, which the `!=` filter treats as qualifying, so boxes look normal while a site streams
+and settle when it finishes.
+
 Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `detection-label`
 symbols from zoom 16) fed from each result's `detections` collection, replacing the raster
 `/api/detections` overlay that only existed at z17 -- a whole site sits at z14-15 and the boxes

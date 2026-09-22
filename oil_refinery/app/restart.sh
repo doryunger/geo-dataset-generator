@@ -23,6 +23,16 @@ stop_port() {
     exit 1
 }
 
+for pid_file in .server.pid .web.pid; do
+    if [ -f "$pid_file" ]; then
+        recorded="$(head -n1 "$pid_file" 2>/dev/null || true)"
+        if [ -n "$recorded" ]; then
+            echo "Stopping previously started process (pid $recorded from $pid_file)..."
+            kill "$recorded" 2>/dev/null || true
+        fi
+    fi
+done
+
 stop_port 8010
 stop_port 5173
 rm -f .server.pid .web.pid

@@ -23,6 +23,16 @@ Starting anyway would leave the OLD server answering while you think you are tes
     exit 1
 }
 
+foreach ($pidFile in ".server.pid", ".web.pid") {
+    if (Test-Path $pidFile) {
+        $recorded = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($recorded) {
+            Write-Host "Stopping previously started process (pid $recorded from $pidFile)..."
+            Stop-Process -Id $recorded -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Stop-Port 8010
 Stop-Port 5173
 Remove-Item -Path ".server.pid", ".web.pid" -Force -ErrorAction SilentlyContinue

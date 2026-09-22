@@ -276,7 +276,16 @@ export default function Map() {
     })
     map.addSource('detections', { type: 'geojson', data: EMPTY_DETECTIONS })
     map.addLayer({
+      id: 'detection-outline-weak', type: 'line', source: 'detections',
+      filter: ['==', ['get', 'qualifies'], false],
+      paint: {
+        'line-color': classColorExpression() as maplibregl.ExpressionSpecification,
+        'line-width': 1.5, 'line-opacity': 0.45, 'line-dasharray': [2, 2],
+      },
+    })
+    map.addLayer({
       id: 'detection-outline', type: 'line', source: 'detections',
+      filter: ['!=', ['get', 'qualifies'], false],
       paint: { 'line-color': classColorExpression() as maplibregl.ExpressionSpecification, 'line-width': 2 },
     })
     map.addLayer({
@@ -289,6 +298,7 @@ export default function Map() {
         'text-color': '#101010',
         'text-halo-color': classColorExpression() as maplibregl.ExpressionSpecification,
         'text-halo-width': 1.6,
+        'text-opacity': ['case', ['==', ['get', 'qualifies'], false], 0.5, 1],
       },
     })
     map.addSource('site-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })

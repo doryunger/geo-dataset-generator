@@ -70,13 +70,60 @@ def _component_clusters_for_site(
     return list(groups.values())
 
 
-def score(cluster_dets: list[dict], site: str, graph: dict) -> dict:
-    requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
+def largest_same_class_group(
+    detections: list[dict], z: int, ref_lat: float, within_m: float | None,
+) -> int:
+    groups = same_class_groups(detections, z, ref_lat, within_m)
+    return max((len(g) for g in groups), default=0)
+
+
+def same_class_groups(
+    detections: list[dict], z: int, ref_lat: float, within_m: float | None,
+) -> list[list[int]]:
+    """Indices of `detections`, grouped so every member is within `within_m` of another member."""
+    if not detections:
+        return []
+    if within_m is None:
+        return [list(range(len(detections)))]
+
+    parent = list(range(len(detections)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(detections)):
+        for j in range(i + 1, len(detections)):
+            d = geometry.distance_m(
+                detections[i]["centroid_px_global"], detections[j]["centroid_px_global"], z, ref_lat,
+            )
+            if d <= within_m:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[ri] = rj
+
+    groups: dict[int, list[int]] = {}
+    for i in range(len(detections)):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
+def counts_for(cluster_dets: list[dict], requirements: dict, graph: dict, z: int, ref_lat: float) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for det in cluster_dets:
-        req = requirements.get(det["class_name"])
-        if req is not None and det["confidence"] >= req["min_confidence"]:
-            counts[det["class_name"]] = counts.get(det["class_name"], 0) + 1
+    for name, req in requirements.items():
+        passing = [
+            d for d in cluster_dets
+            if d["class_name"] == name and d["confidence"] >= req["min_confidence"]
+        ]
+        counts[name] = largest_same_class_group(passing, z, ref_lat, site_graph.group_within_m(graph, name))
+    return counts
+
+
+def score(cluster_dets: list[dict], site: str, graph: dict, z: int, ref_lat: float) -> dict:
+    requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
+    counts = counts_for(cluster_dets, requirements, graph, z, ref_lat)
     matched_types = {name for name, n in counts.items() if n >= requirements[name].get("min_count", 1)}
     min_needed, total = site_graph.min_types_present(graph, site)
     return {
@@ -98,7 +145,7 @@ def classify(
             continue
         for site in site_names:
             for comp_cluster in _component_clusters_for_site(pooled, site, graph, z, ref_lat):
-                scored = score(comp_cluster, site, graph)
+                scored = score(comp_cluster, site, graph, z, ref_lat)
                 if scored["identified"]:
                     results.append({**scored, "site": site, "detections": comp_cluster})
     return results

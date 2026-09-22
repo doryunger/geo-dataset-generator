@@ -696,6 +696,32 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Two kinds of proximity (2026-09-23)
+
+The graph now separates them, at the user's request:
+
+- **Between different components** -- the site (parent) node's `default_max_distance_m` (200 m),
+  applied by `classifier._component_clusters_for_site` to decide what belongs to one candidate
+  site. Per-pair overrides are possible via `proximity` edges; none are declared.
+- **Between members of one class** -- the component node's own `group_within_m`. `fan-unit` has
+  20 m; the others have none (any spacing). `classifier.same_class_groups` groups a class's
+  detections so every member is within that distance of another member, and `min_count` is then
+  applied to the **largest group**, not to a loose total.
+
+That is what makes the fan requirement mean something: a refinery's air coolers sit in banks, while
+a factory's stray rooftop fan is alone. `min_count` cannot be dropped entirely -- a group of one is
+still a group -- so it is 2, i.e. "this fan has another fan beside it". On the cached 57-site
+benchmark at floor 0.65: grouped 20 m / count 2 gives 16/18 refineries and 0/39 look-alikes,
+against 15/18 for the previous flat "6 anywhere within 200 m". 50 m would give 17/18 (Godorf is
+the one it costs) but the user chose 20 m as physically realistic. Look-alikes stay 0/39 at every
+setting -- the column requirement is what rejects them.
+
+Detections that do not count are still drawn, but dashed and faded: `sites.qualifying_keys`
+marks each feature with `qualifies`, false for a detection that is above its floor yet not in a
+group that reaches `min_count`. It is computed only for whole collections (the `extent` payload
+and the final `site_done`), not for the per-tile deltas, since a tile cannot see its neighbours'
+detections.
+
 ## Fan-unit floor 0.65 and min_count 6 (2026-09-23)
 
 Raised from 0.5/3 after the user saw fan-unit boxes at 0.51 and 0.58 on a pond and a small dark
