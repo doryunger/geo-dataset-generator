@@ -696,6 +696,19 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Where the thresholds landed (2026-09-23)
+
+Tank >= 0.75; fan-unit >= 0.70 with at least 2 within 20 m of each other; distillation-column
+>= 0.65 with at least 3; all three types within 200 m; 3-of-3. Benchmark: **16/18 refineries,
+0/39 look-alikes**, and all ten demo sites verdict correctly.
+
+Measured while choosing (cached 57-site benchmark, fans grouped at 20 m): with the fan floor at
+either 0.65 or 0.70, a column floor of 0.60 or 0.65 gives 16/18 at any column count up to 3,
+while a column floor of 0.70 gives 15/18 at count 1, 14/18 at count 2 and 12/18 at count 3 --
+dropping Castell, Gunvor, Gelsenkirchen Horst, Normandie, Godorf and BP Raf. Look-alikes stay
+0/39 throughout. So tighten the fan floor and the counts freely; the **column floor is the
+expensive knob**, because the column model is the weakest of the three.
+
 ## Two kinds of proximity (2026-09-23)
 
 The graph now separates them, at the user's request:
