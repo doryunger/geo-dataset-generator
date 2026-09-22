@@ -83,10 +83,11 @@ or fan units — those are refinery-specific shapes no aerial-detection benchmar
 that, this project now does custom-label and train those two classes after all, using the same
 `classes/<class>/` + `scripts/obb.py`/`train_obb.py` pipeline as everything else (see root
 `CLAUDE.md`'s "compact/tactical classes" note). This reverses the earlier "no custom training for
-oil-refinery components" stance. `chimney` is the one exception: a custom-trained
-`classes/chimney/` model already exists and performs well, but this project deliberately keeps
-using DIOR's pretrained `chimney` class for it in production instead, imperfect as DIOR's chimney
-detections are.
+oil-refinery components" stance. `chimney` is no longer part of the pipeline at all: the app used
+DIOR's pretrained `chimney` class for it, but on the 57-site benchmark chimney never rejected a
+look-alike while its confidence floor could only cost refineries, so both the chimney requirement
+and DIOR were dropped on 2026-09-22 (see `app/server/context/server.md`). A custom-trained
+`classes/chimney/` model still exists and performs well, should the class ever be wanted again.
 
 ## Next steps
 1. Storage tank, oil tanker (ship), and vehicle already have usable pretrained coverage via
