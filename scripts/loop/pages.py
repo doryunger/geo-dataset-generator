@@ -53,14 +53,18 @@ def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_rev
     return out
 
 
-def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None, outside: bool = False) -> tuple:
+def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None, outside: bool = False, extra_sites: list[dict] | None = None, page_slug: str | None = None) -> tuple:
     cands = [c for c in _candidates(class_name, site, version) if c["conf"] >= min_conf]
+    for other in extra_sites or []:
+        cands += [c for c in _candidates(class_name, other, version) if c["conf"] >= min_conf]
     if swept_by:
         cands = _restrict_to_sweep(class_name, site, cands, swept_by, outside)
-    site_slug = L.slug(site["name"])
+    if extra_sites:
+        cands.sort(key=lambda c: (c["source_sample"], -c["conf"]))
+    site_slug = page_slug or L.slug(site["name"])
     suffix = "-outside" if outside else ("-swept" if swept_by else "")
     html = L.fill("triage.html", {
-        "TITLE": f"{site['name']} {label} triage",
+        "TITLE": f"{(page_slug or site['name'])} {label} triage",
         "EYEBROW": f"{class_name} &middot; {site['name']} &middot; model {version} &middot; conf &ge; {min_conf:.2f}",
         "HEADING": "What did the model find here?",
         "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{(' -- only those outside the windows you swept' if outside else ' -- only those inside the windows you swept, and not on a polygon you drew') if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
@@ -135,15 +139,18 @@ def main():
     parser.add_argument("--windows", type=int, default=60)
     parser.add_argument("--swept-by", type=Path, default=None, help="triage only: a sweep review JSON; keep proposals inside its windows that are not on its polygons")
     parser.add_argument("--outside-sweep", action="store_true", help="triage only, with --swept-by: the complement -- proposals outside the swept windows, judged for samples/negatives but never used as ground truth")
+    parser.add_argument("--also", default=None, help="triage only: comma-separated extra site substrings whose proposals join the page (one page for several look-alike sites)")
+    parser.add_argument("--page-slug", default=None, help="triage only: name the page/document after this instead of the site (use with --also)")
     args = parser.parse_args()
     site = L.find_site(args.class_name, args.site)
     label = args.label or args.class_name.replace("-", " ")
     if args.kind == "triage":
-        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label, args.swept_by, args.outside_sweep)
+        extra = [L.find_site(args.class_name, s.strip()) for s in args.also.split(",")] if args.also else None
+        html, n = build_triage(args.class_name, site, args.model, args.min_conf, label, args.swept_by, args.outside_sweep, extra, args.page_slug)
     else:
         html, n = build_sweep(args.class_name, site, args.model, args.windows, args.show_conf, label)
     tag = "_outside" if args.outside_sweep else ("_swept" if args.swept_by else "")
-    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{L.slug(site['name'])}_{args.model}{tag}.html"
+    out = L.loop_dir(args.class_name) / "pages" / f"{args.kind}_{args.page_slug or L.slug(site['name'])}_{args.model}{tag}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     print(f"{args.kind}: {n} {'candidates' if args.kind == 'triage' else 'windows'} -> {out} ({out.stat().st_size / 1e6:.1f} MB)")

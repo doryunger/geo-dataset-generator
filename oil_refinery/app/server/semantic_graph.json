@@ -2,11 +2,11 @@
   "nodes": {
     "oil_refinery": {
       "kind": "site",
-      "min_types_present": 2,
-      "default_max_distance_m": 600,
+      "min_types_present": 4,
+      "default_max_distance_m": 300,
       "default_min_distance_m": 0,
       "default_boost": 0.1,
-      "merge_distance_m": 600
+      "merge_distance_m": 300
     },
     "storage tank": {
       "kind": "component"
@@ -14,10 +14,10 @@
     "chimney": {
       "kind": "component"
     },
-    "harbor": {
+    "fan-unit": {
       "kind": "component"
     },
-    "fan-unit": {
+    "distillation-column": {
       "kind": "component"
     }
   },
@@ -37,14 +37,15 @@
     {
       "relation": "requires",
       "from": "oil_refinery",
-      "to": "harbor",
-      "min_confidence": 0.75
+      "to": "fan-unit",
+      "min_confidence": 0.5,
+      "min_count": 3
     },
     {
       "relation": "requires",
       "from": "oil_refinery",
-      "to": "fan-unit",
-      "min_confidence": 0.5
+      "to": "distillation-column",
+      "min_confidence": 0.6
     }
   ]
 }

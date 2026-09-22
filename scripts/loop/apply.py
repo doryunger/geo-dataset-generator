@@ -63,7 +63,11 @@ def _add_sample(embedder, class_name: str, polygon: list, origin: dict) -> str |
 
 def _triage_items(class_name: str, review: dict) -> tuple[list, list, list]:
     site_slug, version = review["site"], review["model"]
-    cands = json.loads((L.loop_dir(class_name) / "candidates" / f"{site_slug}_{version}.json").read_text())
+    path = L.loop_dir(class_name) / "candidates" / f"{site_slug}_{version}.json"
+    if path.exists():
+        cands = json.loads(path.read_text())
+    else:
+        cands = [c for f in sorted(path.parent.glob(f"*_{version}.json")) for c in json.loads(f.read_text())]
     by_id = {unicodedata.normalize("NFC", c["id"]): c for c in cands}
     decisions = review["decisions"]
     pairs = decisions.items() if isinstance(decisions, dict) else ((d["id"], d["verdict"]) for d in decisions)

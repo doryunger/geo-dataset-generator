@@ -121,10 +121,25 @@ Negative layers, in the order they are being added:
    this is exactly the discrimination the class is for. Check an export by name before merging
    — `industrial=oil` also tags refineries and crackers. `sites.py --geojson <file> --layer
    <name>` merges without touching the refinery list; scan once, add to `benchmark.json`.
-3. **The site classifier itself** — once the class is wired into `oil_refinery` as a booster
-   edge alongside tanks, chimneys and fan units, the end-to-end check is whether the
-   classifier's verdict changes on the benchmark sites and the negatives when the class model
-   is swapped. Same gate, one level up.
+3. **The site classifier itself** — in place: `oil_refinery/eval_sites.py` runs the server's
+   own detection and classification over every benchmark site and prints the verdict per site.
+   This is the final word: when it and the object gate disagree, the site test wins (it did for
+   `v46`, which scored lower on clean object detections but took the site test from 12/18 to
+   18/18 refineries at 0/31 look-alikes). Detections are cached per tile, so graph parameters
+   (`--floor`, `--count`, `--min-types`, `--max-distance-m`) are swept in seconds; only a new
+   model needs a fresh ~45-minute detect. Always finish with a batch of look-alikes the model
+   has never seen — the ones whose rejections it trained on are memorised, not generalised.
+
+## 4b. The look-alike round
+
+When the site test leaks on specific look-alikes, run the loop's negative mechanism at them:
+scan the look-alike sites with the incumbent, put every proposal ≥ 0.4 on one multi-site triage
+page (`pages.py triage --site <first> --also <others> --page-slug lookalikes`), enable all the
+"no" verdicts, train both candidates, and judge by the site test. Chemical plants and crackers
+are *not* look-alikes for a column class — their columns are real. A "yes" on a look-alike is a
+sample like any other, and that site leaves the negatives list. Where the graph is concerned: a
+refinery is all its components (4-of-4), a component can carry a `min_count` (fans ≥ 3), and
+the radius is 300 m; those came out of this round and are the defaults now.
 
 ## 5. Adding a class from zero
 

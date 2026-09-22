@@ -237,6 +237,44 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Integration and the look-alike round (2026-09-21/22).** v37 was wired into `oil_refinery`
+(`config.json` models + `model_gsd_m` 0.125 + gated; `semantic_graph.json` node + requires
+edge) and `oil_refinery/eval_sites.py` was written to run the server's own detection batch and
+classifier over whole sites offline, with a per-tile detection cache so graph changes re-classify
+in seconds. Findings, in order:
+
+- The graph as found (2-of-5 types, `harbor` required, 600 m) called almost every look-alike a
+  refinery: chimney at 0.3 and fan-unit at 0.5 fire on any industrial site. User's rule: a
+  refinery is *all* its components. Now 4-of-4 (storage tank, chimney, fan-unit, column),
+  `harbor` removed (inland refineries have none), radius 300 m (user: "600 is too big").
+- With v37 at column >= 0.78: 12/18 refineries, 0/16 look-alikes. Lowering the column floor
+  alone leaked (0.7: 16/18 but 3 look-alikes; 0.6: 18/18 but 8) because two sites --
+  Wolfsburg (roof structures, 0.83) and Niederaussem (hopper tops, 12 boxes >= 0.6) -- are
+  column confusers. Fan counts don't fix a column false positive; dropping chimney changes
+  nothing (it is present everywhere at 0.3).
+- `min_count` added to `requires` edges (optional, default 1) after the user pointed out that
+  refineries have *many* fans; factory fans are real (rooftop ventilation) but few.
+- Look-alike round: 32 non-refinery sites (the 16 plus 17 from a second Overpass pull --
+  cement, steel, sugar, paper, incinerators, biomass/gas/coal plants, sewage works; chemical
+  plants excluded because their columns are real), one multi-site triage page of v37's 216
+  column proposals >= 0.4 (`pages.py triage --also ... --page-slug lookalikes`): 191 no, 4 yes
+  (three at Swiss Krono, one at ThyssenKrupp -- both dropped from the negatives list), 21
+  unsure. All 191 enabled (negatives 441/1031 against 476 positives). `v46` (v37 fine-tuned)
+  pushed Wolfsburg 0.73 -> 0.61 (18 -> 3 boxes) and Niederaussem 12 -> 1 boxes; on the object
+  gate it scored 37 clean vs v37's 52 (a few refinery-side boxes on unlabelled objects raise its
+  clean threshold) but 106 vs 76 at FP<=5.
+- **Site test with v46, column >= 0.6, fans >= 3: 18/18 refineries, 0/31 look-alikes**; on
+  eight look-alikes v46 had never seen (Melnik, Tusimice, Clauscentrale, Ketton, Westfalenhutte,
+  Stahlwerk Thuringen, Mogden, Amercentrale): 0/8, column max 0.43. **v46 adopted**, graph
+  defaults set to this. The site test outranks the object gate when they disagree; the object
+  table stays as the per-round proxy.
+
+Run the site test: `INFERENCE_DEVICE=cuda python oil_refinery/eval_sites.py --class
+distillation-column --cache experiments/loop/distillation-column/site_detections_v46.json`
+(`--floor`, `--count`, `--min-types`, `--max-distance-m` override the graph from the cache in
+seconds; a new column model needs a new cache, ~45 min on the GPU, and OOMs if anything else
+holds the card -- `--batch 4`).
+
 **Round 21, Gdansk (2026-09-21), fresh, sharp (1.32), v37 proposing:** 35 proposals, 29
 inside; reviewer drew 10 misses, judged 29 (18 yes, 4 no, 7 unsure) and 6 outside (5 no);
 28 truth. v37 fresh: 18/28 = 64% at 0.25, 6 hits / 1 FP at 0.5. Samples 444 -> 472 across 62

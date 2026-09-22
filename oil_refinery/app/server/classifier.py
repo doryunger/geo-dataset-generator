@@ -72,12 +72,12 @@ def _component_clusters_for_site(
 
 def score(cluster_dets: list[dict], site: str, graph: dict) -> dict:
     requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
-    matched_types = {
-        det["class_name"]
-        for det in cluster_dets
-        if det["class_name"] in requirements
-        and det["confidence"] >= requirements[det["class_name"]]["min_confidence"]
-    }
+    counts: dict[str, int] = {}
+    for det in cluster_dets:
+        req = requirements.get(det["class_name"])
+        if req is not None and det["confidence"] >= req["min_confidence"]:
+            counts[det["class_name"]] = counts.get(det["class_name"], 0) + 1
+    matched_types = {name for name, n in counts.items() if n >= requirements[name].get("min_count", 1)}
     min_needed, total = site_graph.min_types_present(graph, site)
     return {
         "matched_types": sorted(matched_types),
