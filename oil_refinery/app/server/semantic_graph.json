@@ -37,7 +37,7 @@
       "relation": "requires",
       "from": "oil_refinery",
       "to": "distillation-column",
-      "min_confidence": 0.7,
+      "min_confidence": 0.65,
       "min_count": 3
     }
   ]
