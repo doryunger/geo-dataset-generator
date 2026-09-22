@@ -33,7 +33,7 @@ interface MapState {
   flyTo: { bbox: [number, number, number, number]; generation: number } | null
   selectedSite: Site | null
   sitePhase: SitePhase | null
-  siteProgress: { done: number; total: number }
+  siteProgress: { done: number; total: number; startedAt: number; updatedAt: number }
 }
 
 const initialState: MapState = {
@@ -49,7 +49,7 @@ const initialState: MapState = {
   flyTo: null,
   selectedSite: null,
   sitePhase: null,
-  siteProgress: { done: 0, total: 0 },
+  siteProgress: { done: 0, total: 0, startedAt: 0, updatedAt: 0 },
 }
 
 const mapSlice = createSlice({
@@ -71,16 +71,26 @@ const mapSlice = createSlice({
     },
     resultReceived(state, action: PayloadAction<ResultMessage>) {
       const result = action.payload
+      if (result.type === 'extent_tile') {
+        if (!result.detections) return
+        state.detections.features = state.detections.features
+          .filter((f) => f.properties.tile !== result.tile)
+          .concat(result.detections.features)
+        state.readyGeneration += 1
+        return
+      }
       if (result.type !== 'extent' && result.site !== state.selectedSite?.id) return
       if (result.type === 'site_tile') {
         if (result.detections) state.detections.features.push(...result.detections.features)
-        state.siteProgress = { done: result.done ?? 0, total: result.total ?? 0 }
+        state.siteProgress = {
+          ...state.siteProgress, done: result.done ?? 0, total: result.total ?? 0, updatedAt: Date.now(),
+        }
       } else if (result.detections) {
         state.detections = result.detections
       }
       if (result.sites) state.sites = result.sites
       state.graph = {
-        components: result.components,
+        components: result.components ?? state.graph?.components ?? [],
         identified: result.sites ? result.sites.features.length > 0 : (state.graph?.identified ?? false),
       }
       state.readyGeneration += 1
@@ -92,7 +102,7 @@ const mapSlice = createSlice({
     siteSelected(state, action: PayloadAction<Site>) {
       state.selectedSite = action.payload
       state.sitePhase = 'landing'
-      state.siteProgress = { done: 0, total: action.payload.tiles }
+      state.siteProgress = { done: 0, total: action.payload.tiles, startedAt: 0, updatedAt: 0 }
       state.graph = null
       state.sites = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
@@ -101,6 +111,7 @@ const mapSlice = createSlice({
     },
     siteProcessingStarted(state) {
       state.sitePhase = 'processing'
+      state.siteProgress = { ...state.siteProgress, startedAt: Date.now(), updatedAt: Date.now() }
     },
     siteCleared(state) {
       state.selectedSite = null

@@ -174,7 +174,7 @@ def _center_out_order(keys: set[tuple[int, int, int]]) -> list[tuple[int, int, i
 
 async def classify_extent(
     current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
-    tracker: site_tracker.SiteTracker,
+    tracker: site_tracker.SiteTracker, websocket: "WebSocket | None" = None,
 ) -> dict:
     current_keys = _center_out_order(current_tiles) if current_tiles else []
     t0 = time.monotonic()
@@ -183,16 +183,26 @@ async def classify_extent(
             "classify_extent: waiting on %d tile(s): %s",
             len(current_keys), [common.tile_id(z, x, y) for z, x, y in current_keys],
         )
-    futures = [tile_server.get_or_process_detections(z, x, y) for z, x, y in current_keys]
+    pending = {tile_server.get_or_process_detections(z, x, y): (z, x, y) for z, x, y in current_keys}
     detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}
     awaited = 0
-    for key, future in zip(current_keys, futures):
-        dets = await future
-        awaited += 1
-        if not dets:
-            continue
-        detections_by_tile[key] = dets
-        if model_router.EARLY_EXIT and _any_site_identified(detections_by_tile):
+    while pending:
+        finished, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        identified = False
+        for future in finished:
+            key = pending.pop(future)
+            awaited += 1
+            dets = future.result()
+            if not dets:
+                continue
+            detections_by_tile[key] = dets
+            if websocket is not None:
+                await websocket.send_json({
+                    "type": "extent_tile", "tile": common.tile_id(*key),
+                    "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets})},
+                })
+            identified = identified or (model_router.EARLY_EXIT and _any_site_identified(detections_by_tile))
+        if identified:
             await tile_server.prune_pending()
             logger.info(
                 "classify_extent: site identified after %d/%d tile(s) in %.0fms -- remaining background tiles pruned",
@@ -270,9 +280,9 @@ async def _send_result(
     websocket: WebSocket, current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
     tracker: site_tracker.SiteTracker,
 ) -> None:
-    result = await classify_extent(current_tiles, historical_tiles, tracker)
+    result = await classify_extent(current_tiles, historical_tiles, tracker, websocket)
     await websocket.send_json(result)
-    logger.info("_send_result: sent %d site feature(s) to client", len(result["features"]))
+    logger.info("_send_result: sent %d site feature(s) to client", len(result["sites"]["features"]))
 
 
 @router.websocket("/ws/extent")

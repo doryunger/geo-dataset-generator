@@ -696,6 +696,15 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## ws_server.py -- streaming (site and roam)
+
+Both paths stream per tile. `classify_extent` (free roam) takes the websocket and sends an
+`extent_tile` message with that tile's detections as each future completes, then the usual full
+`extent` payload at the end; it awaits with `asyncio.wait(FIRST_COMPLETED)` rather than in request
+order, so a slow tile no longer holds back the ones already done. Free roam has no spinner and
+never freezes the map -- it is meant to feel like latency, not like a modal operation -- and only
+runs at zoom >= `MIN_DETECT_ZOOM` (16), which `Map.tsx` gates.
+
 ## ws_server.py -- site processing (`process_site`)
 
 A client message `{"site": id}` on the same `/ws/extent` socket (instead of an extent request)

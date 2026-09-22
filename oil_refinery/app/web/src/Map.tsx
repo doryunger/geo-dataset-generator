@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
@@ -38,6 +38,15 @@ const EMPTY_POLYGON = { type: 'FeatureCollection', features: [] } as const
 
 function polygonFeature(geometry: { type: 'Polygon'; coordinates: number[][][] }) {
   return { type: 'FeatureCollection' as const, features: [{ type: 'Feature' as const, geometry, properties: {} }] }
+}
+
+function remainingSeconds(
+  progress: { done: number; total: number; startedAt: number; updatedAt: number }, now: number,
+): number | null {
+  if (progress.done < 1 || progress.startedAt === 0) return null
+  const perTileMs = (progress.updatedAt - progress.startedAt) / progress.done
+  const remainingAtUpdate = perTileMs * (progress.total - progress.done)
+  return Math.max(0, (remainingAtUpdate - (now - progress.updatedAt)) / 1000)
 }
 
 function currentViewport(map: maplibregl.Map): Viewport {
@@ -102,6 +111,13 @@ export default function Map() {
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (sitePhase !== 'processing') return
+    const id = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(id)
+  }, [sitePhase])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -306,10 +322,16 @@ export default function Map() {
             }}
           />
           <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
-            {sitePhase === 'landing'
-              ? 'landing…'
-              : `processing tile ${siteProgress.done} / ${siteProgress.total}`}
+            {sitePhase === 'landing' ? 'landing…' : 'processing'}
           </div>
+          {sitePhase === 'processing' && (
+            <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
+              {(() => {
+                const left = remainingSeconds(siteProgress, now)
+                return left === null ? 'estimating…' : `about ${Math.ceil(left)} s left`
+              })()}
+            </div>
+          )}
         </div>
       )}
       {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && (

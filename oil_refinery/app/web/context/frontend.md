@@ -42,8 +42,8 @@ placeholder row of grey nodes keeps the layout stable when there is nothing yet.
 On the next `viewportSettled` while `landing`, it sends `{site}` over the socket and moves to
 `processing`; every `site_tile` message updates progress, detections and graph; `site_done` moves
 to `done`. While landing or processing (`siteBusy`) all map interaction handlers are disabled, a
-full-map overlay with a large spinner and "processing tile n / N" sits on top, and both the
-extent-request effect and the gesture-cancel effect are gated off -- an extent message during
+full-map overlay with a large spinner, the word "processing" and a live countdown sits on top, and
+both the extent-request effect and the gesture-cancel effect are gated off -- an extent message during
 processing would prune the site's queued jobs server-side (see the server doc). Once `done`, a
 `viewportSettled` whose bounds no longer intersect the site's bbox dispatches `siteCleared`
 (selection and graph go; the next extent result repopulates the graph from the live view).
@@ -51,7 +51,15 @@ processing would prune the site's queued jobs server-side (see the server doc). 
 late message from a cancelled run can't paint over a new selection. `site_tile` messages are
 deltas: their `detections` are appended to the store's collection, `sites` is only present when
 the server ran the classifier this second (else the previous polygons and `identified` stand), and
-`extent` messages replace everything as before.
+`extent` messages replace everything as before. `extent_tile` messages (free roam) replace just
+that tile's features by the `tile` property, so roaming paints detections as each tile finishes
+instead of in one jump at the end.
+
+The countdown (`remainingSeconds` in `Map.tsx`) is measured, not estimated up front: observed
+ms/tile since `siteProcessingStarted` times the tiles left, counting down between messages off a
+250 ms ticker. It reads "estimating..." until the first tile lands. Deliberately no "tile n / N" --
+the user asked for the time only (2026-09-22). A cached site finishes before the first tick, which
+is fine.
 
 Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `detection-label`
 symbols from zoom 16) fed from each result's `detections` collection, replacing the raster

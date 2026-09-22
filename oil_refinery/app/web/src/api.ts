@@ -69,10 +69,10 @@ export interface DetectionFeatureCollection {
 export const EMPTY_DETECTIONS: DetectionFeatureCollection = { type: 'FeatureCollection', features: [] }
 
 export interface ResultMessage {
-  type: 'extent' | 'site_tile' | 'site_done'
+  type: 'extent' | 'extent_tile' | 'site_tile' | 'site_done'
   sites?: SiteFeatureCollection
   detections?: DetectionFeatureCollection
-  components: ComponentSummary[]
+  components?: ComponentSummary[]
   site?: string
   tile?: string
   done?: number
