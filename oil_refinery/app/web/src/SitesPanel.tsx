@@ -60,7 +60,7 @@ export default function SitesPanel() {
     fetchSites()
       .then((loaded) => {
         setSites(loaded)
-        if (loaded.length > 0) dispatch(siteSelected({ site: loaded[0], durationMs: 4000 }))
+        if (loaded.length > 0) dispatch(siteSelected({ site: loaded[0], durationMs: 9000 }))
       })
       .catch(() => setSites([]))
   }, [dispatch])

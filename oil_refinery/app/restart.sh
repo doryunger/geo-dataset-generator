@@ -12,6 +12,15 @@ stop_port() {
         echo "Stopping process on port $port (pid(s): $pids)..."
         kill $pids 2>/dev/null || true
     fi
+    for _ in $(seq 1 20); do
+        pids="$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+        [ -z "$pids" ] && return 0
+        sleep 0.25
+    done
+    echo "Port $port is still held by pid(s) $pids after trying to stop them." >&2
+    echo "Kill it yourself (kill -9 $pids) and run this again. Starting anyway would leave the" >&2
+    echo "OLD server answering while you think you are testing new code." >&2
+    exit 1
 }
 
 stop_port 8010

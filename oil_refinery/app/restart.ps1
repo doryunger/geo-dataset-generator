@@ -9,6 +9,18 @@ function Stop-Port($port) {
         Write-Host "Stopping process on port $port (pid $($c.OwningProcess))..."
         Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
     }
+    for ($i = 0; $i -lt 20; $i++) {
+        $still = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+        if (-not $still) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    $stuck = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess -join ", "
+    Write-Error @"
+Port $port is still held by pid(s) $stuck after trying to stop them.
+Kill it yourself (Task Manager, or an elevated: taskkill /PID $stuck /F) and run this again.
+Starting anyway would leave the OLD server answering while you think you are testing new code.
+"@
+    exit 1
 }
 
 Stop-Port 8010

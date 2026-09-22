@@ -696,6 +696,30 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## The model gate and deliberate site runs (2026-09-22)
+
+The gated models (fan-unit, distillation-column) run only when a batch already shows
+graph-relevant evidence or a neighbouring tile did. Until chimney was dropped, DIOR's chimney at
+0.3 supplied that evidence on essentially every industrial tile, so the gate was effectively
+always open. Without it, a site whose only trigger would have been a chimney never runs the fan or
+column model at all: Kraftwerk Niederaussem came back 0/0/0 in the app while running the same
+models directly over its tiles finds 9 fan-units (max 0.75) and 2 columns (max 0.62). A look-alike
+showing nothing at all is also a much weaker demo than one showing components without a column.
+
+So `Job.force_all_models` (set by `process_site`, not by the roam path) forces the gate open:
+picking a site is a deliberate "analyse this place" action and must run every model, while free
+roam keeps the gate to avoid paying for the custom models over farmland and ocean.
+
+## Never trust a restart that did not stop the old server (2026-09-22)
+
+`restart.ps1`/`restart.sh` used to `Stop-Process`/`kill` whatever held 8010 and carry on without
+checking. When the kill fails (seen for real: "Access is denied" even for the same user), the new
+uvicorn cannot bind, dies quietly, and the **old** process keeps answering -- so every test after
+that measures stale code. This cost an hour of debugging a "fix that did not work": the force flag
+above was correct from the start and the server had never reloaded it. Both scripts now wait for
+the port to actually free up and abort with the stuck pid if it does not. If a code change appears
+to have no effect, check what is listening on 8010 and when it started before re-reading the code.
+
 ## Result cache lifetime (2026-09-22)
 
 The detection result cache (`TileCache`) is **per session and never reused for a site run**:

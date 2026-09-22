@@ -105,6 +105,7 @@ class Job:
     fetch_ms: float
     enqueued_at: float = field(repr=False)
     future: asyncio.Future = field(repr=False)
+    force_all_models: bool = False
 
 
 class DetectionQueue:
@@ -477,8 +478,10 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes | None, list[di
             p["counts"][model_key] = counts
     stage_ms["open_models"] = (time.perf_counter() - stage_t0) * 1000
 
-    batch_has_evidence = any(_is_graph_relevant(d) for p in prepped for d in p["raw"]) or any(
-        _neighbour_has_evidence(p["job"]) for p in prepped
+    batch_has_evidence = (
+        any(p["job"].force_all_models for p in prepped)
+        or any(_is_graph_relevant(d) for p in prepped for d in p["raw"])
+        or any(_neighbour_has_evidence(p["job"]) for p in prepped)
     )
     passing = prepped if batch_has_evidence else []
     for p in prepped:
@@ -689,7 +692,9 @@ async def get_tile(z: int, x: int, y: int):
     return Response(content=tile_path.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
-async def _ensure_processed(z: int, x: int, y: int, request: Request | None = None) -> JobResult:
+async def _ensure_processed(
+    z: int, x: int, y: int, request: Request | None = None, force_all_models: bool = False,
+) -> JobResult:
     tile_id = common.tile_id(z, x, y)
     cache: TileCache = _state["cache"]
     cached = cache.get(tile_id)
@@ -707,7 +712,7 @@ async def _ensure_processed(z: int, x: int, y: int, request: Request | None = No
         image_bytes = tile_path.read_bytes()
         job = Job(
             tile_id=tile_id, z=z, x=x, y=y, image_bytes=image_bytes, request=request,
-            has_interactive_request=(request is not None),
+            has_interactive_request=(request is not None), force_all_models=force_all_models,
             fetch_ms=fetch_ms, enqueued_at=time.perf_counter(), future=loop.create_future(),
         )
         in_flight[tile_id] = job
@@ -724,12 +729,14 @@ async def _ensure_processed(z: int, x: int, y: int, request: Request | None = No
     return await job.future
 
 
-def get_or_process_detections(z: int, x: int, y: int) -> "asyncio.Future[list[dict]]":
+def get_or_process_detections(
+    z: int, x: int, y: int, force_all_models: bool = False,
+) -> "asyncio.Future[list[dict]]":
     async def _run() -> list[dict]:
         if z != DETECT_ZOOM:
             return []
         try:
-            result = await _ensure_processed(z, x, y)
+            result = await _ensure_processed(z, x, y, force_all_models=force_all_models)
         except Exception:
             logger.exception("get_or_process_detections failed for tile %s", common.tile_id(z, x, y))
             return []

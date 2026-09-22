@@ -252,7 +252,9 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
         site["id"], len(tiles), forgotten,
     )
     await _prefetch_with_ring(tiles)
-    pending = {tile_server.get_or_process_detections(z, x, y): (z, x, y) for z, x, y in tiles}
+    pending = {
+        tile_server.get_or_process_detections(z, x, y, force_all_models=True): (z, x, y) for z, x, y in tiles
+    }
     detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}
     all_detections: list[dict] = []
     done = 0
