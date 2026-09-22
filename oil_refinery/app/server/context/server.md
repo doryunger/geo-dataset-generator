@@ -626,6 +626,83 @@ boundary is the convex hull of that (monotonically growing) set, the boundary is
 non-shrinking by construction â€” exactly the "we merge, we don't redraw from scratch, so area can
 only grow" rule this module exists to implement.
 
+## sites.py
+
+Helpers for the site panel plus `GET /api/sites`: the ten hand-picked demo sites from `sites.json`
+(five refineries where all four components fire on sharp imagery, and one look-alike per confuser
+type: lignite power station, tyre plant, container port, tank farm, steelworks; polygons come from
+the loop's `sites.json`), each with its z17 tile count. `site_tiles` is the same polygon-intersects-
+tile rule `oil_refinery/eval_sites.py` uses offline; `component_summary` is what the graph widget
+colours from (count at/above the graph floor, `min_count`, satisfied); `detection_features` turns
+cached per-tile detections (tile-local pixel corners) into lon/lat polygons so the frontend can draw
+them as a GeoJSON layer at any zoom.
+
+Sites were chosen at <= ~90 z17 tiles on purpose: processing is live on every click (the user's
+rule -- the demo has to look like running on a site nobody has checked, so there is no precomputed
+cache; a seeded version was built on 2026-09-22 and removed the same day). Wolfsburg (195 tiles)
+and Bremerhaven (137) were swapped for Continental AG (28) and Tollerort (36) for that reason.
+
+## GPU inference path (tile_server.py, 2026-09-22)
+
+`INFERENCE_DEVICE` defaults to `cuda` in every launch script now (user rule: always use the GPU
+when there is one). The first CUDA attempt was *slower* than CPU (Esso, 54 tiles: 41 s on CPU,
+64 s on CUDA) and each of the following was found by measurement, not guesswork -- keep the
+numbers, they are what make the design decisions legible:
+
+- **Parallel CUDA streams from 8 executor threads x 2 workers x 3072px warm-ups pinned the card at
+  15/15 GB** and paged over WDDM (per-tile time climbed from 0.5 s to 4.5 s within one site). Models
+  now run sequentially under one `_GPU_LOCK`; VRAM sits at ~11 GB after warm-up.
+- **Per-tile CPU work dominated once the GPU was sane**: 368 ms/tile in `_run_detection_batch`
+  against ~190 ms of `predict` calls. Removed: the overlay PNG render (70 ms/tile; the frontend
+  draws vectors now, so `JobResult.image_bytes` is `None` until `/api/detections` asks for it),
+  serial halo-composite + LANCZOS resamples (90 ms/tile, now on `_PREP_EXECUTOR`, one thread per
+  tile in the batch), shapely IoU in the fuser on every same-concept pair (39 -> 4 ms/tile with an
+  axis-aligned bbox prefilter).
+- **ultralytics' own pipeline** (`setup_source` + letterboxing a list of PIL images) was ~100 ms
+  per call. On CUDA the batch is handed over as one BCHW float tensor (`_batch_tensor`), which
+  skips both; results come back in tensor pixel space, which equals image pixels because the
+  padding is bottom-right only.
+- **cuDNN builds kernels per input shape, ~2.2 s per architecture per (N, H, W)**, benchmark mode
+  off or on (measured in isolation: 16x1888 -> 5.2 s first, 0.4 s after; 16x1856 -> 2.3 s; batch 6
+  -> 2.2 s; batch 1 -> 2.3 s). Every site has its own image size (latitude sets the native GSD and
+  thus the resample factor) and every site ends with a partial batch, so each site paid ~10 s in
+  recompiles. Shapes are pinned: the batch tensor is always `TILE_BATCH_SIZE` (16) images, blank
+  ones padded and their results dropped, and H=W is rounded up to a `SIZE_BUCKET_PX` (256)
+  multiple. `lifespan()` warms every bucket the models will see between latitudes 45 and 60
+  (`_warmup_sizes`: 768 / 1280,1536 / 1792,2048 px), then runs one `_warm_batch` on a real tile
+  because zero images never exercise the NMS/postprocess kernels (the first real batch was still
+  5 s slow without it). Startup is ~25 s longer for it.
+- `DetectionQueue.pop_batch` waits up to `BATCH_FILL_WAIT_S` (0.25 s) for a fuller batch: a padded
+  batch of 2 costs the same as 16, and the first pop of a site used to grab 1-2 tiles.
+- Two workers again (`WORKER_POOL_SIZE` default 2), so one batch's prep and fusion overlap the
+  other's GPU time; the lock keeps the GPU itself serial.
+
+Where it landed: Esso 54 tiles 11 s, Gdansk 92 tiles 17 s, look-alikes 5-9 s -- ~185 ms/tile
+against a measured GPU floor of ~130 ms/tile (2.05 s per batch of 16 across the four models). Each
+batch logs its stage times (`Batch of N stages: {prep, open_models, gated_models, fuse}`); read
+those before touching any of this again.
+
+## ws_server.py -- site processing (`process_site`)
+
+A client message `{"site": id}` on the same `/ws/extent` socket (instead of an extent request)
+starts `process_site`: the site's tiles plus a one-tile halo ring are prefetched from Mapbox on a
+16-thread pool (edge tiles used to end the run with a burst of sequential downloads), then every
+z17 tile of the polygon, centre-out, is handed to `get_or_process_detections`; as each future
+completes a `site_tile` message goes out with **that tile's** detections as GeoJSON, the cumulative
+component summary and `done/total`; the classifier + tracker (`sites`) are included at most once
+per `SITE_CLASSIFY_INTERVAL_S` (1 s) and on the final `site_done`. The first version re-ran the
+classifier and re-serialised every detection so far on every tile: 3 s of event-loop time and
+6.5 MB over the socket for Esso, growing quadratically, and each stall delayed the next batch
+dispatch. Extent results still carry the full `sites`/`detections`/`components` with
+`type: "extent"`. The site's tiles are added to `session.known_tiles` so, once the user roams
+afterwards, they count as historical tiles for the extent classifier and the tracker.
+
+The frontend must not send extent requests while a site is processing -- not only because a new
+extent request cancels `current_task`, but because *every* extent message (including the empty
+one sent on gesture start) calls `prune_pending()`, which drops non-interactive jobs from the
+queue, i.e. exactly the site's jobs. The map is frozen during processing for this reason as much as
+for the UX.
+
 ## ws_server.py
 
 Websocket serving for site-level results â€” the push/pull-over-a-live-connection half of the app, as

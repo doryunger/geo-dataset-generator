@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+import sites
 import tile_server
 import ws_server
 from fastapi import FastAPI
@@ -14,3 +15,4 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(tile_server.router)
 app.include_router(ws_server.router)
+app.include_router(sites.router)

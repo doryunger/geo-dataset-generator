@@ -15,7 +15,7 @@ for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%REPO_ROOT%\.env") do (
     if not "%%A"=="" set "%%A=%%B"
 )
 
-if not defined INFERENCE_DEVICE set "INFERENCE_DEVICE=cpu"
+if not defined INFERENCE_DEVICE set "INFERENCE_DEVICE=cuda"
 if not defined HOST set "HOST=127.0.0.1"
 if not defined PORT set "PORT=8010"
 

@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import torch
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -60,13 +62,18 @@ INFERENCE_DEVICE = os.environ.get("INFERENCE_DEVICE", "cpu")
 QUEUE_CAPACITY = 150
 QUEUE_TRIM_TO = 150
 
-TILE_BATCH_SIZE = 8
+TILE_BATCH_SIZE = 16
 
 WORKER_POOL_SIZE = int(os.environ.get("WORKER_POOL_SIZE", "2"))
+
+BATCH_FILL_WAIT_S = 0.25
+
+_GPU_LOCK = threading.Lock()
 
 _MODEL_EXECUTOR_SIZE = max(2, WORKER_POOL_SIZE * len(model_router.MODELS))
 _MODEL_EXECUTOR = ThreadPoolExecutor(max_workers=_MODEL_EXECUTOR_SIZE)
 _BATCH_EXECUTOR = ThreadPoolExecutor(max_workers=WORKER_POOL_SIZE)
+_PREP_EXECUTOR = ThreadPoolExecutor(max_workers=TILE_BATCH_SIZE)
 
 TILE_CACHE_CAPACITY = 300
 
@@ -76,9 +83,14 @@ SUPERSAMPLE = 3
 
 @dataclass
 class JobResult:
-    image_bytes: bytes
+    image_bytes: bytes | None
     cacheable: bool
     detections: list[dict] | None = None
+
+    def overlay(self, size: tuple[int, int]) -> bytes:
+        if self.image_bytes is None:
+            self.image_bytes = _render_overlay(size, self.detections or [])
+        return self.image_bytes
 
 
 @dataclass
@@ -121,6 +133,13 @@ class DetectionQueue:
     async def pop_batch(self, max_size: int) -> list[Job]:
         async with self._condition:
             await self._condition.wait_for(lambda: len(self._items) > 0)
+            if len(self._items) < max_size:
+                try:
+                    await asyncio.wait_for(
+                        self._condition.wait_for(lambda: len(self._items) >= max_size), BATCH_FILL_WAIT_S,
+                    )
+                except asyncio.TimeoutError:
+                    pass
             batch, self._items = self._items[:max_size], self._items[max_size:]
             return batch
 
@@ -270,25 +289,45 @@ def _source_for_gsd(p: dict, gsd_m: float | None) -> dict:
     return p["sources"][gsd_m]
 
 
+SIZE_BUCKET_PX = 256
+
+
+def _bucket_imgsz(imgsz: int) -> int:
+    return max(SIZE_BUCKET_PX, math.ceil(imgsz / SIZE_BUCKET_PX) * SIZE_BUCKET_PX)
+
+
+def _batch_tensor(images: "list[Image.Image]", imgsz: int) -> "torch.Tensor":
+    batch = np.zeros((TILE_BATCH_SIZE, imgsz, imgsz, 3), dtype=np.uint8)
+    for i, img in enumerate(images):
+        arr = np.asarray(img)
+        batch[i, : arr.shape[0], : arr.shape[1]] = arr
+    tensor = torch.from_numpy(batch).permute(0, 3, 1, 2).contiguous()
+    return tensor.to(INFERENCE_DEVICE, non_blocking=True).float().div_(255)
+
+
 def _predict_models(
     models: dict[str, YOLO], model_keys: list[str], prepped: list[dict],
 ) -> dict[str, list]:
     if not model_keys or not prepped:
         return {}
 
-    def _predict(model_key: str, stream: "torch.cuda.Stream | None") -> tuple[str, list]:
+    def _predict(model_key: str) -> tuple[str, list]:
         gsd_m = model_router.gsd_for(model_key)
         sources = [_source_for_gsd(p, gsd_m)["image"] for p in prepped]
         imgsz = max(32, math.ceil(max(img.size[d] for img in sources for d in (0, 1)) / 32) * 32)
-        kwargs = dict(source=sources, conf=CONF_THRESHOLD, imgsz=imgsz, device=INFERENCE_DEVICE, verbose=False)
-        if stream is not None:
-            with torch.cuda.stream(stream):
-                return model_key, models[model_key].predict(quantize=16, **kwargs)
-        return model_key, models[model_key].predict(quantize=(16 if INFERENCE_DEVICE == "cuda" else None), **kwargs)
+        if INFERENCE_DEVICE == "cuda":
+            imgsz = _bucket_imgsz(imgsz)
+            source = _batch_tensor(sources, imgsz)
+        else:
+            source = sources
+        kwargs = dict(source=source, conf=CONF_THRESHOLD, imgsz=imgsz, device=INFERENCE_DEVICE, verbose=False)
+        results = models[model_key].predict(quantize=(16 if INFERENCE_DEVICE == "cuda" else None), **kwargs)
+        return model_key, results[: len(sources)]
 
-    use_cuda = INFERENCE_DEVICE == "cuda"
-    streams = [torch.cuda.Stream() for _ in model_keys] if use_cuda else [None] * len(model_keys)
-    futures = [_MODEL_EXECUTOR.submit(_predict, mk, st) for mk, st in zip(model_keys, streams)]
+    if INFERENCE_DEVICE == "cuda":
+        with _GPU_LOCK:
+            return dict(_predict(mk) for mk in model_keys)
+    futures = [_MODEL_EXECUTOR.submit(_predict, mk) for mk in model_keys]
     return dict(future.result() for future in futures)
 
 
@@ -336,40 +375,54 @@ def _neighbour_has_evidence(job: Job) -> bool:
     return False
 
 
-def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
+def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes | None, list[dict]]]":
     models: dict[str, YOLO] = _state["models"]
 
-    prepped: list[dict] = []
-    results_by_index: dict[int, tuple[bytes, list[dict]]] = {}
-    for i, job in enumerate(jobs):
+    triggered_models = model_router.models_for_tile(jobs[0].z)
+    finest = min((g for g in model_router.MODEL_GSD_M.values() if g is not None), default=None)
+
+    def _prep(i: int, job: Job) -> tuple[int, "dict | None"]:
         bounds = common.tile_bounds(job.z, job.x, job.y)
         lat = (bounds["north"] + bounds["south"]) / 2
         native_gsd_m = common.meters_per_pixel(job.z, lat)
         halo_px = int(round(HALO_M / native_gsd_m))
         padded, native_w, native_h = _padded_tile(job, halo_px)
-        finest = min((g for g in model_router.MODEL_GSD_M.values() if g is not None), default=None)
         longest = max(padded.size) * (native_gsd_m / finest if finest else 1.0)
         if longest > MAX_PREDICT_IMGSZ:
-            results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
-            continue
-        prepped.append({
+            return i, None
+        p = {
             "index": i, "job": job, "native_w": native_w, "native_h": native_h, "halo_px": halo_px,
             "native_gsd_m": native_gsd_m, "padded": padded, "sources": {},
             "raw": [], "counts": {},
-        })
+        }
+        for model_key in triggered_models:
+            _source_for_gsd(p, model_router.gsd_for(model_key))
+        return i, p
 
+    stage_t0 = time.perf_counter()
+    stage_ms: dict[str, float] = {}
+    prepped: list[dict] = []
+    results_by_index: dict[int, tuple[bytes | None, list[dict]]] = {}
+    for i, p in sorted(_PREP_EXECUTOR.map(lambda ij: _prep(*ij), enumerate(jobs)), key=lambda r: r[0]):
+        if p is None:
+            results_by_index[i] = (TRANSPARENT_TILE_BYTES, [])
+        else:
+            prepped.append(p)
+
+    stage_ms["prep"] = (time.perf_counter() - stage_t0) * 1000
     if not prepped:
         return [results_by_index[i] for i in range(len(jobs))]
 
-    triggered_models = model_router.models_for_tile(jobs[0].z)
     open_models = [mk for mk in triggered_models if not model_router.is_gated(mk)]
     gated_models = [mk for mk in triggered_models if model_router.is_gated(mk)]
 
+    stage_t0 = time.perf_counter()
     for model_key, results in _predict_models(models, open_models, prepped).items():
         for p, r in zip(prepped, results):
             dets, counts = _collect(p, model_key, r)
             p["raw"].extend(dets)
             p["counts"][model_key] = counts
+    stage_ms["open_models"] = (time.perf_counter() - stage_t0) * 1000
 
     batch_has_evidence = any(_is_graph_relevant(d) for p in prepped for d in p["raw"]) or any(
         _neighbour_has_evidence(p["job"]) for p in prepped
@@ -377,11 +430,14 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
     passing = prepped if batch_has_evidence else []
     for p in prepped:
         p["gate"] = "open" if batch_has_evidence else "closed"
+    stage_t0 = time.perf_counter()
     for model_key, results in _predict_models(models, gated_models, passing).items():
         for p, r in zip(passing, results):
             dets, counts = _collect(p, model_key, r)
             p["raw"].extend(dets)
             p["counts"][model_key] = counts
+    stage_ms["gated_models"] = (time.perf_counter() - stage_t0) * 1000
+    stage_t0 = time.perf_counter()
 
     for p in prepped:
         job = p["job"]
@@ -404,8 +460,9 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes, list[dict]]]":
                 [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
             )
 
-        overlay_bytes = _render_overlay((p["native_w"], p["native_h"]), detections)
-        results_by_index[p["index"]] = (overlay_bytes, detections)
+        results_by_index[p["index"]] = (TRANSPARENT_TILE_BYTES if not detections else None, detections)
+    stage_ms["fuse"] = (time.perf_counter() - stage_t0) * 1000
+    logger.info("Batch of %d stages: %s", len(jobs), {k: f"{v:.0f}ms" for k, v in stage_ms.items()})
 
     return [results_by_index[i] for i in range(len(jobs))]
 
@@ -486,33 +543,67 @@ def _load_model(model_key: str) -> YOLO:
     return YOLO(str(export_dir), task="obb")
 
 
+WARMUP_LAT_RANGE = (45.0, 60.0)
+
+
+def _typical_imgsz(gsd_m: float | None, lat: float) -> int:
+    native_gsd_m = common.meters_per_pixel(DETECT_ZOOM, lat)
+    padded_px = common.TILE_PX + 2 * int(round(HALO_M / native_gsd_m))
+    scale = native_gsd_m / gsd_m if gsd_m else 1.0
+    return max(32, math.ceil(padded_px * scale / 32) * 32)
+
+
+def _warmup_sizes(gsd_m: float | None) -> list[int]:
+    smallest = _bucket_imgsz(_typical_imgsz(gsd_m, WARMUP_LAT_RANGE[1]))
+    largest = _bucket_imgsz(_typical_imgsz(gsd_m, WARMUP_LAT_RANGE[0]))
+    return list(range(smallest, largest + 1, SIZE_BUCKET_PX))
+
+
+WARM_BATCH_TILE = (DETECT_ZOOM, 67115, 43729)
+
+
+def _warm_batch() -> None:
+    z, x, y = WARM_BATCH_TILE
+    t0 = time.perf_counter()
+    try:
+        image_bytes = common.fetch_tile(z, x, y).read_bytes()
+    except Exception:
+        logger.warning("Warm-up batch skipped: tile %s unavailable", common.tile_id(z, x, y))
+        return
+    jobs = [
+        Job(
+            tile_id=f"warmup_{i}", z=z, x=x, y=y, image_bytes=image_bytes, request=None,
+            has_interactive_request=False, fetch_ms=0.0, enqueued_at=0.0, future=None,
+        )
+        for i in range(TILE_BATCH_SIZE)
+    ]
+    _run_detection_batch(jobs)
+    logger.info("Warm-up batch of %d real tiles in %.1fs", TILE_BATCH_SIZE, time.perf_counter() - t0)
+
+
 @asynccontextmanager
 async def lifespan():
     models: dict[str, YOLO] = {}
     for model_key in model_router.MODELS:
         logger.info("Loading %s (device=%s, backend=%s)", model_key, INFERENCE_DEVICE, model_router.INFERENCE_BACKEND)
         model = _load_model(model_key)
-        model.predict(
-            source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
-            device=INFERENCE_DEVICE, quantize=(16 if INFERENCE_DEVICE == "cuda" else None), verbose=False,
-        )
-        models[model_key] = model
-
-    if INFERENCE_DEVICE == "cuda":
-        warmup_image = Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ))
-        model_keys = list(model_router.MODELS)
-        logger.info("Warming up %d model-executor thread(s) on CUDA", _MODEL_EXECUTOR_SIZE)
-        warmup_futures = [
-            _MODEL_EXECUTOR.submit(
-                models[model_keys[i % len(model_keys)]].predict,
-                source=warmup_image, imgsz=MAX_PREDICT_IMGSZ, device=INFERENCE_DEVICE,
-                quantize=16, verbose=False,
+        if INFERENCE_DEVICE == "cuda":
+            for imgsz in _warmup_sizes(model_router.gsd_for(model_key)):
+                t_warm = time.perf_counter()
+                model.predict(
+                    source=torch.zeros((TILE_BATCH_SIZE, 3, imgsz, imgsz), device=INFERENCE_DEVICE), imgsz=imgsz,
+                    device=INFERENCE_DEVICE, quantize=16, verbose=False,
+                )
+                logger.info(
+                    "Warmed up %s at batch %d x %dpx in %.1fs", model_key, TILE_BATCH_SIZE, imgsz,
+                    time.perf_counter() - t_warm,
+                )
+        else:
+            model.predict(
+                source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
+                device=INFERENCE_DEVICE, verbose=False,
             )
-            for i in range(_MODEL_EXECUTOR_SIZE)
-        ]
-        for future in warmup_futures:
-            future.result()
-        logger.info("All %d model-executor thread(s) warmed up", _MODEL_EXECUTOR_SIZE)
+        models[model_key] = model
 
     _state["models"] = models
     _state["queue"] = DetectionQueue(QUEUE_CAPACITY, QUEUE_TRIM_TO)
@@ -520,8 +611,10 @@ async def lifespan():
     _state["cache"] = TileCache(TILE_CACHE_CAPACITY)
     _state["stats"] = Stats()
 
+    if INFERENCE_DEVICE == "cuda":
+        await asyncio.get_running_loop().run_in_executor(_BATCH_EXECUTOR, _warm_batch)
+
     if INFERENCE_DEVICE == "cpu":
-        import torch
         torch.set_num_threads(max(1, (os.cpu_count() or 1) // WORKER_POOL_SIZE))
 
     logger.info("Starting %d parallel detection worker(s)", WORKER_POOL_SIZE)
@@ -616,7 +709,8 @@ async def get_detections(z: int, x: int, y: int):
     cached = _state["cache"].get(tile_id)
     if cached is not None:
         _state["stats"].cache_hits += 1
-        return Response(content=cached.image_bytes, media_type="image/png", headers={"Cache-Control": "no-store"})
+        overlay = cached.overlay((common.TILE_PX, common.TILE_PX))
+        return Response(content=overlay, media_type="image/png", headers={"Cache-Control": "no-store"})
     get_or_process_detections(z, x, y)
     return Response(content=TRANSPARENT_TILE_BYTES, media_type="image/png", headers={"Cache-Control": "no-store"})
 

@@ -3,6 +3,7 @@ import logging
 import math
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import common  # noqa: E402
 import geometry  # noqa: E402
 import site_graph  # noqa: E402
 import site_tracker  # noqa: E402
+import sites  # noqa: E402
 import tile_server  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,19 @@ def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict
     return {"type": "FeatureCollection", "features": features}
 
 
+def _result_payload(
+    kind: str, detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker, **extra,
+) -> dict:
+    all_detections = [d for dets in detections_by_tile.values() for d in dets]
+    return {
+        "type": kind,
+        "sites": _feature_collection(detections_by_tile, tracker),
+        "detections": {"type": "FeatureCollection", "features": sites.detection_features(detections_by_tile)},
+        "components": sites.component_summary(all_detections, GRAPH),
+        **extra,
+    }
+
+
 def _any_site_identified(detections_by_tile: dict[tuple[int, int, int], list[dict]]) -> bool:
     ref_lat = _ref_lat(detections_by_tile)
     return bool(classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH))
@@ -195,7 +210,57 @@ async def classify_extent(
         if cached:
             detections_by_tile[(z, x, y)] = cached
 
-    return _feature_collection(detections_by_tile, tracker)
+    return _result_payload("extent", detections_by_tile, tracker)
+
+
+PREFETCH_THREADS = 16
+SITE_CLASSIFY_INTERVAL_S = 1.0
+_PREFETCH_EXECUTOR = ThreadPoolExecutor(max_workers=PREFETCH_THREADS)
+
+
+async def _prefetch_with_ring(tiles: list[tuple[int, int, int]]) -> None:
+    wanted = {(z, x + dx, y + dy) for z, x, y in tiles for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+    loop = asyncio.get_running_loop()
+    t0 = time.monotonic()
+    await asyncio.gather(*(loop.run_in_executor(_PREFETCH_EXECUTOR, common.fetch_tile, z, x, y) for z, x, y in wanted))
+    logger.info("prefetched %d tile(s) incl. halo ring in %.1fs", len(wanted), time.monotonic() - t0)
+
+
+async def process_site(websocket: WebSocket, site: dict, session: "_Session") -> None:
+    tiles = _center_out_order(set(sites.site_tiles(site)))
+    session.known_tiles |= set(tiles)
+    t0 = time.monotonic()
+    logger.info("process_site: %s -- %d tile(s)", site["id"], len(tiles))
+    await _prefetch_with_ring(tiles)
+    pending = {tile_server.get_or_process_detections(z, x, y): (z, x, y) for z, x, y in tiles}
+    detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}
+    all_detections: list[dict] = []
+    done = 0
+    last_classified_at = 0.0
+    while pending:
+        finished, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for future in finished:
+            key = pending.pop(future)
+            done += 1
+            dets = future.result()
+            if dets:
+                detections_by_tile[key] = dets
+                all_detections.extend(dets)
+            message = {
+                "type": "site_tile", "site": site["id"], "tile": common.tile_id(*key), "done": done, "total": len(tiles),
+                "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets or []})},
+                "components": sites.component_summary(all_detections, GRAPH),
+            }
+            if time.monotonic() - last_classified_at >= SITE_CLASSIFY_INTERVAL_S:
+                message["sites"] = _feature_collection(detections_by_tile, session.tracker)
+                last_classified_at = time.monotonic()
+            await websocket.send_json(message)
+    logger.info("process_site: %s done in %.0fs", site["id"], time.monotonic() - t0)
+    await websocket.send_json({
+        "type": "site_done", "site": site["id"],
+        "sites": _feature_collection(detections_by_tile, session.tracker),
+        "components": sites.component_summary(all_detections, GRAPH),
+    })
 
 
 router = APIRouter()
@@ -219,6 +284,20 @@ async def ws_extent(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
+            if isinstance(data, dict) and "site" in data:
+                site = sites.SITES_BY_ID.get(data["site"])
+                if site is None:
+                    logger.warning("ws_extent: unknown site %r", data["site"])
+                    continue
+                if current_task is not None:
+                    current_task.cancel()
+                    try:
+                        await current_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                session.last_active = time.monotonic()
+                current_task = asyncio.ensure_future(process_site(websocket, site, session))
+                continue
             try:
                 body = ExtentRequest.model_validate(data)
             except Exception:

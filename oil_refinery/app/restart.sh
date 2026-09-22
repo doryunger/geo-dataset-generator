@@ -24,7 +24,7 @@ if [ ! -f "$REPO_ROOT/.env" ]; then
 fi
 
 set -a && source "$REPO_ROOT/.env" && set +a
-: "${INFERENCE_DEVICE:=cpu}"
+: "${INFERENCE_DEVICE:=cuda}"
 : "${HOST:=127.0.0.1}"
 : "${PORT:=8010}"
 export INFERENCE_DEVICE

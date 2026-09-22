@@ -23,8 +23,8 @@ run_server.bat      # Windows
 ./run_server.sh      # macOS/Linux
 ```
 Reads the repo-root `.env` for `MAPBOX_ACCESS_TOKEN`, loads the model once, and serves on
-`http://localhost:8010` (override with a `PORT` env var; `INFERENCE_DEVICE` defaults to `cpu` --
-see the design writeup's "Remote hosting readiness" notes before setting it to `cuda`).
+`http://localhost:8010` (override with a `PORT` env var; `INFERENCE_DEVICE` defaults to `cuda`,
+set it to `cpu` on a machine without a GPU -- about 4x slower per tile).
 
 **2. Frontend** (from `oil_refinery/app/web/`):
 ```
@@ -34,16 +34,29 @@ npm run dev
 Open the printed local URL. `vite.config.ts` proxies `/api/*` to the backend so no CORS setup is
 needed in dev.
 
+Both processes need their dependencies actually installed, not just declared: the backend's
+websocket route silently answers 404 if the venv lacks `websockets` (in `requirements.txt` -- run
+`pip install -r requirements.txt` from the repo root), and Vite fails on import if `node_modules`
+lacks the redux packages (`npm install`). Both were found missing on 2026-09-22.
+
+## The site panel
+
+The left column lists ten sites -- five refineries and five look-alikes (power station, tyre
+plant, container port, tank farm, steelworks). Click one: the map fits the whole site, freezes,
+and every zoom-17 tile inside the polygon is run through the detectors right then (nothing is
+precomputed; on the GPU a 54-tile refinery takes ~11 s, a 90-tile one ~17 s, look-alikes 5-9 s).
+Detection boxes appear as tiles finish, and the graph widget at the bottom fills in:
+each component node turns yellow when something fires and green when its required count is
+reached; the "oil refinery" parent turns green only when the classifier's rule holds (all four
+within 300 m). Look-alikes light up children but not the parent. Panning off the site clears the
+graph, which then follows the live view. Add `?debug` to the URL for the inference stats box.
+
 ## What you're looking at
 
-- Pan/zoom the map like any satellite map. Two stacked layers: base satellite imagery
-  (`GET /api/tile/{z}/{x}/{y}`, always fast, never waits on detection) and a transparent
-  detections overlay on top (`GET /api/detections/{z}/{x}/{y}`) that pops in boxes + confidence
-  labels once each tile's detection finishes. Below zoom 14 the overlay is empty -- detection
-  doesn't run at coarser scales.
-- The corner readout shows live throughput: tiles processed, dropped (queue overflow), cache hits,
-  last/average per-tile inference time, and current queue depth -- the actual numbers this POC
-  exists to produce.
+- Pan/zoom the map like any satellite map. Base satellite imagery (`GET /api/tile/{z}/{x}/{y}`,
+  always fast, never waits on detection) with detection boxes drawn on top as a vector layer,
+  fed over the websocket as each tile's detection finishes. Below zoom 16 free roaming doesn't
+  trigger detection; the site panel runs it at zoom 17 regardless of the map's zoom.
 - Revisiting an already-processed tile is instant (in-memory server-side cache); the server
   restarting clears it.
 

@@ -13,7 +13,58 @@ section) produced a stream of `502` lines for the whole loading window with no w
 from the frontend side. A push-based readiness signal over the websocket the app needs to open
 anyway avoids the frontend ever making a request the backend isn't there yet to answer.
 
+`App.tsx` is a flex row since 2026-09-22: `<SitesPanel />` on the left (fixed 340 px), then a
+`position: relative; flex: 1` box holding `<Map />`, `<GraphPanel />` and -- only with `?debug` in
+the URL -- `<StatsOverlay />` (moved to the top-left; the graph took its bottom-left spot).
+
+## SitesPanel.tsx
+
+The site list (`GET /api/sites`, grouped refineries / look-alikes, with each site's z17 tile count
+so the wait is predictable). Clicking dispatches `siteSelected`, nothing else; the whole flow after
+that is driven from `Map.tsx` off store state. Buttons are disabled while a site is landing or
+processing.
+
+## GraphPanel.tsx
+
+The semantic-graph widget: parent node "oil refinery", four child nodes with their running count
+(`n / min_count` where the graph sets one). Child colour: grey = none at/above its floor, yellow =
+some but fewer than `min_count`, green = count reached. The parent is green only when the server's
+classifier actually identified a site (`sites.features.length > 0`), which is the 300 m rule --
+four green children with a grey parent is possible and correct, hence the caption. Reads
+`s.map.graph`, which `resultReceived` sets from every server message, so it shows the site's
+accumulated counts during/after processing and the live viewport's counts when roaming; a
+placeholder row of grey nodes keeps the layout stable when there is nothing yet.
+
+## Site flow (store + Map.tsx)
+
+`siteSelected` clears graph/sites/detections, sets `sitePhase: 'landing'` and a `flyTo` bbox.
+`Map.tsx` fits the bounds (padding 40, maxZoom 17 -- whole site in view, whatever zoom that is).
+On the next `viewportSettled` while `landing`, it sends `{site}` over the socket and moves to
+`processing`; every `site_tile` message updates progress, detections and graph; `site_done` moves
+to `done`. While landing or processing (`siteBusy`) all map interaction handlers are disabled, a
+full-map overlay with a large spinner and "processing tile n / N" sits on top, and both the
+extent-request effect and the gesture-cancel effect are gated off -- an extent message during
+processing would prune the site's queued jobs server-side (see the server doc). Once `done`, a
+`viewportSettled` whose bounds no longer intersect the site's bbox dispatches `siteCleared`
+(selection and graph go; the next extent result repopulates the graph from the live view).
+`resultReceived` ignores `site_*` messages whose `site` isn't the currently selected one, so a
+late message from a cancelled run can't paint over a new selection. `site_tile` messages are
+deltas: their `detections` are appended to the store's collection, `sites` is only present when
+the server ran the classifier this second (else the previous polygons and `identified` stand), and
+`extent` messages replace everything as before.
+
+Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `detection-label`
+symbols from zoom 16) fed from each result's `detections` collection, replacing the raster
+`/api/detections` overlay that only existed at z17 -- a whole site sits at z14-15 and the boxes
+have to be visible there as tiles finish. The selected site's polygon is drawn as a dashed white
+outline (`site-area`).
+
 ## store.ts
+
+`flyTo` is `{ bbox, generation } | null`; the generation counter exists for the same reason as
+`readyGeneration`: re-selecting the same site must re-trigger the effect even though the payload
+is identical.
+
 
 Single source of truth for the map's *data* lifecycle -- what MapLibre itself can't already tell us
 (its own tile-loading state is real, but "should a repaint happen, and has it happened yet" isn't

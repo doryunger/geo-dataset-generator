@@ -1,16 +1,24 @@
+import GraphPanel from './GraphPanel'
 import Map from './Map'
+import SitesPanel from './SitesPanel'
 import StatsOverlay from './StatsOverlay'
 import { type RootState, useAppSelector } from './store'
+
+const SHOW_DEBUG = new URLSearchParams(window.location.search).has('debug')
 
 export default function App() {
   const serverReady = useAppSelector((s: RootState) => s.connection.serverReady)
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+    <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
       {serverReady ? (
         <>
-          <Map />
-          <StatsOverlay />
+          <SitesPanel />
+          <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%' }}>
+            <Map />
+            <GraphPanel />
+            {SHOW_DEBUG && <StatsOverlay />}
+          </div>
         </>
       ) : (
         <div

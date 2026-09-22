@@ -1,12 +1,14 @@
 import { useEffect, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties } from './api'
+import {
+  EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties,
+} from './api'
 import { extentSocket } from './socket'
 import {
   gestureStarted, layersPainted,
-  mapLoaded as mapLoadedAction, reset, type RootState, useAppDispatch, useAppSelector,
-  type Viewport, viewportSettled, zoomChanged,
+  mapLoaded as mapLoadedAction, reset, type RootState, siteCleared, siteProcessingStarted,
+  useAppDispatch, useAppSelector, type Viewport, viewportSettled, zoomChanged,
 } from './store'
 
 const MIN_DETECT_ZOOM = 16
@@ -25,6 +27,17 @@ function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
   const latRad = (lat * Math.PI) / 180
   const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n)
   return [x, y]
+}
+
+function intersects(v: Viewport, bbox: [number, number, number, number]): boolean {
+  const [west, south, east, north] = bbox
+  return v.west < east && v.east > west && v.south < north && v.north > south
+}
+
+const EMPTY_POLYGON = { type: 'FeatureCollection', features: [] } as const
+
+function polygonFeature(geometry: { type: 'Polygon'; coordinates: number[][][] }) {
+  return { type: 'FeatureCollection' as const, features: [{ type: 'Feature' as const, geometry, properties: {} }] }
 }
 
 function currentViewport(map: maplibregl.Map): Viewport {
@@ -83,6 +96,12 @@ export default function Map() {
   const paintedGeneration = useAppSelector((s: RootState) => s.map.paintedGeneration)
   const viewport = useAppSelector((s: RootState) => s.map.viewport)
   const gestureActive = useAppSelector((s: RootState) => s.map.gestureActive)
+  const flyTo = useAppSelector((s: RootState) => s.map.flyTo)
+  const detections = useAppSelector((s: RootState) => s.map.detections)
+  const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
+  const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
+  const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
+  const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -104,16 +123,9 @@ export default function Map() {
             maxzoom: DETECT_ZOOM,
             attribution: '© Mapbox',
           },
-          detections: {
-            type: 'raster',
-            tiles: ['/api/detections/{z}/{x}/{y}'],
-            tileSize: 512,
-            maxzoom: DETECT_ZOOM,
-          },
         },
         layers: [
           { id: 'basemap', type: 'raster', source: 'basemap' },
-          { id: 'detections', type: 'raster', source: 'detections' },
         ],
       },
       center: INITIAL_CENTER,
@@ -125,7 +137,7 @@ export default function Map() {
     map.on('zoom', () => dispatch(zoomChanged(map.getZoom())))
 
     map.on('sourcedata', (e) => {
-      if (e.sourceId !== 'basemap' && e.sourceId !== 'detections') return
+      if (e.sourceId !== 'basemap') return
       tileDebug(`sourcedata [${e.sourceId}]`, {
         isSourceLoaded: e.isSourceLoaded,
         dataType: e.dataType,
@@ -180,15 +192,42 @@ export default function Map() {
   }, [dispatch])
 
   useEffect(() => {
-    if (!gestureActive) return
+    if (!gestureActive || siteBusy) return
     extentSocket.send(DETECT_ZOOM, [])
-  }, [gestureActive])
+  }, [gestureActive, siteBusy])
 
   useEffect(() => {
-    if (!viewport || viewport.zoom < MIN_DETECT_ZOOM) return
+    const map = mapRef.current
+    if (!map || !isMapLoaded || !flyTo) return
+    const [west, south, east, north] = flyTo.bbox
+    map.fitBounds([[west, south], [east, north]], { padding: 40, maxZoom: DETECT_ZOOM, duration: 1200 })
+  }, [isMapLoaded, flyTo])
+
+  useEffect(() => {
+    if (!viewport || !selectedSite) return
+    if (sitePhase === 'landing') {
+      extentSocket.sendSite(selectedSite.id)
+      dispatch(siteProcessingStarted())
+      return
+    }
+    if (sitePhase === 'done' && !intersects(viewport, selectedSite.bbox)) dispatch(siteCleared())
+  }, [dispatch, viewport, selectedSite, sitePhase])
+
+  useEffect(() => {
+    if (siteBusy || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
     const tiles = tilesForViewport(viewport)
     if (tiles.length > 0) extentSocket.send(DETECT_ZOOM, tiles)
-  }, [viewport])
+  }, [viewport, siteBusy])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const handlers = [map.dragPan, map.scrollZoom, map.keyboard, map.doubleClickZoom, map.touchZoomRotate, map.boxZoom]
+    for (const handler of handlers) {
+      if (siteBusy) handler.disable()
+      else handler.enable()
+    }
+  }, [siteBusy])
 
   useEffect(() => {
     const map = mapRef.current
@@ -201,6 +240,24 @@ export default function Map() {
     map.addLayer({
       id: 'site-outline', type: 'line', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
       paint: { 'line-color': '#ff00aa', 'line-width': 4 },
+    })
+    map.addSource('site-area', { type: 'geojson', data: EMPTY_POLYGON })
+    map.addLayer({
+      id: 'site-area-outline', type: 'line', source: 'site-area',
+      paint: { 'line-color': '#ffffff', 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': 0.8 },
+    })
+    map.addSource('detections', { type: 'geojson', data: EMPTY_DETECTIONS })
+    map.addLayer({
+      id: 'detection-outline', type: 'line', source: 'detections',
+      paint: { 'line-color': '#ff00aa', 'line-width': 2 },
+    })
+    map.addLayer({
+      id: 'detection-label', type: 'symbol', source: 'detections', minzoom: MIN_DETECT_ZOOM,
+      layout: {
+        'text-field': ['get', 'label'], 'text-size': 11, 'text-font': ['Open Sans Semibold'],
+        'text-anchor': 'top', 'text-offset': [0, 0.4],
+      },
+      paint: { 'text-color': '#fff', 'text-halo-color': '#ff00aa', 'text-halo-width': 1.5 },
     })
     map.addSource('site-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })
     map.addLayer({
@@ -218,19 +275,44 @@ export default function Map() {
     const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
     boundariesSource?.setData(sites)
     labelsSource?.setData(labelsFrom(sites))
-
-    const detectionsSource = map.getSource('detections') as maplibregl.RasterTileSource | undefined
-    detectionsSource?.setTiles(['/api/detections/{z}/{x}/{y}'])
-
-    map.triggerRepaint()
+    const detectionsSource = map.getSource('detections') as maplibregl.GeoJSONSource | undefined
+    detectionsSource?.setData(detections)
 
     dispatch(layersPainted(readyGeneration))
-  }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, sites])
+  }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, sites, detections])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !isMapLoaded) return
+    const siteAreaSource = map.getSource('site-area') as maplibregl.GeoJSONSource | undefined
+    siteAreaSource?.setData(selectedSite ? polygonFeature(selectedSite.geometry) : EMPTY_POLYGON)
+  }, [isMapLoaded, selectedSite])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      {zoom < MIN_DETECT_ZOOM && (
+      {siteBusy && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, zIndex: 2, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 18, background: 'rgba(0,0,0,0.35)',
+            color: '#fff', fontFamily: 'ui-monospace, monospace', cursor: 'wait',
+          }}
+        >
+          <div
+            style={{
+              width: 96, height: 96, borderRadius: '50%', border: '10px solid rgba(255,255,255,0.25)',
+              borderTopColor: '#ff00aa', animation: 'spin 1s linear infinite',
+            }}
+          />
+          <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
+            {sitePhase === 'landing'
+              ? 'landing…'
+              : `processing tile ${siteProgress.done} / ${siteProgress.total}`}
+          </div>
+        </div>
+      )}
+      {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && (
         <div
           style={{
             position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
@@ -244,7 +326,7 @@ export default function Map() {
       {sites.features.length > 0 && (
         <div
           style={{
-            position: 'absolute', top: 12, right: 12, zIndex: 1,
+            position: 'absolute', top: 12, right: 56, zIndex: 1,
             background: 'rgba(20,20,20,0.82)', color: '#fff', fontSize: 12,
             fontFamily: 'ui-monospace, monospace', borderRadius: 8, padding: '10px 14px',
             minWidth: 200, lineHeight: 1.6,

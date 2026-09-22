@@ -25,6 +25,16 @@ def _iou(corners_a: list[tuple[float, float]], corners_b: list[tuple[float, floa
     return inter / union if union else 0.0
 
 
+def _bbox(corners: list[tuple[float, float]]) -> tuple[float, float, float, float]:
+    xs = [pt[0] for pt in corners]
+    ys = [pt[1] for pt in corners]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _bboxes_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
 class _UnionFind:
     def __init__(self, n: int):
         self._parent = list(range(n))
@@ -50,9 +60,13 @@ def fuse(detections: list[dict], canonical_model: str) -> list[dict]:
         raise ValueError(f"fuse() got detections from more than one tile: {sorted(tile_ids)}")
 
     uf = _UnionFind(len(detections))
+    concepts = [_normalize(d["class_name"]) for d in detections]
+    boxes = [_bbox(d["corners"]) for d in detections]
     for i in range(len(detections)):
         for j in range(i + 1, len(detections)):
-            if not same_concept(detections[i]["class_name"], detections[j]["class_name"]):
+            if concepts[i] not in concepts[j] and concepts[j] not in concepts[i]:
+                continue
+            if not _bboxes_overlap(boxes[i], boxes[j]):
                 continue
             if _iou(detections[i]["corners"], detections[j]["corners"]) >= IOU_MERGE_THRESHOLD:
                 uf.union(i, j)

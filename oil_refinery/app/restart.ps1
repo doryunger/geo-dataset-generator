@@ -24,7 +24,7 @@ Get-Content (Join-Path $REPO_ROOT ".env") | Where-Object { $_ -match '^\s*[^#\s]
     $name, $value = $_ -split '=', 2
     [System.Environment]::SetEnvironmentVariable($name.Trim(), $value.Trim(), "Process")
 }
-if (-not $env:INFERENCE_DEVICE) { $env:INFERENCE_DEVICE = "cpu" }
+if (-not $env:INFERENCE_DEVICE) { $env:INFERENCE_DEVICE = "cuda" }
 if (-not $env:HOST) { $env:HOST = "127.0.0.1" }
 if (-not $env:PORT) { $env:PORT = "8010" }
 

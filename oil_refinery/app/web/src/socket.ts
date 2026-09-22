@@ -1,5 +1,5 @@
 import { ExtentSocket } from './api'
-import { extentResultReceived, serverReadyReceived, store } from './store'
+import { resultReceived, serverReadyReceived, store } from './store'
 
 export const extentSocket = new ExtentSocket({
   onServerReady: () => {
@@ -7,7 +7,7 @@ export const extentSocket = new ExtentSocket({
     store.dispatch(serverReadyReceived())
   },
   onResult: (result) => {
-    console.log('[socket] onResult', { siteCount: result.features.length })
-    store.dispatch(extentResultReceived(result))
+    console.log('[socket] onResult', { type: result.type, siteCount: result.sites?.features.length })
+    store.dispatch(resultReceived(result))
   },
 })

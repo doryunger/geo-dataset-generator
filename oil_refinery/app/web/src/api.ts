@@ -38,11 +38,58 @@ export interface SiteFeatureCollection {
 
 export const EMPTY_FEATURE_COLLECTION: SiteFeatureCollection = { type: 'FeatureCollection', features: [] }
 
+export interface Site {
+  id: string
+  name: string
+  kind: 'refinery' | 'look-alike'
+  type: string
+  bbox: [number, number, number, number]
+  geometry: { type: 'Polygon'; coordinates: number[][][] }
+  tiles: number
+}
+
+export interface ComponentSummary {
+  component: string
+  min_confidence: number
+  min_count: number
+  count: number
+  max_confidence: number | null
+  satisfied: boolean
+}
+
+export interface DetectionFeatureCollection {
+  type: 'FeatureCollection'
+  features: {
+    type: 'Feature'
+    geometry: { type: 'Polygon'; coordinates: number[][][] }
+    properties: { tile: string; class_name: string; confidence: number; label: string }
+  }[]
+}
+
+export const EMPTY_DETECTIONS: DetectionFeatureCollection = { type: 'FeatureCollection', features: [] }
+
+export interface ResultMessage {
+  type: 'extent' | 'site_tile' | 'site_done'
+  sites?: SiteFeatureCollection
+  detections?: DetectionFeatureCollection
+  components: ComponentSummary[]
+  site?: string
+  tile?: string
+  done?: number
+  total?: number
+}
+
+export async function fetchSites(): Promise<Site[]> {
+  const res = await fetch('/api/sites')
+  if (!res.ok) throw new Error(`GET /api/sites failed: ${res.status}`)
+  return res.json()
+}
+
 export const INITIAL_ZOOM = 14
 
 export interface ExtentSocketHandlers {
   onServerReady: () => void
-  onResult: (result: SiteFeatureCollection) => void
+  onResult: (result: ResultMessage) => void
 }
 
 export class ExtentSocket {
@@ -74,6 +121,10 @@ export class ExtentSocket {
     this.ws.onclose = () => {
       if (!this.closed) setTimeout(() => this.connect(), 1000)
     }
+  }
+
+  sendSite(id: string) {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ site: id }))
   }
 
   send(zoom: number, tiles: { x: number; y: number }[]) {

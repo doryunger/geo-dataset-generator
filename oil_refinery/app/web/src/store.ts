@@ -1,6 +1,9 @@
 import { configureStore, createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux'
-import { EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection } from './api'
+import {
+  type ComponentSummary, type DetectionFeatureCollection, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION,
+  INITIAL_ZOOM, type ResultMessage, type Site, type SiteFeatureCollection,
+} from './api'
 
 export interface Viewport {
   zoom: number
@@ -10,24 +13,43 @@ export interface Viewport {
   north: number
 }
 
+export interface Graph {
+  components: ComponentSummary[]
+  identified: boolean
+}
+
+export type SitePhase = 'landing' | 'processing' | 'done'
+
 interface MapState {
   zoom: number
   mapLoaded: boolean
   sites: SiteFeatureCollection
+  detections: DetectionFeatureCollection
+  graph: Graph | null
   readyGeneration: number
   paintedGeneration: number
   viewport: Viewport | null
   gestureActive: boolean
+  flyTo: { bbox: [number, number, number, number]; generation: number } | null
+  selectedSite: Site | null
+  sitePhase: SitePhase | null
+  siteProgress: { done: number; total: number }
 }
 
 const initialState: MapState = {
   zoom: INITIAL_ZOOM,
   mapLoaded: false,
   sites: EMPTY_FEATURE_COLLECTION,
+  detections: EMPTY_DETECTIONS,
+  graph: null,
   readyGeneration: 0,
   paintedGeneration: 0,
   viewport: null,
   gestureActive: false,
+  flyTo: null,
+  selectedSite: null,
+  sitePhase: null,
+  siteProgress: { done: 0, total: 0 },
 }
 
 const mapSlice = createSlice({
@@ -47,12 +69,43 @@ const mapSlice = createSlice({
       state.viewport = action.payload
       state.gestureActive = false
     },
-    extentResultReceived(state, action: PayloadAction<SiteFeatureCollection>) {
-      state.sites = action.payload
+    resultReceived(state, action: PayloadAction<ResultMessage>) {
+      const result = action.payload
+      if (result.type !== 'extent' && result.site !== state.selectedSite?.id) return
+      if (result.type === 'site_tile') {
+        if (result.detections) state.detections.features.push(...result.detections.features)
+        state.siteProgress = { done: result.done ?? 0, total: result.total ?? 0 }
+      } else if (result.detections) {
+        state.detections = result.detections
+      }
+      if (result.sites) state.sites = result.sites
+      state.graph = {
+        components: result.components,
+        identified: result.sites ? result.sites.features.length > 0 : (state.graph?.identified ?? false),
+      }
       state.readyGeneration += 1
+      if (result.type === 'site_done') state.sitePhase = 'done'
     },
     layersPainted(state, action: PayloadAction<number>) {
       state.paintedGeneration = Math.max(state.paintedGeneration, action.payload)
+    },
+    siteSelected(state, action: PayloadAction<Site>) {
+      state.selectedSite = action.payload
+      state.sitePhase = 'landing'
+      state.siteProgress = { done: 0, total: action.payload.tiles }
+      state.graph = null
+      state.sites = EMPTY_FEATURE_COLLECTION
+      state.detections = EMPTY_DETECTIONS
+      state.readyGeneration += 1
+      state.flyTo = { bbox: action.payload.bbox, generation: (state.flyTo?.generation ?? 0) + 1 }
+    },
+    siteProcessingStarted(state) {
+      state.sitePhase = 'processing'
+    },
+    siteCleared(state) {
+      state.selectedSite = null
+      state.sitePhase = null
+      state.graph = null
     },
     reset() {
       return initialState
@@ -62,7 +115,7 @@ const mapSlice = createSlice({
 
 export const {
   zoomChanged, mapLoaded, gestureStarted, viewportSettled,
-  extentResultReceived, layersPainted, reset,
+  resultReceived, layersPainted, siteSelected, siteProcessingStarted, siteCleared, reset,
 } = mapSlice.actions
 
 interface ConnectionState {
