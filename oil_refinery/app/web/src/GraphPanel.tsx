@@ -31,6 +31,9 @@ export default function GraphPanel() {
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
 
+  const hasCounts = (graph?.components ?? []).some((c) => c.count > 0)
+  if (!selectedSite && !hasCounts) return null
+
   const components = graph && graph.components.length > 0 ? graph.components : PLACEHOLDER
   const identified = graph?.identified ?? false
 
@@ -44,7 +47,7 @@ export default function GraphPanel() {
     >
       <div style={{ fontSize: 11, opacity: 0.6, alignSelf: 'flex-start', marginBottom: 8 }}>
         {selectedSite
-          ? `${selectedSite.name}${sitePhase === 'done' ? '' : ' · processing'}`
+          ? `${selectedSite.label}${sitePhase === 'done' ? '' : ' · processing'}`
           : 'current view'}
       </div>
       <div style={node(identified ? GREEN : GREY, true)}>oil refinery</div>

@@ -42,7 +42,11 @@ classifier actually identified a site (`sites.features.length > 0`), which is th
 four green children with a grey parent is possible and correct, hence the caption. Reads
 `s.map.graph`, which `resultReceived` sets from every server message, so it shows the site's
 accumulated counts during/after processing and the live viewport's counts when roaming; a
-placeholder row of grey nodes keeps the layout stable when there is nothing yet.
+placeholder row of grey nodes keeps the layout stable once a site is selected but nothing has come
+back yet. It renders nothing at all when no site is selected and no component has a count, so the
+app opens as a bare map with the site list -- the first thing the user saw on a cold start was
+otherwise an all-zero graph plus a "zoom in to 16+" banner, which reads like something is wrong.
+That banner is likewise suppressed until the user has actually moved the map (`hasRoamed`).
 
 ## Site flow (store + Map.tsx)
 

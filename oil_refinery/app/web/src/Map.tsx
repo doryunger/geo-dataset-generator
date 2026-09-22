@@ -107,6 +107,7 @@ export default function Map() {
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
   const [now, setNow] = useState(() => Date.now())
   const siteSeenInViewRef = useRef<string | null>(null)
+  const [hasRoamed, setHasRoamed] = useState(false)
 
   useEffect(() => {
     if (sitePhase !== 'processing') return
@@ -191,6 +192,7 @@ export default function Map() {
 
     map.on('movestart', () => {
       clearTimeout(moveEndDebounceTimer)
+      setHasRoamed(true)
       dispatch(gestureStarted())
     })
 
@@ -322,7 +324,7 @@ export default function Map() {
           )}
         </div>
       )}
-      {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && (
+      {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && hasRoamed && (
         <div
           style={{
             position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
