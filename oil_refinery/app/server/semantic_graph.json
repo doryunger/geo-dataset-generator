@@ -29,8 +29,8 @@
       "relation": "requires",
       "from": "oil_refinery",
       "to": "fan-unit",
-      "min_confidence": 0.5,
-      "min_count": 3
+      "min_confidence": 0.65,
+      "min_count": 6
     },
     {
       "relation": "requires",

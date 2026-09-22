@@ -696,6 +696,23 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Fan-unit floor 0.65 and min_count 6 (2026-09-23)
+
+Raised from 0.5/3 after the user saw fan-unit boxes at 0.51 and 0.58 on a pond and a small dark
+circle, and judged that three fans is not evidence of a refinery anyway. Swept on the cached
+57-site benchmark (`eval_sites.py --floor fan-unit=X --count fan-unit=N`):
+
+- floor, at count 3: 18/18 refineries up to 0.65, 17/18 at 0.70, 15/18 at 0.75, 12/18 at 0.80.
+- count, at floor 0.65: 18/18 up to 5, 15/18 at 6, 13/18 at 8, 11/18 at 10.
+- look-alikes are 0/39 at every combination -- the column requirement does the rejecting, so both
+  of these knobs only ever cost refinery recall.
+
+0.65 is therefore the highest floor that keeps every refinery. `min_count` 6 was taken knowing it
+drops three (Gunvor Energy Rotterdam, BP Lingen, Rheinland Werk Nord, all with a strong fan at
+0.83-0.86 but few of them): the user asked for 6, and none of the three is in the demo's five, so
+the demo still shows 5/5 green and 5/5 red. Revisit `min_count` before quoting the 18/18 number
+anywhere.
+
 ## The model gate and deliberate site runs (2026-09-22)
 
 The gated models (fan-unit, distillation-column) run only when a batch already shows
