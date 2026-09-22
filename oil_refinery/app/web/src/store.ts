@@ -34,6 +34,7 @@ interface MapState {
   selectedSite: Site | null
   sitePhase: SitePhase | null
   siteProgress: { done: number; total: number; startedAt: number; updatedAt: number }
+  siteVerdicts: Record<string, boolean>
 }
 
 const initialState: MapState = {
@@ -50,6 +51,7 @@ const initialState: MapState = {
   selectedSite: null,
   sitePhase: null,
   siteProgress: { done: 0, total: 0, startedAt: 0, updatedAt: 0 },
+  siteVerdicts: {},
 }
 
 const mapSlice = createSlice({
@@ -94,7 +96,10 @@ const mapSlice = createSlice({
         identified: result.sites ? result.sites.features.length > 0 : (state.graph?.identified ?? false),
       }
       state.readyGeneration += 1
-      if (result.type === 'site_done') state.sitePhase = 'done'
+      if (result.type === 'site_done') {
+        state.sitePhase = 'done'
+        if (result.site) state.siteVerdicts[result.site] = (result.sites?.features.length ?? 0) > 0
+      }
     },
     layersPainted(state, action: PayloadAction<number>) {
       state.paintedGeneration = Math.max(state.paintedGeneration, action.payload)

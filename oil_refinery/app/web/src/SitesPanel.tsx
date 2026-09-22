@@ -12,30 +12,42 @@ const panel: CSSProperties = {
 
 const heading: CSSProperties = { fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', opacity: 0.55, marginBottom: 6 }
 
-function siteButton(selected: boolean, disabled: boolean): CSSProperties {
+const VERDICT_GREEN = '#16c60c'
+const VERDICT_RED = '#ff2d2d'
+
+function siteButton(selected: boolean, disabled: boolean, verdict: boolean | undefined): CSSProperties {
+  const accent = verdict === undefined ? null : verdict ? VERDICT_GREEN : VERDICT_RED
   return {
     display: 'block', width: '100%', textAlign: 'left', boxSizing: 'border-box',
-    background: selected ? '#2d2d2d' : 'transparent', color: 'inherit', border: '1px solid',
-    borderColor: selected ? '#555' : 'transparent', borderRadius: 6, padding: '6px 8px',
+    background: accent ? `${accent}26` : selected ? '#2d2d2d' : 'transparent',
+    color: 'inherit',
+    borderStyle: 'solid',
+    borderColor: accent ?? (selected ? '#555' : 'transparent'),
+    borderWidth: accent ? '1px 1px 1px 4px' : '1px',
+    borderRadius: 6, padding: accent ? '6px 8px 6px 5px' : '6px 8px',
     cursor: disabled ? 'default' : 'pointer', opacity: disabled && !selected ? 0.5 : 1,
     fontFamily: 'inherit', fontSize: 'inherit', lineHeight: 1.4,
+    outline: selected ? '1px solid #888' : 'none',
   }
 }
 
-function SiteList({ title, sites, selectedId, disabled, onSelect }: {
-  title: string; sites: Site[]; selectedId: string | null; disabled: boolean; onSelect: (site: Site) => void
+function SiteList({ title, sites, selectedId, disabled, verdicts, onSelect }: {
+  title: string; sites: Site[]; selectedId: string | null; disabled: boolean
+  verdicts: Record<string, boolean>; onSelect: (site: Site) => void
 }) {
   return (
     <div>
       <div style={heading}>{title}</div>
       {sites.map((site) => (
         <button
-          key={site.id} style={siteButton(site.id === selectedId, disabled)} disabled={disabled}
-          onClick={() => onSelect(site)}
+          key={site.id} style={siteButton(site.id === selectedId, disabled, verdicts[site.id])}
+          disabled={disabled} onClick={() => onSelect(site)}
         >
           <div>{site.name}</div>
           <div style={{ opacity: 0.6, fontSize: 11 }}>
-            {site.kind === 'look-alike' ? `${site.type} · ` : ''}{site.tiles} tiles
+            {site.id in verdicts
+              ? verdicts[site.id] ? 'oil refinery' : 'not a refinery'
+              : `${site.kind === 'look-alike' ? `${site.type} · ` : ''}${site.tiles} tiles`}
           </div>
         </button>
       ))}
@@ -47,6 +59,7 @@ export default function SitesPanel() {
   const dispatch = useAppDispatch()
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
+  const verdicts = useAppSelector((s: RootState) => s.map.siteVerdicts)
   const [sites, setSites] = useState<Site[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -67,11 +80,11 @@ export default function SitesPanel() {
       </div>
       <SiteList
         title="Refineries" sites={sites.filter((s) => s.kind === 'refinery')}
-        selectedId={selectedSite?.id ?? null} disabled={busy} onSelect={select}
+        selectedId={selectedSite?.id ?? null} disabled={busy} verdicts={verdicts} onSelect={select}
       />
       <SiteList
         title="Look-alikes" sites={sites.filter((s) => s.kind === 'look-alike')}
-        selectedId={selectedSite?.id ?? null} disabled={busy} onSelect={select}
+        selectedId={selectedSite?.id ?? null} disabled={busy} verdicts={verdicts} onSelect={select}
       />
       {error && <div style={{ color: '#ff6b6b' }}>{error}</div>}
     </div>

@@ -24,6 +24,13 @@ so the wait is predictable). Clicking dispatches `siteSelected`, nothing else; t
 that is driven from `Map.tsx` off store state. Buttons are disabled while a site is landing or
 processing.
 
+Once a site has a verdict (`store.siteVerdicts`, written on `site_done`) its button is tinted and
+left-barred bright green for identified / bright red for not, and the subtitle switches from the
+tile count to "oil refinery" / "not a refinery". Colours are by *verdict*, not by correctness, so a
+correctly rejected look-alike is red. Verdicts persist for the session, so the panel doubles as a
+record of what has been run. Border styles are set as `borderStyle`/`borderColor`/`borderWidth`,
+never mixing the `border` shorthand with a longhand, which React warns about on re-render.
+
 ## GraphPanel.tsx
 
 The semantic-graph widget: parent node "oil refinery", four child nodes with their running count
@@ -45,7 +52,10 @@ to `done`. While landing or processing (`siteBusy`) all map interaction handlers
 full-map overlay with a large spinner, the word "processing" and a live countdown sits on top, and
 both the extent-request effect and the gesture-cancel effect are gated off -- an extent message during
 processing would prune the site's queued jobs server-side (see the server doc). Once `done`, a
-`viewportSettled` whose bounds no longer intersect the site's bbox dispatches `siteCleared`
+`viewportSettled` whose bounds no longer intersect the site's bbox dispatches `siteCleared`, but
+only once that site has actually been seen in view (`siteSeenInViewRef` holds the id) -- a stale
+debounced `moveend` from the previous site's camera move otherwise arrived after the new site
+finished and cleared it immediately, which showed up when clicking through sites quickly
 (selection and graph go; the next extent result repopulates the graph from the live view).
 `resultReceived` ignores `site_*` messages whose `site` isn't the currently selected one, so a
 late message from a cancelled run can't paint over a new selection. `site_tile` messages are

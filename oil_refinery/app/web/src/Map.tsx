@@ -106,6 +106,7 @@ export default function Map() {
   const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
   const [now, setNow] = useState(() => Date.now())
+  const siteSeenInViewRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (sitePhase !== 'processing') return
@@ -220,7 +221,12 @@ export default function Map() {
       dispatch(siteProcessingStarted())
       return
     }
-    if (sitePhase === 'done' && !intersects(viewport, selectedSite.bbox)) dispatch(siteCleared())
+    if (sitePhase !== 'done') return
+    if (intersects(viewport, selectedSite.bbox)) {
+      siteSeenInViewRef.current = selectedSite.id
+    } else if (siteSeenInViewRef.current === selectedSite.id) {
+      dispatch(siteCleared())
+    }
   }, [dispatch, viewport, selectedSite, sitePhase])
 
   useEffect(() => {
