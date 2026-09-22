@@ -41,16 +41,22 @@ lacks the redux packages (`npm install`). Both were found missing on 2026-09-22.
 
 ## The site panel
 
-The left column lists ten sites -- five refineries and five look-alikes (power station, tyre
-plant, container port, tank farm, steelworks). Click one: the map fits the whole site, freezes,
-and every zoom-17 tile inside the polygon is run through the detectors right then (nothing is
-precomputed; on the GPU a 54-tile refinery takes ~9 s, a 90-tile one ~15 s, look-alikes 4-5 s).
-Detection boxes appear as tiles finish, and the graph widget at the bottom fills in:
-each component node turns yellow when something fires and green when its required count is
-reached; the "oil refinery" parent turns green only when the classifier's rule holds (all three
-within 200 m); the outlined area is drawn from the detections themselves, not from the site's OSM
-boundary. Look-alikes light up children but not the parent. Panning off the site clears the
-graph, which then follows the live view. Add `?debug` to the URL for the inference stats box.
+A two-column list floats over the top-left of the map: five refineries and five look-alikes
+(power station, tyre plant, container port, tank farm, steelworks). Click one: the map fits the
+whole site, freezes, and every zoom-17 tile inside the polygon is run through the detectors right
+then -- whatever zoom the map itself has landed at, so boxes appear over the whole site as tiles
+finish; the zoom-16 floor applies only to free roaming. Nothing is precomputed and nothing is
+reused: the site's tiles are dropped from the result cache before the run, and the whole cache is
+cleared on every page load. On the GPU a 54-tile refinery takes ~13 s, a 90-tile one ~15 s,
+look-alikes 2-6 s, with a spinner and a live countdown while it runs.
+
+The graph widget at the bottom fills in as results arrive: each component node turns yellow when
+something fires and green when its required count is reached; the "oil refinery" parent turns
+green only when the classifier's rule holds (all three within 200 m); the outlined area is drawn
+from the detections themselves, not from the site's OSM boundary. Look-alikes light up children
+but not the parent, and each site's entry in the list turns green ("oil refinery") or red ("not a
+refinery") once it has been run. Panning off the site clears the graph, which then follows the
+live view. Add `?debug` to the URL for the inference stats box.
 
 ## What you're looking at
 

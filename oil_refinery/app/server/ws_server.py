@@ -52,6 +52,11 @@ def _get_or_create_session(session_id: str | None) -> _Session:
     session = _Session()
     if session_id:
         _SESSIONS[session_id] = session
+    dropped = tile_server.clear_cache()
+    logger.info(
+        "new session %s: cleared %d cached tile result(s) -- detections never carry over between sessions",
+        session_id or "(anonymous)", dropped,
+    )
     return session
 
 
@@ -241,7 +246,11 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
     session.known_tiles = set(tiles)
     session.tracker = site_tracker.SiteTracker()
     t0 = time.monotonic()
-    logger.info("process_site: %s -- %d tile(s)", site["id"], len(tiles))
+    forgotten = tile_server.forget(tiles)
+    logger.info(
+        "process_site: %s -- %d tile(s), %d dropped from the result cache so every run is live",
+        site["id"], len(tiles), forgotten,
+    )
     await _prefetch_with_ring(tiles)
     pending = {tile_server.get_or_process_detections(z, x, y): (z, x, y) for z, x, y in tiles}
     detections_by_tile: dict[tuple[int, int, int], list[dict]] = {}

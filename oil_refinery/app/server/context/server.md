@@ -696,6 +696,22 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Result cache lifetime (2026-09-22)
+
+The detection result cache (`TileCache`) is **per session and never reused for a site run**:
+
+- `_get_or_create_session` calls `tile_server.clear_cache()` whenever a session id it has not seen
+  connects to `/ws/extent`, i.e. on every page load. Nothing a previous visitor (or a previous
+  reload) computed is ever shown again.
+- `process_site` calls `tile_server.forget(tiles)` before queueing, so re-selecting a site inside
+  one session re-runs it rather than answering instantly from the cache.
+
+Both rules come from the user: the demo has to look like running on a site nobody has checked, and
+"cached" is never an acceptable reason for a run to be fast. What the cache is still for is free
+roam: `get_cached_only` supplies detections for recently-seen tiles that have left the viewport,
+which the extent classifier needs to judge a site the user panned across. The Mapbox *image* cache
+on disk (`common.fetch_tile`) is untouched by all of this -- it holds imagery, not detections.
+
 ## Chimney and DIOR dropped from the graph (2026-09-22)
 
 The graph is **3-of-3**: storage tank (>= 0.75), fan-unit (>= 0.5, `min_count` 3),

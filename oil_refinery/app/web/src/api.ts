@@ -41,6 +41,7 @@ export const EMPTY_FEATURE_COLLECTION: SiteFeatureCollection = { type: 'FeatureC
 export interface Site {
   id: string
   name: string
+  label: string
   kind: 'refinery' | 'look-alike'
   type: string
   bbox: [number, number, number, number]

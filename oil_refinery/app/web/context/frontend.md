@@ -13,23 +13,25 @@ section) produced a stream of `502` lines for the whole loading window with no w
 from the frontend side. A push-based readiness signal over the websocket the app needs to open
 anyway avoids the frontend ever making a request the backend isn't there yet to answer.
 
-`App.tsx` is a flex row since 2026-09-22: `<SitesPanel />` on the left (fixed 340 px), then a
-`position: relative; flex: 1` box holding `<Map />`, `<GraphPanel />` and -- only with `?debug` in
-the URL -- `<StatsOverlay />` (moved to the top-left; the graph took its bottom-left spot).
+`App.tsx` is a full-bleed map with everything else floating over it: `<SitesPanel />` top-left,
+`<GraphPanel />` bottom-left, and -- only with `?debug` in the URL -- `<StatsOverlay />` top-left
+under the list. A fixed 340 px left sidebar was tried first and rejected by the user on
+2026-09-22: they had asked for a list of sites in two columns, not a panel with explanatory prose
+taking a fifth of the window.
 
 ## SitesPanel.tsx
 
-The site list (`GET /api/sites`, grouped refineries / look-alikes, with each site's z17 tile count
-so the wait is predictable). Clicking dispatches `siteSelected`, nothing else; the whole flow after
-that is driven from `Map.tsx` off store state. Buttons are disabled while a site is landing or
-processing.
+Two columns, "Oil refineries" and "Others", of short `label`s from `GET /api/sites` (the full OSM
+`name` is long enough to wrap; `label` is a hand-written short form in `sites.json`). No body text,
+no tile counts. Clicking dispatches `siteSelected`, nothing else; the whole flow after that is
+driven from `Map.tsx` off store state. Buttons are disabled while a site is landing or processing.
 
-Once a site has a verdict (`store.siteVerdicts`, written on `site_done`) its button is tinted and
-left-barred bright green for identified / bright red for not, and the subtitle switches from the
-tile count to "oil refinery" / "not a refinery". Colours are by *verdict*, not by correctness, so a
-correctly rejected look-alike is red. Verdicts persist for the session, so the panel doubles as a
-record of what has been run. Border styles are set as `borderStyle`/`borderColor`/`borderWidth`,
-never mixing the `border` shorthand with a longhand, which React warns about on re-render.
+Once a site has a verdict (`store.siteVerdicts`, written on `site_done`) its entry is tinted and
+outlined bright green for identified / bright red for not. Colours are by *verdict*, not by
+correctness, so a correctly rejected look-alike is red. Verdicts persist for the session, so the
+list doubles as a record of what has been run. Border styles are set as
+`borderStyle`/`borderColor`/`borderWidth`, never mixing the `border` shorthand with a longhand,
+which React warns about on re-render.
 
 ## GraphPanel.tsx
 

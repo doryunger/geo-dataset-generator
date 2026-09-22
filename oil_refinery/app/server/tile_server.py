@@ -173,6 +173,15 @@ class TileCache:
     def __len__(self) -> int:
         return len(self._items)
 
+    def tile_ids(self) -> "list[str]":
+        return list(self._items)
+
+    def drop(self, tile_ids: "set[str]") -> int:
+        dropped = [tile_id for tile_id in self._items if tile_id in tile_ids]
+        for tile_id in dropped:
+            del self._items[tile_id]
+        return len(dropped)
+
 
 @dataclass
 class Stats:
@@ -726,6 +735,18 @@ def get_or_process_detections(z: int, x: int, y: int) -> "asyncio.Future[list[di
             return []
         return result.detections or []
     return asyncio.ensure_future(_run())
+
+
+def clear_cache() -> int:
+    cache: TileCache = _state["cache"]
+    dropped = len(cache)
+    cache.drop({tile_id for tile_id in cache.tile_ids()})
+    return dropped
+
+
+def forget(tiles: "list[tuple[int, int, int]]") -> int:
+    cache: TileCache = _state["cache"]
+    return cache.drop({common.tile_id(z, x, y) for z, x, y in tiles})
 
 
 def get_cached_only(z: int, x: int, y: int) -> list[dict] | None:

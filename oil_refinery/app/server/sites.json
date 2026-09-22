@@ -248,7 +248,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Esso Belgium"
  },
  {
   "id": "gdansk_refinery",
@@ -915,7 +916,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Gdańsk"
  },
  {
   "id": "ruhr_oel_raffinerie_scholven",
@@ -1302,7 +1304,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Scholven"
  },
  {
   "id": "totalenergies_raffinaderij_antwe",
@@ -1901,7 +1904,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "TotalEnergies Antwerpen"
  },
  {
   "id": "shell_energy_chemicals_park_rhei",
@@ -2492,7 +2496,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Shell Wesseling"
  },
  {
   "id": "kraftwerk_niederauem",
@@ -2651,7 +2656,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Kraftwerk Niederaußem"
  },
  {
   "id": "continental_ag",
@@ -2878,7 +2884,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Continental AG"
  },
  {
   "id": "container_terminal_tollerort",
@@ -3273,7 +3280,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Terminal Tollerort"
  },
  {
   "id": "nord_west_oelleitung_gmbh",
@@ -3440,7 +3448,8 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Nord-West Oelleitung"
  },
  {
   "id": "thyssenkrupp_werksgelande_westfa",
@@ -4115,6 +4124,7 @@
      ]
     ]
    ]
-  }
+  },
+  "label": "Westfalenhütte"
  }
 ]

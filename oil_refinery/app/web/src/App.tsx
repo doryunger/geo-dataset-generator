@@ -10,15 +10,13 @@ export default function App() {
   const serverReady = useAppSelector((s: RootState) => s.connection.serverReady)
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
+    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
       {serverReady ? (
         <>
+          <Map />
           <SitesPanel />
-          <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%' }}>
-            <Map />
-            <GraphPanel />
-            {SHOW_DEBUG && <StatsOverlay />}
-          </div>
+          <GraphPanel />
+          {SHOW_DEBUG && <StatsOverlay />}
         </>
       ) : (
         <div
