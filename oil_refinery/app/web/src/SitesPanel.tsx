@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { fetchSites, type Site } from './api'
-import { flyToRequested, type RootState, siteSelected, useAppDispatch, useAppSelector } from './store'
+import { type RootState, siteSelected, useAppDispatch, useAppSelector } from './store'
 
 const VERDICT_GREEN = '#16c60c'
 const VERDICT_RED = '#ff2d2d'
@@ -60,13 +60,13 @@ export default function SitesPanel() {
     fetchSites()
       .then((loaded) => {
         setSites(loaded)
-        if (loaded.length > 0) dispatch(flyToRequested({ bbox: loaded[0].bbox, durationMs: 4000 }))
+        if (loaded.length > 0) dispatch(siteSelected({ site: loaded[0], durationMs: 4000 }))
       })
       .catch(() => setSites([]))
   }, [dispatch])
 
   const busy = sitePhase === 'landing' || sitePhase === 'processing'
-  const select = (site: Site) => dispatch(siteSelected(site))
+  const select = (site: Site) => dispatch(siteSelected({ site }))
 
   if (sites.length === 0) return null
 

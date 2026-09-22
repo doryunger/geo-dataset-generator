@@ -108,6 +108,7 @@ export default function Map() {
   const [now, setNow] = useState(() => Date.now())
   const siteSeenInViewRef = useRef<string | null>(null)
   const [hasRoamed, setHasRoamed] = useState(false)
+  const [arrivedGeneration, setArrivedGeneration] = useState(0)
 
   useEffect(() => {
     if (sitePhase !== 'processing') return
@@ -214,23 +215,32 @@ export default function Map() {
     if (!map || !isMapLoaded || !flyTo) return
     const [west, south, east, north] = flyTo.bbox
     const camera = map.cameraForBounds([[west, south], [east, north]], { padding: 40, maxZoom: DETECT_ZOOM })
-    if (camera) map.flyTo({ ...camera, duration: flyTo.durationMs, essential: true })
+    if (!camera) return
+    const { generation } = flyTo
+    const onArrive = () => setArrivedGeneration(generation)
+    map.once('moveend', onArrive)
+    map.flyTo({ ...camera, duration: flyTo.durationMs, essential: true })
+    return () => {
+      map.off('moveend', onArrive)
+    }
   }, [isMapLoaded, flyTo])
 
   useEffect(() => {
-    if (!viewport || !selectedSite) return
+    if (!selectedSite) return
     if (sitePhase === 'landing') {
-      extentSocket.sendSite(selectedSite.id)
-      dispatch(siteProcessingStarted())
+      if (flyTo && arrivedGeneration === flyTo.generation) {
+        extentSocket.sendSite(selectedSite.id)
+        dispatch(siteProcessingStarted())
+      }
       return
     }
-    if (sitePhase !== 'done') return
+    if (sitePhase !== 'done' || !viewport) return
     if (intersects(viewport, selectedSite.bbox)) {
       siteSeenInViewRef.current = selectedSite.id
     } else if (siteSeenInViewRef.current === selectedSite.id) {
       dispatch(siteCleared())
     }
-  }, [dispatch, viewport, selectedSite, sitePhase])
+  }, [dispatch, viewport, selectedSite, sitePhase, flyTo, arrivedGeneration])
 
   useEffect(() => {
     if (siteBusy || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
@@ -298,7 +308,7 @@ export default function Map() {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      {siteBusy && (
+      {sitePhase === 'processing' && (
         <div
           style={{
             position: 'absolute', inset: 0, zIndex: 2, display: 'flex', flexDirection: 'column',
@@ -312,17 +322,13 @@ export default function Map() {
               borderTopColor: '#ff00aa', animation: 'spin 1s linear infinite',
             }}
           />
-          <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
-            {sitePhase === 'landing' ? 'landing…' : 'processing'}
+          <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>processing</div>
+          <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
+            {(() => {
+              const left = remainingSeconds(siteProgress, now)
+              return left === null ? 'estimating…' : `about ${Math.ceil(left)} s left`
+            })()}
           </div>
-          {sitePhase === 'processing' && (
-            <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
-              {(() => {
-                const left = remainingSeconds(siteProgress, now)
-                return left === null ? 'estimating…' : `about ${Math.ceil(left)} s left`
-              })()}
-            </div>
-          )}
         </div>
       )}
       {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && hasRoamed && (

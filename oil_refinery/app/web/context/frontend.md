@@ -51,11 +51,18 @@ only from a `movestart` carrying an `originalEvent`, so the intro flight and sit
 count as roaming.
 
 The app opens at zoom 1 over the Atlantic (`INITIAL_ZOOM`, `INITIAL_CENTER`) and, once
-`GET /api/sites` returns, flies to the first site over 4 s (`flyToRequested`, a camera move with no
-selection, so nothing is processed until the user picks a site). Starting the camera already
-parked over a refinery made the demo look pre-arranged, which is what the user objected to;
-`flyTo` with `cameraForBounds` gives the arc out of the globe view, and `durationMs` on the action
-keeps the intro (4 s) separate from a site landing (1.6 s).
+`GET /api/sites` returns, dispatches `siteSelected` for the first site with `durationMs: 4000` --
+the same action a click sends, so the intro flies out of the globe view and then runs that site
+exactly as if the user had clicked it. Starting the camera already parked over a refinery made the
+demo look pre-arranged, which is what the user objected to; a camera-move-only intro was tried
+first and rejected too ("it should be triggered as we clicked on the first site"). `durationMs`
+keeps the intro flight (4 s) distinguishable from a site landing (1.6 s).
+
+`landing` becomes `processing` on the flight's own `moveend` (the flyTo effect registers
+`map.once('moveend')` and records `flyTo.generation` in `arrivedGeneration`), not on the next
+`viewportSettled`. The store already holds a settled viewport from map load, so keying off that
+started inference while the camera was still somewhere over France. The spinner overlay renders
+only in `processing`, so the flight itself is unobstructed.
 
 ## Site flow (store + Map.tsx)
 
