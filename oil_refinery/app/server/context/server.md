@@ -696,6 +696,31 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Chimney and DIOR dropped from the graph (2026-09-22)
+
+The graph is **3-of-3**: storage tank (>= 0.75), fan-unit (>= 0.5, `min_count` 3),
+distillation-column (>= 0.6). Chimney is gone, and with it `DIOR_yolov8s_backbone.pt`, which was
+only ever in `config.json` to supply chimneys.
+
+Why: on the cached 57-site benchmark, chimney never rejected anything. Look-alikes were 0/39 with
+or without it -- the column requirement is what rejects them -- while chimney could only cost
+refineries. Sweeping its floor: 18/18 refineries at 0.3 and 0.4, 16/18 at 0.5, 15/18 at 0.6,
+14/18 at 0.7, look-alikes 0/39 throughout. At 0.3 it was a rubber stamp (DIOR calls something a
+chimney on essentially every industrial tile), so removing the requirement entirely gives the same
+verdicts: 18/18 and 0/39.
+
+3-of-4 (keeping chimney but not requiring all four) was considered and rejected by measurement:
+also 18/18 but **6/39 look-alikes** flip to refinery, including Nord-West Oelleitung and VW
+Wolfsburg -- with the column optional, tank + chimney + fans describes a tank farm.
+
+Cost of keeping it was real: DIOR ran on every tile at 1344px and was ~30% of GPU time. After
+removing it, whole-site runs went from 9-15 s to 7-13 s for refineries and 4-7 s to 2-6 s for
+look-alikes. The map no longer draws chimney boxes, which is the one thing lost.
+
+To restore: put the `chimney` node and its `requires` edge back in `semantic_graph.json`, set
+`min_types_present` to 4, and add DIOR back to `models` / `model_gsd_m` (0.177) / `gated_models`
+in `config.json`. Nothing else references it.
+
 ## Proximity radius and the drawn polygon (2026-09-22)
 
 `default_max_distance_m` / `merge_distance_m` are **200 m**, down from 300. The user asked for

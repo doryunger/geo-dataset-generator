@@ -3,12 +3,10 @@
   "canonical_model": "models/yolo11n-obb.pt",
   "models": [
     "models/yolo11n-obb.pt",
-    "models/DIOR_yolov8s_backbone.pt",
     "models/fan-unit_obb_v33.pt",
     "models/distillation-column_obb_v46.pt"
   ],
   "model_gsd_m": {
-    "models/DIOR_yolov8s_backbone.pt": 0.177,
     "models/fan-unit_obb_v33.pt": 0.125,
     "models/distillation-column_obb_v46.pt": 0.125
   },

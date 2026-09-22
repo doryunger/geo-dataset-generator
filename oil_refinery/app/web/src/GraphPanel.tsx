@@ -6,7 +6,7 @@ const GREY = '#3a3a3a'
 const YELLOW = '#d9a400'
 const GREEN = '#2e9e4f'
 
-const PLACEHOLDER: ComponentSummary[] = ['storage tank', 'chimney', 'fan-unit', 'distillation-column'].map((component) => ({
+const PLACEHOLDER: ComponentSummary[] = ['storage tank', 'fan-unit', 'distillation-column'].map((component) => ({
   component, min_confidence: 0, min_count: component === 'fan-unit' ? 3 : 1, count: 0, max_confidence: null, satisfied: false,
 }))
 
@@ -64,7 +64,7 @@ export default function GraphPanel() {
         ))}
       </div>
       <div style={{ fontSize: 10, opacity: 0.5, marginTop: 8 }}>
-        parent turns green only when all four sit within 200 m of each other
+        parent turns green only when all three sit within 200 m of each other
       </div>
     </div>
   )
