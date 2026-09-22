@@ -677,10 +677,24 @@ numbers, they are what make the design decisions legible:
 - Two workers again (`WORKER_POOL_SIZE` default 2), so one batch's prep and fusion overlap the
   other's GPU time; the lock keeps the GPU itself serial.
 
-Where it landed: Esso 54 tiles 11 s, Gdansk 92 tiles 17 s, look-alikes 5-9 s -- ~185 ms/tile
+- **Resampling on the GPU** (`GPU_RESAMPLE`, default on with CUDA; `GPU_RESAMPLE=0` restores the
+  PIL path for A/B): the padded native tile is uploaded once (`_native_tensor`) and
+  `F.interpolate(mode="bicubic")` produces each model's size straight into the batch tensor,
+  instead of two LANCZOS resizes per tile on the CPU. The models were trained on LANCZOS-resampled
+  crops (`common.resample_to_target_gsd`), so this was A/B'd on 61 Esso + Niederaussem tiles
+  before adoption: 169 -> 127 ms/tile in the batch; 320 of 326 LANCZOS detections matched at
+  IoU >= 0.5 with mean confidence delta -0.004 (max 0.11); at the graph floors columns 23 -> 23,
+  tanks 153 -> 153, fans 132 -> 128, chimneys 16 -> 15. The lost fans are near-threshold cases;
+  accepted for the POC. Re-run that A/B (scratch script in the 2026-09-22 session; ~40 lines
+  around `_run_detection_batch` on both settings) if a model is retrained with a different
+  resampling.
+
+Where it landed: Esso 54 tiles 9 s, Gdansk 92 tiles 15 s, look-alikes 4-5 s -- ~150 ms/tile
 against a measured GPU floor of ~130 ms/tile (2.05 s per batch of 16 across the four models). Each
 batch logs its stage times (`Batch of N stages: {prep, open_models, gated_models, fuse}`); read
-those before touching any of this again.
+those before touching any of this again. A faster GPU lowers the model stages roughly in
+proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
+(fit animation, prefetch, first partial batch) do not move with it.
 
 ## ws_server.py -- site processing (`process_site`)
 

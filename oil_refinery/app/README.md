@@ -44,7 +44,7 @@ lacks the redux packages (`npm install`). Both were found missing on 2026-09-22.
 The left column lists ten sites -- five refineries and five look-alikes (power station, tyre
 plant, container port, tank farm, steelworks). Click one: the map fits the whole site, freezes,
 and every zoom-17 tile inside the polygon is run through the detectors right then (nothing is
-precomputed; on the GPU a 54-tile refinery takes ~11 s, a 90-tile one ~17 s, look-alikes 5-9 s).
+precomputed; on the GPU a 54-tile refinery takes ~9 s, a 90-tile one ~15 s, look-alikes 4-5 s).
 Detection boxes appear as tiles finish, and the graph widget at the bottom fills in:
 each component node turns yellow when something fires and green when its required count is
 reached; the "oil refinery" parent turns green only when the classifier's rule holds (all four

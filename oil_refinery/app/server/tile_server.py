@@ -275,18 +275,59 @@ def _padded_tile(job: Job, halo_px: int) -> tuple[Image.Image, int, int]:
     return composite.crop((w - halo_px, h - halo_px, 2 * w + halo_px, 2 * h + halo_px)), w, h
 
 
+GPU_RESAMPLE = INFERENCE_DEVICE == "cuda" and os.environ.get("GPU_RESAMPLE", "1") == "1"
+
+
+def _resampled_size(p: dict, gsd_m: float | None) -> tuple[int, int]:
+    pw, ph = p["padded"].size
+    if gsd_m is None:
+        return pw, ph
+    scale = p["native_gsd_m"] / gsd_m
+    if abs(scale - 1.0) < common.GSD_RESAMPLE_TOLERANCE:
+        return pw, ph
+    return max(1, round(pw * scale)), max(1, round(ph * scale))
+
+
 def _source_for_gsd(p: dict, gsd_m: float | None) -> dict:
     cached = p["sources"].get(gsd_m)
     if cached is not None:
         return cached
-    if gsd_m is None:
+    pw, ph = p["padded"].size
+    if GPU_RESAMPLE:
+        w, h = _resampled_size(p, gsd_m)
+        image = None
+    elif gsd_m is None:
         image = p["padded"]
+        w, h = pw, ph
     else:
         image = common.resample_to_target_gsd(p["padded"], p["native_gsd_m"], gsd_m)
-    pw, ph = p["padded"].size
-    w, h = image.size
-    p["sources"][gsd_m] = {"image": image, "scale_back_x": pw / w, "scale_back_y": ph / h}
+        w, h = image.size
+    p["sources"][gsd_m] = {"image": image, "size": (w, h), "scale_back_x": pw / w, "scale_back_y": ph / h}
     return p["sources"][gsd_m]
+
+
+def _native_tensor(p: dict) -> "torch.Tensor":
+    cached = p.get("native_tensor")
+    if cached is None:
+        arr = np.array(p["padded"])
+        cached = torch.from_numpy(arr).permute(2, 0, 1).contiguous().to(INFERENCE_DEVICE).float().div_(255)
+        p["native_tensor"] = cached
+    return cached
+
+
+def _gpu_batch_tensor(prepped: list[dict], gsd_m: float | None, imgsz: int) -> "torch.Tensor":
+    batch = torch.zeros((TILE_BATCH_SIZE, 3, imgsz, imgsz), device=INFERENCE_DEVICE)
+    for i, p in enumerate(prepped):
+        w, h = _source_for_gsd(p, gsd_m)["size"]
+        native = _native_tensor(p)
+        if (w, h) == (native.shape[2], native.shape[1]):
+            resampled = native
+        else:
+            resampled = torch.nn.functional.interpolate(
+                native.unsqueeze(0), size=(h, w), mode="bicubic", align_corners=False,
+            ).squeeze(0).clamp_(0.0, 1.0)
+        batch[i, :, :h, :w] = resampled
+    return batch
 
 
 SIZE_BUCKET_PX = 256
@@ -313,13 +354,16 @@ def _predict_models(
 
     def _predict(model_key: str) -> tuple[str, list]:
         gsd_m = model_router.gsd_for(model_key)
-        sources = [_source_for_gsd(p, gsd_m)["image"] for p in prepped]
-        imgsz = max(32, math.ceil(max(img.size[d] for img in sources for d in (0, 1)) / 32) * 32)
-        if INFERENCE_DEVICE == "cuda":
+        sources = [_source_for_gsd(p, gsd_m) for p in prepped]
+        imgsz = max(32, math.ceil(max(src["size"][d] for src in sources for d in (0, 1)) / 32) * 32)
+        if GPU_RESAMPLE:
             imgsz = _bucket_imgsz(imgsz)
-            source = _batch_tensor(sources, imgsz)
+            source = _gpu_batch_tensor(prepped, gsd_m, imgsz)
+        elif INFERENCE_DEVICE == "cuda":
+            imgsz = _bucket_imgsz(imgsz)
+            source = _batch_tensor([src["image"] for src in sources], imgsz)
         else:
-            source = sources
+            source = [src["image"] for src in sources]
         kwargs = dict(source=source, conf=CONF_THRESHOLD, imgsz=imgsz, device=INFERENCE_DEVICE, verbose=False)
         results = models[model_key].predict(quantize=(16 if INFERENCE_DEVICE == "cuda" else None), **kwargs)
         return model_key, results[: len(sources)]
