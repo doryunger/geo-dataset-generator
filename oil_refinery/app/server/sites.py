@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from fastapi import APIRouter
-from shapely.geometry import box, shape
+from shapely.geometry import shape
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -24,18 +24,19 @@ router = APIRouter()
 
 
 def site_tiles(site: dict) -> list[tuple[int, int, int]]:
+    """Every zoom-17 tile in the site's bounding box.
+
+    Deliberately the whole extent rather than only the tiles the OSM polygon touches: a tank a few
+    metres outside the boundary was otherwise never looked at, so it appeared only once roaming
+    happened to cover its tile, which looks like the detector missing obvious objects. Costs ~1.44x
+    the tiles across the ten demo sites.
+    """
     geom = shape(site["geometry"])
     z = tile_server.DETECT_ZOOM
     west, south, east, north = geom.bounds
     x0, y0 = common.lonlat_to_tile(west, north, z)
     x1, y1 = common.lonlat_to_tile(east, south, z)
-    tiles = []
-    for x in range(x0, x1 + 1):
-        for y in range(y0, y1 + 1):
-            b = common.tile_bounds(z, x, y)
-            if geom.intersects(box(b["west"], b["south"], b["east"], b["north"])):
-                tiles.append((z, x, y))
-    return tiles
+    return [(z, x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]
 
 
 def component_summary(detections: list[dict], graph: dict, ref_lat: float) -> list[dict]:

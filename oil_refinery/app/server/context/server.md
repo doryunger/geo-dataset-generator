@@ -631,8 +631,13 @@ only grow" rule this module exists to implement.
 Helpers for the site panel plus `GET /api/sites`: the ten hand-picked demo sites from `sites.json`
 (five refineries where all four components fire on sharp imagery, and one look-alike per confuser
 type: lignite power station, tyre plant, container port, tank farm, steelworks; polygons come from
-the loop's `sites.json`), each with its z17 tile count. `site_tiles` is the same polygon-intersects-
-tile rule `oil_refinery/eval_sites.py` uses offline; `component_summary` is what the graph widget
+the loop's `sites.json`), each with its z17 tile count. `site_tiles` takes **every** tile in the site's
+bounding box, not only the ones the OSM polygon touches (changed 2026-09-23): a storage tank a few
+metres outside the boundary was otherwise never looked at and turned up only when free roaming
+happened to cover its tile, which reads as the detector missing obvious objects. It costs 1.44x
+the tiles across the ten demo sites (592 -> 853) and Esso's tank count went 259 -> 307. Note this
+now differs from `oil_refinery/eval_sites.py`, which still uses the polygon-intersects rule, so
+benchmark numbers and app numbers are not tile-for-tile comparable; `component_summary` is what the graph widget
 colours from (count at/above the graph floor, `min_count`, satisfied); `detection_features` turns
 cached per-tile detections (tile-local pixel corners) into lon/lat polygons so the frontend can draw
 them as a GeoJSON layer at any zoom.
