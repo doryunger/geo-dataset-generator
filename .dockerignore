@@ -1,0 +1,11 @@
+**
+!app/requirements.txt
+!app/server/**
+!app/web/**
+app/web/node_modules
+app/web/dist
+!scripts/common.py
+!scripts/s3_sync.py
+!scripts/app_assets.py
+!deploy/nginx.conf
+**/__pycache__

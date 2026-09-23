@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-K-fold cross-validation over an OBB class's original samples (not pieces): trains K models, each
-with a different 1/K held out as val, and reports mean +/- std of each metric across the folds.
-
-Usage:
-    python scripts/train_obb_kfold.py --class fence --version v6 --folds 5
-"""
 import argparse
 import hashlib
 import json
@@ -13,7 +5,6 @@ import statistics
 
 import common
 import obb
-from embedder import Embedder
 from train_obb import train_obb_class
 
 METRIC_KEYS = [
@@ -37,13 +28,12 @@ def run_kfold(class_name: str, version: str, k: int = 5, seed: int = 0, **train_
         raise ValueError(f"only {len(sample_ids)} samples, can't make {k} non-empty folds")
 
     folds = make_folds(samples, k, seed)
-    embedder = Embedder()
 
     fold_results = []
     for i, val_ids in enumerate(folds):
         fold_version = f"{version}_fold{i}"
         print(f"\n=== fold {i + 1}/{k}: {len(val_ids)} samples from whole sites held out for val ===")
-        obb.generate_obb_package(class_name, embedder=embedder, val_ids=set(val_ids))
+        obb.generate_obb_package(class_name, val_ids=set(val_ids))
         result = train_obb_class(class_name, fold_version, **train_kwargs)
         metrics = json.loads(open(result["metrics_path"]).read())["metrics"]
         fold_results.append({"fold": i, "val_sample_ids": val_ids, "metrics": metrics})

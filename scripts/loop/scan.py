@@ -1,10 +1,3 @@
-"""
-Run a trained OBB model over every window of one site and write the detections that don't already
-match a labelled sample, deduplicated by position, as triage candidates.
-
-Usage:
-    python scripts/loop/scan.py --class distillation-column --site puertollano --model v13 --conf 0.25
-"""
 import argparse
 import base64
 import io
@@ -12,7 +5,7 @@ import json
 import math
 import time
 
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
 from shapely.geometry import Polygon
 from ultralytics import YOLO
 

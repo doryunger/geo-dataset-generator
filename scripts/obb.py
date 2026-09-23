@@ -1,9 +1,3 @@
-"""
-Oriented bounding-box (OBB) labeling support for fence.
-
-Usage:
-    python scripts/obb.py --class fence
-"""
 import argparse
 import hashlib
 import json
@@ -13,12 +7,9 @@ import shutil
 from collections import Counter
 from pathlib import Path
 
-import numpy as np
 import yaml
 from PIL import Image
-from shapely.geometry import LineString
 from shapely.geometry import Polygon as ShapelyPolygon
-from shapely.ops import split as shapely_split
 
 import common
 import subclass_graph
@@ -27,30 +18,10 @@ logger = logging.getLogger(__name__)
 
 VAL_FRACTION = 5
 
-BEND_PIECES: dict[str, int] = {}
-
-HARD_NEGATIVE_TILES: dict[str, tuple[str, ...]] = {}
-
 
 def _rect_polygon(bounds: dict) -> list[list[float]]:
     w, s, e, n = bounds["west"], bounds["south"], bounds["east"], bounds["north"]
     return [[w, n], [e, n], [e, s], [w, s], [w, n]]
-
-
-def _hard_negative_rows(class_name: str) -> list[dict]:
-    legacy_rows = []
-    for tile_id, classes in HARD_NEGATIVE_TILES.items():
-        if class_name not in classes:
-            continue
-        z, x, y = (int(v) for v in tile_id.split("_"))
-        bounds = common.tile_bounds(z, x, y)
-        legacy_rows.append({"id": tile_id, **bounds, "polygon": _rect_polygon(bounds)})
-    by_id = {row["id"]: row for row in legacy_rows}
-    for row in common.load_hard_negatives(class_name):
-        if "polygon" not in row:
-            row = {**row, "polygon": _rect_polygon(row)}
-        by_id[row["id"]] = row
-    return list(by_id.values())
 
 
 def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
@@ -61,10 +32,6 @@ def save_bend_review_overlay(class_name: str, sample_id: str) -> Path | None:
     dst = common.bend_review_dir(class_name) / f"{sample_id}.jpg"
     return common.draw_polygon_overlay(src, [row["label_polygon"]], dst)
 
-
-DEFAULT_MIN_PIECE_M = 2.0
-DEFAULT_MAX_PIECE_M = 5.0
-CONTEXT_TILE_PX = 224
 
 DEFAULT_NORMALIZE_SAMPLE_CROP = False
 
@@ -298,128 +265,14 @@ def _hard_negative_crop(
     return len(bboxes), positives_kept
 
 
-def _axis_projection(pixel_ring: list[tuple[float, float]]):
-    pts = np.array(pixel_ring)
-    center = pts.mean(axis=0)
-    centered = pts - center
-    axis = np.linalg.svd(centered, full_matrices=False)[2][0]
-    perp = np.array([-axis[1], axis[0]])
-    proj = centered @ axis
-    return center, axis, perp, proj
-
-
-def _cut_polygon_at(poly, center, axis, perp, cut_ts: list[float]):
-    if not cut_ts:
-        return [poly]
-    span = max(poly.bounds[2] - poly.bounds[0], poly.bounds[3] - poly.bounds[1]) * 2
-    pieces = [poly]
-    for t in sorted(cut_ts):
-        c = center + axis * t
-        cut = LineString([c - perp * span, c + perp * span])
-        pieces = [
-            g for piece in pieces
-            for p in (shapely_split(piece, cut).geoms if piece.intersects(cut) else [piece])
-            for g in _flatten_polygons(p)
-        ]
-    return pieces
-
-
-def _flatten_polygons(geom):
-    if geom.geom_type == "Polygon":
-        return [geom] if geom.area > 0 else []
-    if hasattr(geom, "geoms"):
-        return [g for part in geom.geoms for g in _flatten_polygons(part)]
-    return []
-
-
-def _length_context_cut_ts(
-    piece_ring, center, axis, perp, proj, image: Image.Image, gsd_m_per_px: float, embedder,
-    min_piece_m: float, max_piece_m: float,
-) -> list[float]:
-    proj_min, proj_max = proj.min(), proj.max()
-    length_m = (proj_max - proj_min) * gsd_m_per_px
-    if length_m <= max_piece_m:
-        return []
-
-    context_step_m = min_piece_m / 3
-    step_px = context_step_m / gsd_m_per_px
-    n_samples = max(2, int((proj_max - proj_min) / step_px) + 1)
-    sample_t = np.linspace(proj_min, proj_max, n_samples)
-
-    w, h = image.size
-    windows = []
-    for t in sample_t:
-        cx, cy = center + axis * t
-        left = min(max(cx - CONTEXT_TILE_PX / 2, 0), max(0, w - CONTEXT_TILE_PX))
-        top = min(max(cy - CONTEXT_TILE_PX / 2, 0), max(0, h - CONTEXT_TILE_PX))
-        left, top = int(round(left)), int(round(top))
-        windows.append(image.crop((left, top, left + CONTEXT_TILE_PX, top + CONTEXT_TILE_PX)))
-    embs = [embedder.embed_image(win) for win in windows]
-    dissim = [0.0] + [1 - float(np.dot(embs[i - 1], embs[i])) for i in range(1, len(embs))]
-
-    cuts_t, pos = [], 0
-    while (proj_max - sample_t[pos]) * gsd_m_per_px > max_piece_m:
-        lo = sample_t[pos] + min_piece_m / gsd_m_per_px
-        hi = sample_t[pos] + max_piece_m / gsd_m_per_px
-        candidates = [i for i in range(pos + 1, len(sample_t)) if lo <= sample_t[i] <= hi]
-        if not candidates:
-            cuts_t.append(hi)
-            pos = np.searchsorted(sample_t, hi)
-        else:
-            best = max(candidates, key=lambda i: dissim[i])
-            cuts_t.append(sample_t[best])
-            pos = best
-    return cuts_t
-
-
-def polygon_to_obb_corners(
-    pixel_ring: list[tuple[float, float]], n_pieces: int,
-    image: Image.Image | None = None, gsd_m_per_px: float | None = None, embedder=None,
-    min_piece_m: float = DEFAULT_MIN_PIECE_M, max_piece_m: float = DEFAULT_MAX_PIECE_M,
-) -> list[list[tuple[float, float]]]:
+def polygon_to_obb_corners(pixel_ring: list[tuple[float, float]]) -> list[list[tuple[float, float]]]:
     poly = ShapelyPolygon(pixel_ring)
     if not poly.is_valid:
         poly = poly.buffer(0)
-    poly_parts = _flatten_polygons(poly) if poly.geom_type != "Polygon" else [poly]
-
-    center, axis, perp, proj = _axis_projection(pixel_ring)
-    bend_ts = [
-        proj.min() + (proj.max() - proj.min()) * i / n_pieces for i in range(1, n_pieces)
-    ] if n_pieces > 1 else []
-    macro_pieces = [
-        piece for part in poly_parts for piece in _cut_polygon_at(part, center, axis, perp, bend_ts)
+    parts = [poly] if poly.geom_type == "Polygon" else [
+        g for g in getattr(poly, "geoms", []) if g.geom_type == "Polygon"
     ]
-
-    final_pieces = []
-    for mp in macro_pieces:
-        if image is None or gsd_m_per_px is None or embedder is None:
-            final_pieces.append(mp)
-            continue
-        mp_ring = list(mp.exterior.coords)
-        mp_center, mp_axis, mp_perp, mp_proj = _axis_projection(mp_ring)
-        cut_ts = _length_context_cut_ts(
-            mp_ring, mp_center, mp_axis, mp_perp, mp_proj, image, gsd_m_per_px, embedder,
-            min_piece_m, max_piece_m,
-        )
-        final_pieces.extend(_cut_polygon_at(mp, mp_center, mp_axis, mp_perp, cut_ts))
-
-    return [list(p.minimum_rotated_rectangle.exterior.coords)[:4] for p in final_pieces if p.area > 0]
-
-
-PIECE_CROP_MARGIN = 0.15
-
-
-def _crop_piece(img: Image.Image, rect: list[tuple[float, float]]) -> tuple[Image.Image, float, float]:
-    xs = [x for x, _ in rect]
-    ys = [y for _, y in rect]
-    x0, x1 = min(xs), max(xs)
-    y0, y1 = min(ys), max(ys)
-    mx, my = (x1 - x0) * PIECE_CROP_MARGIN, (y1 - y0) * PIECE_CROP_MARGIN
-    left = max(0, int(x0 - mx))
-    top = max(0, int(y0 - my))
-    right = min(img.width, int(x1 + mx))
-    bottom = min(img.height, int(y1 + my))
-    return img.crop((left, top, right, bottom)), left, top
+    return [list(p.minimum_rotated_rectangle.exterior.coords)[:4] for p in parts if p.area > 0]
 
 
 def _rect_min_side(rect: list[tuple[float, float]]) -> float:
@@ -444,7 +297,7 @@ def _neighbor_pixel_rects(
             continue
         normalized_ring = common.polygon_to_normalized(other["polygon"], west, south, east, north)
         pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
-        rects.extend(polygon_to_obb_corners(pixel_ring, BEND_PIECES.get(other["id"], 1)))
+        rects.extend(polygon_to_obb_corners(pixel_ring))
     return rects
 
 
@@ -486,15 +339,13 @@ def ensure_obb_data_yaml(class_name: str):
 
 
 def _generate_pieces_for_class(
-    class_name: str, output_dir, embedder, val_ids: set[str] | None = None, on_progress=None,
+    class_name: str, output_dir, val_ids: set[str] | None = None, on_progress=None,
 ) -> dict:
     samples = [r for r in common.load_samples(class_name) if r.get("enabled", True)]
     if not samples:
         raise ValueError(f"'{class_name}' has no enabled samples")
 
     node_cfg = subclass_graph.node_config(class_name)
-    min_piece_m = node_cfg.get("min_piece_m", DEFAULT_MIN_PIECE_M)
-    max_piece_m = node_cfg.get("max_piece_m", DEFAULT_MAX_PIECE_M)
     normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
     uniform_bucket = node_cfg.get("uniform_crop_bucket", DEFAULT_UNIFORM_CROP_BUCKET)
     sample_fetch_zoom = node_cfg.get("sample_fetch_zoom", SAMPLE_FETCH_ZOOM)
@@ -508,7 +359,7 @@ def _generate_pieces_for_class(
             continue
         split = "val" if row["id"] in val_ids else "train"
 
-        logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']})...")
+        logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}), split={split}")
         if on_progress:
             on_progress(i + 1, len(samples), row["id"])
         west, south, east, north = row["west"], row["south"], row["east"], row["north"]
@@ -524,43 +375,19 @@ def _generate_pieces_for_class(
         img = common.resample_to_target_gsd(img, native_gsd_m, target_gsd_m)
         w, h = img.size
         normalized_ring = common.polygon_to_normalized(row["polygon"], west, south, east, north)
-        pixel_ring = [(x * w, y * h) for x, y in normalized_ring]
-        gsd_m_per_px = target_gsd_m
-        rects = polygon_to_obb_corners(
-            pixel_ring, BEND_PIECES.get(row["id"], 1), image=img, gsd_m_per_px=gsd_m_per_px, embedder=embedder,
-            min_piece_m=min_piece_m, max_piece_m=max_piece_m,
-        )
-        logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}) -> {len(rects)} piece(s), split={split}")
+        rects = polygon_to_obb_corners([(x * w, y * h) for x, y in normalized_ring])
 
+        own_lines = _window_label_lines(rects, 0, 0, w, h)
+        if not own_lines:
+            logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
+            continue
         neighbor_rects = _neighbor_pixel_rects(samples, row["id"], west, south, east, north, w, h)
-
-        if len(rects) == 1:
-            own_lines = _window_label_lines(rects, 0, 0, w, h)
-            if not own_lines:
-                logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
-                continue
-            neighbor_lines = _window_label_lines(neighbor_rects, 0, 0, w, h)
-            dst = output_dir / "images" / split / f"{row['id']}{src.suffix}"
-            img.convert("RGB").save(dst)
-            lbl_path = output_dir / "labels" / split / f"{row['id']}.txt"
-            lbl_path.write_text("\n".join(own_lines + neighbor_lines) + "\n")
-            counts[split] += 1
-            counts["boxes"] += len(own_lines) + len(neighbor_lines)
-            counts["neighbor_boxes"] += len(neighbor_lines)
-        else:
-            for idx, rect in enumerate(rects):
-                piece_img, left, top = _crop_piece(img, rect)
-                pw, ph = piece_img.size
-                dst = output_dir / "images" / split / f"{row['id']}_p{idx}{src.suffix}"
-                piece_img.convert("RGB").save(dst)
-
-                own_lines = _window_label_lines(rects, left, top, left + pw, top + ph)
-                neighbor_lines = _window_label_lines(neighbor_rects, left, top, left + pw, top + ph)
-                lbl_path = output_dir / "labels" / split / f"{row['id']}_p{idx}.txt"
-                lbl_path.write_text("\n".join(own_lines + neighbor_lines) + "\n")
-                counts[split] += 1
-                counts["boxes"] += len(own_lines) + len(neighbor_lines)
-                counts["neighbor_boxes"] += len(neighbor_lines)
+        neighbor_lines = _window_label_lines(neighbor_rects, 0, 0, w, h)
+        img.convert("RGB").save(output_dir / "images" / split / f"{row['id']}{src.suffix}")
+        (output_dir / "labels" / split / f"{row['id']}.txt").write_text("\n".join(own_lines + neighbor_lines) + "\n")
+        counts[split] += 1
+        counts["boxes"] += len(own_lines) + len(neighbor_lines)
+        counts["neighbor_boxes"] += len(neighbor_lines)
     return counts
 
 
@@ -580,13 +407,9 @@ def data_groups(class_name: str) -> dict:
 
 
 def generate_obb_package(
-    class_name: str, include_hard_negatives: bool = False, embedder=None, val_ids: set[str] | None = None,
+    class_name: str, include_hard_negatives: bool = False, val_ids: set[str] | None = None,
     on_progress=None,
 ) -> dict:
-    if embedder is None:
-        from embedder import Embedder
-        embedder = Embedder()
-
     output_dir = common.obb_dataset_dir(class_name)
     marker = output_dir / ".last_generated"
     changes = common.changes_since_marker(class_name, marker)
@@ -602,7 +425,7 @@ def generate_obb_package(
     samples = [r for r in common.load_samples(class_name) if r.get("enabled", True)]
     resolved_val_ids = resolve_val_ids(samples, val_ids, class_name) if samples else set()
     counts = _generate_pieces_for_class(
-        class_name, output_dir, embedder, val_ids=resolved_val_ids, on_progress=on_progress,
+        class_name, output_dir, val_ids=resolved_val_ids, on_progress=on_progress,
     )
     counts["sites"] = len(cluster_sites(samples)) if samples else 0
 
@@ -610,9 +433,11 @@ def generate_obb_package(
         node_cfg = subclass_graph.node_config(class_name)
         normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
         sample_fetch_zoom = node_cfg.get("sample_fetch_zoom", SAMPLE_FETCH_ZOOM)
-        for row in _hard_negative_rows(class_name):
+        for row in common.load_hard_negatives(class_name):
             if not row.get("enabled", True):
                 continue
+            if "polygon" not in row:
+                row = {**row, "polygon": _rect_polygon(row)}
             hn_split = _hard_negative_split(row, samples, resolved_val_ids)
             n, kept = _hard_negative_crop(
                 output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop, hn_split, sample_fetch_zoom,
@@ -628,11 +453,7 @@ def generate_obb_package(
     return {"class_name": class_name, **counts, "changes_since_last_generation": dict(change_counts)}
 
 
-def generate_combined_obb_dataset(output_dir, class_names: list[str], embedder=None, on_progress=None) -> dict:
-    if embedder is None:
-        from embedder import Embedder
-        embedder = Embedder()
-
+def generate_combined_obb_dataset(output_dir, class_names: list[str], on_progress=None) -> dict:
     for split in ("train", "val"):
         for kind in ("images", "labels"):
             (output_dir / kind / split).mkdir(parents=True, exist_ok=True)
@@ -649,7 +470,7 @@ def generate_combined_obb_dataset(output_dir, class_names: list[str], embedder=N
             if on_progress:
                 on_progress(class_name, i, n, sample_id)
 
-        counts = _generate_pieces_for_class(class_name, output_dir, embedder, on_progress=_wrapped_progress)
+        counts = _generate_pieces_for_class(class_name, output_dir, on_progress=_wrapped_progress)
         totals["train"] += counts["train"]
         totals["val"] += counts["val"]
 
@@ -668,7 +489,7 @@ def main():
     parser.add_argument("--class", dest="class_name", required=True, help="Object class name")
     parser.add_argument(
         "--hard-negatives", action="store_true",
-        help="Include HARD_NEGATIVE_TILES as background images -- off by default (backfired at 13 positives)",
+        help="Include the class's hard negatives as background images",
     )
     args = parser.parse_args()
     result = generate_obb_package(args.class_name, args.hard_negatives)

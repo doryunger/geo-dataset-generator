@@ -1,69 +1,102 @@
-# What this repo is for
+# geo-dataset-generator
 
-A process and the tooling for teaching a detector a new object class from a few dozen
-hand-drawn samples, one site at a time, with a person judging what the model proposes. The
-process is written up in **[docs/training-a-new-class.md](docs/training-a-new-class.md)** —
-start there. The per-class history, measurements and round log are in
-`scripts/loop/context/loop.md`.
+Finding a kind of *site* (here, oil refineries) in satellite imagery. The site is not detected as
+a whole. Instead, the repo detects the objects a site is made of and reasons about how they sit
+together. It has two parts:
 
-# Setup / deploy to a new machine
+1. **A semantic graph that turns detections into a site verdict.** Object detectors become
+   nodes, a site type is a rule over them, and you tune the rule without retraining.
+2. **A faster way to train a detector for a new object class.** The graph needed objects that no
+   existing model detects, so we had to build our own. The model proposes, a person judges, and
+   each change is kept or dropped based on a measured number.
 
-Only two things are machine-specific and can't be reconstructed: the code, and `.env`
-(`MAPBOX_ACCESS_TOKEN=...`). Everything else — `.venv/`, the pretrained `*.pt` checkpoints,
-and the generated data dirs (`tiles/`, `embeddings/`, `models/`, `classes/`, `.scratch/`) —
-is either reinstalled by `install.sh` or created lazily by the app on first use. None of it
-needs to be copied.
+The demo map in [`app/`](app/) shows both parts working together. This is a proof of concept.
+It shows that the approach and its tooling work end to end. It is not a production refinery
+detector.
+
+## Part 1: giving detections a meaning
+
+A detector says "tank at 0.9 here". It does not say "this is a refinery". Storage tanks are also
+found at ports, tank farms and power stations. The semantic graph
+([`app/server/semantic_graph.json`](app/server/semantic_graph.json)) holds that knowledge as
+data:
+
+```json
+"oil_refinery": { "kind": "site", "min_types_present": 3, "default_max_distance_m": 300 },
+"edges": [
+  { "relation": "requires", "from": "oil_refinery", "to": "storage tank",        "min_confidence": 0.75 },
+  { "relation": "requires", "from": "oil_refinery", "to": "fan-unit",            "min_confidence": 0.7 },
+  { "relation": "requires", "from": "oil_refinery", "to": "distillation-column", "min_confidence": 0.65, "min_count": 3 }
+]
+```
+
+- **Components** are nodes. Each one is fed by any detector, pretrained (storage tank, from
+  DOTAv1) or custom-trained (fan-unit, distillation-column, from Part 2).
+- A **site** is a rule over its components: which ones, at what confidence, how many, and how
+  close together. `fan-unit` also counts only in groups (`group_within_m: 20`), because a
+  single fan is not evidence.
+- The site's outline is not drawn by hand. It is the region where the required components
+  cluster within the distance threshold.
+- The rule is tuned **offline and without retraining**. Detections are cached per tile once,
+  and every benchmark site is then re-scored under new floors, counts or distances in seconds.
+
+**Evidence.** The same detectors first called almost every industrial site a refinery. Changing
+only the graph, plus one targeted round of look-alike negatives, brought that to **16 of 18
+refineries identified and 0 of 39 look-alikes** (power stations, ports, tank farms,
+steelworks, chemical plants) on the 57-site benchmark. Design history:
+[docs/semantic-graph.md](docs/semantic-graph.md). Threshold decisions:
+[app/server/context/server.md](app/server/context/server.md).
+
+## Part 2: training the classes we were missing
+
+The graph only works if every component it needs has a detector. The pretrained aerial models
+(DOTA, DIOR, xView) cover storage tanks, ships and vehicles, but they don't cover the objects
+that actually separate a refinery from a tank farm or a power station: distillation columns and
+fin-fan cooler banks. No public model detects them, so we had to create our own.
+
+Hand-labelling enough examples of a new class from scratch is the usual cost. The loop cuts
+that cost down to about ten minutes of review per round:
 
 ```
-./install.sh                                          # creates .venv, installs requirements.txt
-set -a && source .env && set +a
-.venv/bin/uvicorn api:app --app-dir scripts            # serves the UI + API on :8000
+seed ~20-40 hand-drawn samples -> train v1
+  └─ each round, one unseen refinery site:
+       scan      model proposes boxes over the whole site (low threshold, on purpose)
+       sweep     reviewer draws what the model missed        -> measures coverage
+       triage    reviewer marks each proposal yes / no       -> yes = sample, no = hard negative
+       apply     judgements become training data (nothing is ever dropped on suspicion)
+       train     a candidate model on the grown dataset
+       gate      candidate replaces the incumbent only if it wins on the benchmark
 ```
 
-`ultralytics` auto-downloads its base checkpoint (`yolo11n-seg.pt`) into `models/` the first time
-`train.py` runs a fresh class — no manual step needed.
+The **gate** is the measurement built into the loop. Every version is adopted or rejected on a
+recorded number: coverage on a site it has never seen, and whether its confident detections
+land on refineries and not on look-alikes. The number is never a feeling about one example.
+Hard negatives are added in proportion to positives, because too many collapsed a small model
+(the evidence is in [loop.md](scripts/loop/context/loop.md)).
 
-# Directory layout
+**Evidence.** `distillation-column` started from 22 hand-drawn samples. After 21 rounds it has
+476 samples, and most of them came from the model's own proposals. For example, in round 6
+(Scholven, a site the model had never seen) it found 29 of the 32 columns there, with 79 %
+precision at confidence ≥ 0.5. `fan-unit` was built the same way (382 samples).
 
-## Global (shared across every class)
+Full process: [docs/training-a-new-class.md](docs/training-a-new-class.md). Round-by-round log
+and every measurement: [scripts/loop/context/loop.md](scripts/loop/context/loop.md).
 
-- `tiles/images/` — raw fetched Mapbox tiles, cached by `{z}_{x}_{y}.<ext>`. Purely a function of
-  tile coordinates, not of which class searched them.
-- `tiles/manifest.jsonl` — geo bounds for every cached tile.
-- `embeddings/index.npy`, `embeddings/index_ids.json` — DINOv2 CLS-vector cache, parallel to the
-  tile cache above (same reuse-across-classes reasoning).
-- `models/` — pretrained/base checkpoints (`yolo11n-obb.pt`, `yolo11n-seg.pt`, `yolo11x.pt`,
-  `DIOR_yolov8s_backbone.pt`, ...) and this project's own trained output live together in one
-  directory (previously split into a separate `weights/` for bases only; consolidated 2026-09-03
-  to match convention on other machines this repo runs on). Every script resolves its base-model
-  path here rather than a bare filename, so nothing re-downloads a stray duplicate into whatever
-  directory it happened to be run from (this used to happen: a duplicate `yolo11n-obb.pt`
-  accumulated under `scripts/`).
-  - `models/<class>_<version>.pt` — a trained model. `models/<class>_<version>_metrics.json` next
-    to it holds the training config + final metrics. `models/<class>_<version>_run/` holds the
-    full Ultralytics training run for that version (loss/PR curves, confusion matrix,
-    `weights/last.pt`, `args.yaml`) — everything you'd want to inspect training itself, separate
-    from the two files above that are the actual product of that run.
+## The demo app: both parts on one map
 
-## Per-class (`classes/<name>/`)
+- **Site panel** (top left): seven refineries and seven look-alikes. Pick one and the map fits
+  the site. Every zoom-17 tile inside it goes through all three detectors live on the GPU,
+  about 15 s for a large refinery. Nothing is precomputed or cached between runs, because the
+  point is to show the pipeline working.
+- **Boxes on the map** show Part 2: the custom classes firing next to the pretrained one.
+  Detections that pass their confidence floor but don't count toward a rule (a lone fan) are
+  drawn dashed.
+- **Graph widget** (bottom) shows Part 1. A component node turns yellow when it fires and
+  green when its requirement is met. The *oil refinery* node turns green only when the whole
+  rule holds. The outlined area comes from the detections themselves.
+- **Verdict**: each site in the panel turns green ("oil refinery") or red ("not a refinery").
+  Look-alikes light up individual components but not the parent, and that difference is the
+  point of the demo.
 
-- `registry.jsonl` — every tile this class has ever seen, one status each: `seed`, `pending_review`,
-  `confirmed`, `rejected`, or `below_threshold`. Source of truth for what round a tile belongs to.
-- `labels.jsonl` — `tile_id -> auto-guessed label polygon` (DINOv2 patch-similarity, see
-  `scripts/auto_labeler.py`), for every accepted candidate regardless of review outcome.
-- `review/round_NNN/` — every candidate accepted in that round, as real files:
-  - `<tile_id>.<ext>` — the raw tile, symlinked from the shared cache (no duplicate bytes).
-  - `<tile_id>.txt` — the auto-guessed label in YOLO-seg format, if one was found.
-  - `<tile_id>_labeled.jpg` — the same tile with that polygon burned onto the pixels, for quick
-    visual review. Never used for training — only `dataset/` is.
-- `dataset/` — the actual training set, populated only once a candidate is confirmed via
-  `/api/reconcile` (or the CLI's `reconcile_review.py`):
-  - `images/{train,val}/`, `labels/{train,val}/` — Ultralytics-standard layout.
-  - `data.yaml` — points Ultralytics at the above.
-
-## App
-
-- `scripts/` — backend: `api.py` (FastAPI + background jobs), `search.py` (ring-search core),
-  `common.py` (shared paths/tile-math/IO), `auto_labeler.py`, `embedder.py`, `train.py`,
-  `reconcile.py`, plus thin CLI wrappers (`find_candidates.py`, `reconcile_review.py`).
-- `web/` — the map UI (`index.html`, `app.js`, `style.css`), served by `api.py`.
+A guided tour runs after the first site. Free panning also works: at zoom ≥ 16 the view is
+classified live.

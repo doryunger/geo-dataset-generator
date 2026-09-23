@@ -1,4 +1,4 @@
-# web/ -- /manual + main app frontend
+# web/ -- /manual labeling frontend
 
 One file for this frontend instead of one per source file. See `scripts/context/scripts.md`'s Hard
 negatives section for the backend/storage side (current design: a hard negative is a freely drawn
@@ -55,3 +55,29 @@ single toggle doesn't need the server round-trip a full list refresh would add. 
 fed by the `enabled` property `refreshHardNegativesLayer` now includes on every feature) -- lets a
 row stay visibly on the map/list while excluded from the next training build, for testing whether a
 specific hard negative (or a batch of them) is actually responsible for a regression.
+
+## manual.js -- notes moved out of code comments (2026-09-23)
+
+The Validation tab (DINOv2 similarity search + "Add to Samples") and the Graph tab (Mermaid
+editor for `subclass_graph.json` piece sizes and sub-class boost edges) were removed with the
+code they drove -- see `scripts/context/scripts.md` "Removed 2026-09-23". Saving a node in the
+Graph tab also used to overwrite the node's whole config, silently dropping
+`normalize_sample_crop`; the file is now edited by hand only.
+
+- **Saved samples live on a static map layer, not in MapboxDraw.** `draw` only ever holds the
+  one feature being drawn or edited, so its simple_select/direct_select state machine never
+  juggles more than one feature, and taking `draw.getAll()`'s first feature is correct.
+  Double-clicking a static sample pulls it into `draw` (the static copy is hidden meanwhile);
+  an empty `draw.selectionchange` while editing means "done".
+- **Vertex dots layer**: mapbox-gl-draw's `draw_polygon` mode only renders markers for the first
+  and latest vertex; this layer draws one for every placed vertex.
+- **`samplesRequestId` / `hardNegativesRequestId`** drop a stale response when the class changes
+  mid-fetch; the list is cleared immediately so a switch never shows a mix.
+- **Add-class panel** enables "Create Class" only once every field for the chosen type is set --
+  a sub-class submitted without a parent once silently became a top-level class.
+- **Class dropdown** is a flat list, not `<optgroup>` (an optgroup label is unselectable, which
+  meant listing the parent twice); children are indented with non-breaking spaces. A `<select>`'s
+  default selection fires no `change`, so samples are loaded explicitly after populating it.
+- **Training panel** stacks button and status (a side-by-side full-width button squeezed the
+  status text to nothing); its progress bar uses `visibility: hidden` so showing it never shifts
+  the layout.

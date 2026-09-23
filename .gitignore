@@ -9,45 +9,24 @@ experiments/
 /loop/
 .scratch/
 
-# oil_refinery experiments — probe/benchmark outputs, raw downloaded datasets, and the
-# live-updating training status file (rewritten every epoch by the xview training run)
-oil_refinery/probe/
-oil_refinery/xview_raw/
-oil_refinery/checkpoint_eval/
-oil_refinery/training_status.txt
+oil_refinery/
 
-# oil_refinery/xview-yolov3 -- the ultralytics/xview-yolov3 clone (its own nested .git,
-# checkpoints, logs) that train_xview.py drives. Relocated here from an ephemeral Temp
-# scratchpad 2026-09-03 so it survives across sessions/machines; still not source-controlled
-# itself since it has its own git history plus multi-GB weights/logs.
-oil_refinery/xview-yolov3/
-
-# oil_refinery/app's frontend -- standard npm/Vite build artifacts, not source
-oil_refinery/app/web/node_modules/
-oil_refinery/app/web/dist/
-
-# oil_refinery/app's own dev-run log/pid files (restart.bat/.ps1/.sh), same pattern as
-# app.log/app.err.log/.app.pid above
-oil_refinery/app/server.log
-oil_refinery/app/server.err.log
-oil_refinery/app/.server.pid
-oil_refinery/app/web.log
-oil_refinery/app/web.err.log
-oil_refinery/app/.web.pid
+app/web/node_modules/
+app/web/dist/
+app/server.log
+app/server.err.log
+app/.server.pid
+app/web.log
+app/web.err.log
+app/.web.pid
 
 # Pretrained checkpoints downloaded by ultralytics/scripts on first run.
 *.pt
 
-# Secrets — seed files may get pasted with a real access_token in the URL by mistake.
+# Secrets
 .env
-seeds/*.yaml
-!seeds/seed_example.yaml
-
-# EC2 SSH private key — must never be committed.
 *.pem
-
-# Instance-specific deployment runbook (real IP/instance ID) — repo is public.
-DEPLOY_EC2.md
+deploy/.env
 
 # Python
 __pycache__/
@@ -63,3 +42,5 @@ logs/
 
 # Editors/OS
 .DS_Store
+
+app/data/

@@ -1,0 +1,45 @@
+name: refinery-demo
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/app.Dockerfile
+    env_file: .env
+    environment:
+      INFERENCE_DEVICE: cuda
+    volumes:
+      - models:/repo/models
+      - tiles:/repo/tiles
+      - logs:/repo/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/api/stats')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+      args:
+        VITE_TOUR: ${VITE_TOUR:-1}
+    ports:
+      - "80:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  models:
+  tiles:
+  logs:

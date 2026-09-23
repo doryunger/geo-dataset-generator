@@ -2,10 +2,8 @@ import argparse
 
 import common
 import obb
-import reconcile
 import s3_sync
 import stac_export
-from embedder import Embedder
 
 
 def prompt_for_class() -> str:
@@ -24,26 +22,19 @@ def prompt_for_class() -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Regenerates a class's segmentation and OBB datasets from its local samples.jsonl, no S3 merge.",
+        description="Regenerates a class's OBB dataset from its local samples.jsonl, no S3 merge.",
     )
     parser.add_argument("--class", dest="class_name", default=None, help="Object class name (omit to choose interactively)")
     parser.add_argument(
         "--hard-negatives", action="store_true",
-        help="Include HARD_NEGATIVE_TILES as background images -- off by default (backfired at 13 positives)",
+        help="Include the class's hard negatives as background images",
     )
     args = parser.parse_args()
     common.setup_logging()
 
     class_name = args.class_name or prompt_for_class()
 
-    seg_result = reconcile.generate_package(class_name)
-    print(
-        f"Segmentation package: {seg_result['train']} train, {seg_result['val']} val "
-        f"-> {common.dataset_dir(class_name)}"
-    )
-
-    embedder = Embedder()
-    obb_result = obb.generate_obb_package(class_name, args.hard_negatives, embedder=embedder)
+    obb_result = obb.generate_obb_package(class_name, args.hard_negatives)
     print(
         f"OBB package: {obb_result['train']} train (+{obb_result.get('negatives', 0)} hard negatives), "
         f"{obb_result['val']} val -> {common.obb_dataset_dir(class_name)}"

@@ -5,13 +5,13 @@ on it*, distilled from actual sessions rather than aspirational.
 
 **No comments in code files, anywhere in this repo** — no inline `#`/`//` comments, no explanatory
 docstrings, in any language (Python, TypeScript/TSX, etc.), in any part of the tree (`scripts/`,
-`oil_refinery/app/server/`, `oil_refinery/app/web/src/`, ...). For the "why" behind a non-obvious
+`app/server/`, `app/web/src/`, ...). For the "why" behind a non-obvious
 design choice, put it in that directory's own `context/` sibling directory instead — **one file per
 component (e.g. one for a whole backend, one for a whole frontend), not one per source file**
 (changed 2026-09-06 after the per-file convention produced too many small files to navigate; the
 existing per-file docs across the repo were consolidated down accordingly at the same time) —
-`scripts/context/scripts.md`, `oil_refinery/app/server/context/server.md`,
-`oil_refinery/app/web/context/frontend.md`, and `web/context/frontend.md` are the ones that exist so
+`scripts/context/scripts.md`, `app/server/context/server.md`,
+`app/web/context/frontend.md`, and `web/context/frontend.md` are the ones that exist so
 far; a new area of the codebase gets its own single `context/<component>.md` the same way, split
 into `## <file-or-topic>` sections inside it rather than a new file per source file. Keep genuinely
 non-obvious content — concrete numbers, historical bug postmortems, "tried X, it backfired because
@@ -50,41 +50,20 @@ this scale:
 
 ## OBB training workflow (`scripts/obb.py`, `scripts/train_obb.py`)
 
-**Status (2026-09-04): `fence-face` is discontinued — no longer pursued, and no longer present
-under `classes/`.** Active custom-trained classes are the "compact/tactical" oil-refinery
-components: `distillation-column` and (newly added) `fan-unit`. `chimney` has a working
-custom-trained model (`classes/chimney/`, see the bug-fix note below), but the `oil_refinery`
-pipeline deliberately detects chimneys via DIOR's pretrained checkpoint instead, despite DIOR's
-chimney detections being far from perfect — see `oil_refinery/README.md`. The steps below (and
-the bend-splitting
-mechanism in step 2 specifically) were built out against fence's elongated-ribbon shapes; they
-still apply verbatim to any future elongated class, but none of the currently active classes are
-elongated, so step 2's bend/occlusion judgment call is currently moot in practice.
+Active custom-trained classes are `fan-unit` and `distillation-column`, both compact objects.
+The fence-era machinery (bend splitting, length slicing, `HARD_NEGATIVE_TILES`, the DINOv2
+similarity search and segmentation pipeline) was deleted on 2026-09-23 -- see
+`scripts/context/scripts.md` "Removed 2026-09-23" if an elongated class ever comes back.
 
-1. New/edited samples go into `classes/<class>/samples.jsonl` via the `/manual` UI (`scripts/api.py`).
-   Every create/edit/promote automatically renders a polygon-overlay image into
-   `classes/<class>/bend_review/<sample_id>.jpg`.
-2. **Before regenerating `dataset_obb/`**, look at any *new* files in `bend_review/` and decide by
-   eye whether the ribbon is a genuine corner (needs splitting) or a straight/gently-curved line
-   (doesn't). Two automatic heuristics for this were already tried and both failed (see
-   `BEND_PIECES`'s docstring in `obb.py`) — this has to stay a manual/by-eye judgment call.
-   Bent ones get an entry in `BEND_PIECES = {sample_id: n_pieces}` at the top of `obb.py`.
-   While reviewing, also check whether any part of the ribbon runs under something that visually
-   hides it (tree canopy is the case seen so far) — **trim the polygon to end where the fence
-   stops being actually visible, don't label the covered stretch just because you know a fence is
-   probably still there.** This isn't an image-processing problem more data can fix: the model
-   can only learn from pixels it can see, and forcing it to guess at invisible content trains it
-   to fire on plausible-looking textures in general (confirmed via `error_analysis_obb.py` on
-   `5d3cee45db36`/`ae9e2e66bf34`/`8c2d44de40d9` — predictions under canopy came back scattered and
-   misaligned, not just low-confidence). Trimming shrinks that sample's crop/bbox to match (see
-   `update_manual_sample` in `api.py`) rather than discarding the sample outright — the visible
-   remainder is still valid training data.
-3. Run `python scripts/obb.py --class <class>` to rebuild `dataset_obb/`. Multi-piece samples are
-   written as separate cropped images (one per piece), not one image with several boxes — this is
-   real extra training-image count from data you already have, so check the printed train/val
-   counts look right (should be ≥ the sample count, not equal to it, if any `BEND_PIECES` entries
-   exist).
-4. Train with `python scripts/train_obb.py --class <class> --version vN` — pick the next `vN` by
+1. New/edited samples go into `classes/<class>/samples.jsonl` via the `/manual` UI (`scripts/api.py`)
+   or the loop's `apply.py`. Every create/edit renders a polygon-overlay image into
+   `classes/<class>/bend_review/<sample_id>.jpg` for eyeballing. Label only what is actually
+   visible -- **trim a polygon where the object disappears under something (tree canopy), don't
+   label the covered part just because you know it's there**; forcing the model to guess at
+   invisible content trains it to fire on plausible-looking textures in general.
+2. Run `python scripts/obb.py --class <class>` to rebuild `dataset_obb/` (one image per sample,
+   so train+val should equal the enabled sample count).
+3. 4. Train with `python scripts/train_obb.py --class <class> --version vN` — pick the next `vN` by
    checking `models/<class>_obb_v*.pt`. GPU/CPU status on this machine has flipped more than once
    (a 2026-08-16 note claimed no GPU and a ~90 min/100-epoch CPU-bound run at the 448-piece dataset
    size; as of 2026-09-01 `nvidia-smi` and `torch.cuda.is_available()` show a real GPU, NVIDIA RTX
@@ -92,54 +71,31 @@ elongated, so step 2's bend/occlusion judgment call is currently moot in practic
    `nvidia-smi` before assuming training speed or writing a new wall-clock note here. Still worth
    just running rather than predicting the result, and prefer `patience` (early stopping, on by
    default now) over guessing an epoch count.
-5. Compare `models/<class>_obb_vN_metrics.json` against prior versions in a table, with the sample
+4. Compare `models/<class>_obb_vN_metrics.json` against prior versions in a table, with the sample
    size caveat above front and center.
-6. **Optional**: `python scripts/train_obb_kfold.py --class <class> --version vN --folds 5` trains
-   N models, each with a different 1/N of *original samples* (not pieces) held out as val, and
+5. **Optional**: `python scripts/train_obb_kfold.py --class <class> --version vN --folds 5` trains
+   N models, each with a different 1/N of samples (grouped by site) held out as val, and
    reports mean±std across folds instead of one run's number — a single split's number can be
    meaningfully optimistic (seen on the now-discontinued `fence-face` class, `fence_obb_v6`:
    single-run mAP50-95 0.455, true k-fold mean 0.33±0.08, confirmed 2026-08-16 — treat this as a
    general warning that applies to any class here, not just that one). Off by default (a 5-fold
    run is ~5x the cost of one training run) — reach for it when a result needs to be trustworthy
-   enough to act on, not for every routine iteration. Folds split by original sample id
-   specifically because `dataset_obb/` pieces of the same sample aren't independent — see
-   `generate_obb_package`'s `val_ids` param and the module docstring on why the *pieces* count
-   (hundreds) isn't the number that matters for generalization confidence, the *original sample*
-   count is.
+   enough to act on, not for every routine iteration.
 
-Hard negatives (`--hard-negatives` flag / `HARD_NEGATIVE_TILES` in `obb.py`) are off by default —
-tried once on `fence-face` at 13 positives + 6 negatives and it destabilized training (cls_loss
-spiked, real confidence collapsed). Revisit only once positives comfortably outnumber any
-negatives added.
+Hard negatives (`--hard-negatives` flag, drawn in `/manual`'s Hard Negatives tab or added by the
+loop's triage) are off by default -- tried once on `fence-face` at 13 positives + 6 negatives and
+it destabilized training (cls_loss spiked, real confidence collapsed). Revisit only once positives
+comfortably outnumber any negatives added.
 
-**Compact/"tactical" classes (not elongated ribbons like fence)** — e.g. `distillation-column`,
-`chimney`, added 2026-09-02 for the `oil_refinery/` exploration — need a `subclass_graph.json`
-with a generous `max_piece_m` override (used 1000) in their own `classes/<class>/` directory, same
-`min_piece_m`/`max_piece_m` mechanism as `fence-face`. Without it, the default 5m ceiling in
-`obb.py` triggers length-based auto-slicing meant for fence's ribbons — real samples of these
-classes (including their cast shadow, a legitimate part of the label since shadow length is a
-strong tall-object cue) ran 10-120+ m long, so leaving the default on silently sliced every one of
-them into meaningless fragments. `MIN_SEED_CROP_PX`'s 150px floor was also removed from
-`/manual`'s sample-*creation* flow (kept for the search app's shape-size gate) for the same
-reason: fence needed a large tight crop, a compact object's tight crop can be legitimately small,
-and "redraw with more margin" isn't the right answer when the margin itself is what needs
-generous padding, not the object.
-
-**Real bug found and fixed 2026-09-02**: `generate_obb_package`'s single-piece code path (when a
-sample doesn't get split, `len(rects) == 1`) normalized the raw minimum-rotated-rectangle corners
-straight to `[0,1]` without clipping to the image window first — unlike the multi-piece path,
-which already called `_clip_rect_to_window` for exactly this reason. A minimum-rotated-rectangle's
-corners can extend past the polygon it bounds (normal geometry for non-rectangular shapes), so a
-tightly-cropped sample could produce out-of-`[0,1]` label coordinates, which ultralytics silently
-drops as invalid during label caching — with *every* val label affected, that's a hard crash
-("No valid images found in .../val.cache"), not a quality problem. Fence's elongated ribbons
-rarely triggered this (the rotated rect naturally hugs the polygon's own long axis); chimney and
-distillation-column's more compact shapes did, every single sample. Fixed by clipping in the
-single-piece path too. If a class's training crashes with that exact error, or trains but with
-suspiciously bad precision on a val set, regenerate its package and check
+**Real bug found and fixed 2026-09-02**: labels were once normalized from raw
+minimum-rotated-rectangle corners straight to `[0,1]` without clipping to the image window
+(`_clip_rect_to_window` now does it). A min-rotated-rect's corners can extend past the polygon it
+bounds, so a tightly-cropped sample could produce out-of-`[0,1]` label coordinates, which
+ultralytics silently drops during label caching -- with *every* val label affected, that's a hard
+crash ("No valid images found in .../val.cache"). If a class's training crashes with that exact
+error, or trains but with suspiciously bad precision, regenerate its package and check
 `classes/<class>/dataset_obb/labels/*/*.txt` for any coordinate outside `[0,1]` before assuming
-it's a data-quality or sample-size problem — chimney went from a hard crash to
-precision=0.99/recall=1.00/mAP50-95=0.72 purely from this fix, no new samples.
+it's a data-quality or sample-size problem.
 
 **`/manual`'s server process caches Python code in memory** — editing `scripts/*.py` (this
 includes `obb.py`, `api.py`, anything the running `uvicorn api:app` imports) has **no effect on
@@ -163,10 +119,10 @@ run with `WORKSPACE` unset.
 
 ## S3 backup (`scripts/s3_sync.py`)
 
-`classes/<class>/` (samples.jsonl, crops, bend_review/error_review, dataset_obb — the hand-labeled
+`classes/<class>/` (samples.jsonl, crops, bend_review, dataset_obb — the hand-labeled
 ground truth and everything derived from it) backs up to S3 as timestamped snapshots, not
-continuous per-write sync. `tiles/`, `embeddings/`, and `models/` stay local-only (all
-reconstructible: tiles re-fetch from Mapbox, embeddings rebuild from samples, models retrain).
+continuous per-write sync. `tiles/` and `models/` stay local-only (tiles re-fetch from Mapbox,
+models retrain; the deployed app pulls its three model files from S3, see `deploy/`).
 
 - The `/manual` editor (`api.py`) never touches S3 while you're creating/editing/deleting
   individual samples — those stay purely local. The one action that does touch S3 is the
@@ -174,7 +130,7 @@ reconstructible: tiles re-fetch from Mapbox, embeddings rebuild from samples, mo
 - `python scripts/obb.py --class <class>` uploads a fresh timestamped package (`packages/<class>/
   <epoch>.tar.gz`) as its last step, once it's rebuilt `dataset_obb/` — this is the one deliberate
   "publish what I've labeled" action. The `/manual` UI's "Generate Package" button does the same
-  thing (plus rebuilding the segmentation `dataset/`), and defaults its "include latest available
+  thing, and defaults its "include latest available
   entry" checkbox to on: before packaging, it pulls the latest S3 snapshot and merges in any
   sample id not already present locally (local always wins on a collision, nothing local is ever
   deleted or overwritten by the merge) via `s3_sync.merge_latest_package`. This is what keeps
@@ -191,10 +147,9 @@ reconstructible: tiles re-fetch from Mapbox, embeddings rebuild from samples, mo
 - The pull/push only happens at these CLI entry points, not inside `generate_obb_package`/
   `train_obb_class` themselves — `train_obb_kfold.py` calls both of those once per fold against a
   fold-specific local split, and pulling/pushing mid-fold would defeat the fold split entirely.
-- Extraction uses tarfile's `"tar"` filter, not the stricter `"data"` default — `review/` and
-  `predictions/` legitimately contain absolute symlinks into the shared `tiles/images/` cache
-  (see `stage_review_candidate`), which `"data"` rejects. Safe here specifically because this
-  archive is self-produced by `upload_package` and never comes from an untrusted source.
+- Extraction uses tarfile's `"tar"` filter, not the stricter `"data"` default — older packages
+  contain absolute symlinks into the shared `tiles/images/` cache, which `"data"` rejects. Safe
+  here specifically because this archive is self-produced by `upload_package`.
 - Needs `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET_NAME` in `.env`
   (same gitignored-file pattern as `MAPBOX_ACCESS_TOKEN`) — the IAM user needs `s3:GetObject`,
   `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::<bucket>/*` and `s3:ListBucket` on

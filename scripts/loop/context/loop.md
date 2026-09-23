@@ -152,7 +152,7 @@ number. The class is finished when coverage on a *fresh* site stops improving.
   ablation run does not provide. Candidate *models* are rejected freely by the benchmark;
   candidate *data* is not.
 - **Promotion is explicit.** A class leaves `experiments/` only by a deliberate move of its
-  data and a config change in `oil_refinery/app/server/`; nothing graduates as a side effect
+  data and a config change in `app/server/`; nothing graduates as a side effect
   of training. Columns, when promoted, go in as a *booster* edge, not a `requires` edge --
   nadir-orthophoto sites like Płock will never show one.
 
@@ -240,12 +240,12 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 ## Round log and current state
 
 **Promoted to production (2026-09-23).** `distillation-column` data moved out of `experiments/`
-into `classes/`, `loop/` and the root embedding index; further rounds run without `WORKSPACE`.
+into `classes/` and `loop/`; further rounds run without `WORKSPACE`.
 Paths quoted below as `experiments/...` from before this date are now at the repo root.
 
 **Integration and the look-alike round (2026-09-21/22).** v37 was wired into `oil_refinery`
 (`config.json` models + `model_gsd_m` 0.125 + gated; `semantic_graph.json` node + requires
-edge) and `oil_refinery/eval_sites.py` was written to run the server's own detection batch and
+edge) and `scripts/eval_sites.py` was written to run the server's own detection batch and
 classifier over whole sites offline, with a per-tile detection cache so graph changes re-classify
 in seconds. Findings, in order:
 
@@ -275,7 +275,7 @@ in seconds. Findings, in order:
   defaults set to this. The site test outranks the object gate when they disagree; the object
   table stays as the per-round proxy.
 
-Run the site test: `INFERENCE_DEVICE=cuda python oil_refinery/eval_sites.py --class
+Run the site test: `INFERENCE_DEVICE=cuda python scripts/eval_sites.py --class
 distillation-column --cache loop/distillation-column/site_detections_v46.json`
 (`--floor`, `--count`, `--min-types`, `--max-distance-m` override the graph from the cache in
 seconds; a new column model needs a new cache, ~45 min on the GPU, and OOMs if anything else

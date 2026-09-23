@@ -1,19 +1,9 @@
-requests==2.34.2
-torch==2.13.0
-transformers==5.14.1
-pillow==12.3.0
-numpy==2.5.1
+-r app/requirements.txt
 pyyaml==6.0.3
-ultralytics==8.4.116
 opencv-python==5.0.0.93
-shapely==2.1.2
-fastapi==0.141.1
-uvicorn==0.52.1
-websockets==17.1
-boto3==1.43.78
-ruff==0.16.5
 openvino==2026.3.1
 onnx==1.22.0
 pystac==1.15.2
 stac-geoparquet==0.8.2
 jsonschema==4.26.0
+ruff==0.16.5

@@ -1,4 +1,3 @@
-"""S3 backup for classes/ as timestamped package snapshots."""
 import io
 import logging
 import os
@@ -56,9 +55,6 @@ def upload_package(class_name: str) -> str | None:
 
 
 def list_remote_classes() -> list[str]:
-    """Every class name with at least one package in S3, discovered from the actual object keys
-    rather than a fixed prefix depth -- a sub-class (e.g. "fence/fence-face") packages under its
-    own nested "packages/<parent>/<sub>/" prefix, so a plain one-level listing would miss it."""
     if not s3_configured():
         return []
     class_names = set()
@@ -83,12 +79,6 @@ def latest_package_key(class_name: str) -> str | None:
 
 
 def download_latest_package(class_name: str) -> bool:
-    """Replaces local classes/<class_name>/ with the latest S3 snapshot. Local sub-class
-    directories nested under class_name (e.g. fence/fence-face) are preserved across the replace
-    -- a sub-class is a logically independent class synced under its own S3 key, not part of
-    class_name's own package, so it must survive class_name's own package being replaced, even if
-    the sub-class has local-only work never yet packaged to S3 (this was a real data-loss bug the
-    first time a plain parent-class training run silently wiped out a freshly-created sub-class)."""
     key = latest_package_key(class_name)
     if key is None:
         logger.info(f"[{class_name}] no S3 package found, nothing to download")
@@ -132,11 +122,7 @@ def download_latest_package(class_name: str) -> bool:
     return True
 
 
-def merge_latest_package(class_name: str, embedder=None) -> dict | None:
-    """Adds samples from the latest S3 snapshot that aren't already present locally, without
-    touching any existing local sample -- local always wins on an id collision. Unlike
-    download_latest_package, this never deletes anything, so it's safe to run on a machine that
-    already has its own local-only samples still pending publication."""
+def merge_latest_package(class_name: str) -> dict | None:
     key = latest_package_key(class_name)
     if key is None:
         logger.info(f"[{class_name}] no S3 package found, nothing to merge")
@@ -170,17 +156,8 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
                     shutil.copy(remote_crop, common.samples_dir(class_name) / remote_crop.name)
             common.rewrite_jsonl(common.samples_path(class_name), local_samples + added_rows)
 
-            if embedder is None:
-                from embedder import Embedder
-                embedder = Embedder()
             import obb
             for row in added_rows:
-                crop_path = next(common.samples_dir(class_name).glob(f"{row['id']}.*"), None)
-                if crop_path is not None:
-                    common.embed_and_index_sample(
-                        embedder, class_name, row["id"], crop_path, row["zoom"],
-                        row["west"], row["south"], row["east"], row["north"], row["polygon"],
-                    )
                 obb.save_bend_review_overlay(class_name, row["id"])
 
         remote_changelog_path = remote_dir / "sample_changelog.jsonl"
@@ -213,3 +190,18 @@ def merge_latest_package(class_name: str, embedder=None) -> dict | None:
         "added_from_remote": len(added_rows), "merged_total": len(local_samples) + len(added_rows),
         "hard_negatives_added": len(added_hn),
     }
+
+
+def upload_file(path: Path, key: str) -> str:
+    logger.info(f"uploading {path} to s3://{_BUCKET}/{key}...")
+    _client().upload_file(str(path), _BUCKET, key)
+    return key
+
+
+def download_file(key: str, dest: Path) -> str:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    logger.info(f"downloading s3://{_BUCKET}/{key} to {dest}...")
+    _client().download_file(_BUCKET, key, str(tmp))
+    tmp.replace(dest)
+    return key

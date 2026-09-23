@@ -1,17 +1,5 @@
-"""
-Turn a review page's downloaded JSON into class data.
-
-    triage JSON: "yes" candidates become samples; "no" candidates are stored as hard negatives
-                 (disabled -- enable them deliberately once positives comfortably outnumber them)
-    sweep JSON:  every drawn polygon becomes a sample
-
-Usage:
-    python scripts/loop/apply.py --class distillation-column --review ~/Downloads/distillation-column-sweep-puertollano-v13.json
-    python scripts/loop/apply.py --class distillation-column --review ~/Downloads/distillation-column-triage-puertollano-v13.json --dry-run
-"""
 import argparse
 import json
-import shutil
 import time
 import unicodedata
 import uuid
@@ -35,7 +23,7 @@ def _already_present(class_name: str, polygon: list) -> bool:
     return False
 
 
-def _add_sample(embedder, class_name: str, polygon: list, origin: dict) -> str | None:
+def _add_sample(class_name: str, polygon: list, origin: dict) -> str | None:
     if polygon[0] != polygon[-1]:
         polygon = polygon + [polygon[0]]
     if _already_present(class_name, polygon):
@@ -44,11 +32,10 @@ def _add_sample(embedder, class_name: str, polygon: list, origin: dict) -> str |
     lats = [p[1] for p in polygon]
     west, east, south, north = min(lons), max(lons), min(lats), max(lats)
     sid = uuid.uuid4().hex[:12]
-    crop = common.fetch_and_crop_bbox(
+    common.fetch_and_crop_bbox(
         SAMPLE_ZOOM, west, south, east, north, common.DEFAULT_TILESET, common.DEFAULT_FORMAT,
         common.samples_dir(class_name) / f"{sid}.jpg",
     )
-    common.embed_and_index_sample(embedder, class_name, sid, crop, SAMPLE_ZOOM, west, south, east, north, polygon)
     common.append_sample(class_name, {
         "id": sid, "class_name": class_name, "polygon": polygon,
         "west": west, "south": south, "east": east, "north": north,
@@ -111,10 +98,7 @@ def main():
         print(f"sweep of {review.get('site')}: {len(polys)} polygons")
         if args.dry_run:
             return
-        shutil.copy(common.samples_path(args.class_name), common.samples_path(args.class_name).with_suffix(f".jsonl.bak.{int(time.time())}"))
-        from embedder import Embedder
-        emb = Embedder()
-        added = sum(1 for p in polys if _add_sample(emb, args.class_name, p, origin_base))
+        added = sum(1 for p in polys if _add_sample(args.class_name, p, origin_base))
         print(f"added {added} ({len(polys) - added} already present); samples now {len(common.load_samples(args.class_name))}")
         return
 
@@ -124,10 +108,7 @@ def main():
         print("  precision by band:", {b: f"{sum(1 for c in yes if c['conf'] >= b)}/{sum(1 for c in yes + no if c['conf'] >= b)}" for b in (0.25, 0.4, 0.5, 0.7)})
     if args.dry_run:
         return
-    shutil.copy(common.samples_path(args.class_name), common.samples_path(args.class_name).with_suffix(f".jsonl.bak.{int(time.time())}"))
-    from embedder import Embedder
-    emb = Embedder()
-    added = sum(1 for c in yes if _add_sample(emb, args.class_name, c["polygon"], {**origin_base, "conf": c["conf"], "candidate": c["id"]}))
+    added = sum(1 for c in yes if _add_sample(args.class_name, c["polygon"], {**origin_base, "conf": c["conf"], "candidate": c["id"]}))
     print(f"added {added} ({len(yes) - added} already present)")
     for c in no:
         lons = [p[0] for p in c["polygon"]]

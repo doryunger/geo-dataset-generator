@@ -1,0 +1,10 @@
+torch==2.13.0
+ultralytics==8.4.116
+numpy==2.5.1
+pillow==12.3.0
+shapely==2.1.2
+requests==2.34.2
+fastapi==0.141.1
+uvicorn==0.52.1
+websockets==17.1
+boto3==1.43.78

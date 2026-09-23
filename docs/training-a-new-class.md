@@ -67,7 +67,7 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
    the objects produces labels worse than none, and is deferred whatever its score.
 9. **One round at a time.** Finish and read a round before starting the next.
 10. **Promotion is explicit.** A class leaves `experiments/` by a deliberate move of its data and
-   a config change in `oil_refinery/app/server/`; nothing graduates as a side effect.
+   a config change in `app/server/`; nothing graduates as a side effect.
 
 ## 3. One round
 
@@ -122,7 +122,7 @@ Negative layers, in the order they are being added:
    this is exactly the discrimination the class is for. Check an export by name before merging
    — `industrial=oil` also tags refineries and crackers. `sites.py --geojson <file> --layer
    <name>` merges without touching the refinery list; scan once, add to `benchmark.json`.
-3. **The site classifier itself** — in place: `oil_refinery/eval_sites.py` runs the server's
+3. **The site classifier itself** — in place: `scripts/eval_sites.py` runs the server's
    own detection and classification over every benchmark site and prints the verdict per site.
    This is the final word: when it and the object gate disagree, the site test wins (it did for
    `v46`, which scored lower on clean object detections but took the site test from 12/18 to
@@ -147,8 +147,9 @@ the radius is 300 m; those came out of this round and are the defaults now.
 Before the loop can run, a class needs a seed:
 
 1. Draw 20–40 samples in `/manual` on port 8001 (`run-experiments.ps1`) across at least three
-   sites; body only, generous crop margin. Add `classes/<class>/subclass_graph.json` with a large
-   `max_piece_m` for compact objects.
+   sites; body only, generous crop margin. Add `classes/<class>/subclass_graph.json` with
+   `{"nodes": {"<class>": {"normalize_sample_crop": true}}, "edges": []}` so every training crop
+   is a fixed 80 m window at the same ground resolution.
 2. `obb.py --class <class>` and `train_obb.py --version v1` from `yolo11n-obb.pt`.
 3. Build `sites.json` from an OSM export of the sites the class lives on:
    `sites.py --geojson <file>`. Scan a batch, `--score`, and start the queue.
