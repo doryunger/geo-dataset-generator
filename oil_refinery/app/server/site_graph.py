@@ -69,6 +69,14 @@ def group_within_m(graph: dict, component: str) -> "float | None":
     return graph["nodes"].get(component, {}).get("group_within_m")
 
 
+def min_count(graph: dict, site: str, component: str) -> int:
+    """For a grouped class this is the group size: how many members a group needs to count."""
+    for edge in requirements_for(graph, site):
+        if edge["to"] == component:
+            return edge.get("min_count", 1)
+    return 1
+
+
 def proximity_for(graph: dict, site: str) -> list[dict]:
     site_cfg = graph["nodes"][site]
     components = sorted({e["to"] for e in requirements_for(graph, site)})

@@ -723,6 +723,36 @@ dropping Castell, Gunvor, Gelsenkirchen Horst, Normandie, Godorf and BP Raf. Loo
 0/39 throughout. So tighten the fan floor and the counts freely; the **column floor is the
 expensive knob**, because the column model is the weakest of the three.
 
+## One classification per object (2026-09-23)
+
+`fuser.fuse` merged only same-concept overlaps, so the fan model firing at 0.6 on a storage tank
+the tank model had at 0.92 left two boxes on one object, both counted. `_one_class_per_object`
+now runs at the end of `fuse`: detections are walked in descending confidence and one is dropped
+when a *different* class already kept a box over the same object at IoU >= `IOU_MERGE_THRESHOLD`
+(0.3). Same-class merging is unchanged.
+
+## Counting a grouped class: groups, never singles (2026-09-23)
+
+For a class with `group_within_m`, the number the graph compares against `min_count` is the number
+of **groups**, not detections. A group is built transitively (`same_class_groups`): a member joins
+when it is within the distance of any other member, so 40 fans chained at 15 m are one group, not
+twenty; two clusters too far apart to join are two groups and both count. A group is real only at
+`GROUP_MIN_MEMBERS` (2) -- "fans within 20 m of each other" needs two, so no separate setting says
+so, and a lone fan contributes nothing (it is still drawn, dashed).
+
+The fan edge is therefore `min_count: 1` = "at least one group of fans". The frontend labels that
+number "N groups" so it is not read as a fan count -- an earlier version showed a bare number and
+was ambiguous next to the tank and column counts, which are counts of individual objects.
+
+## Warm-up moved off the startup path (2026-09-23)
+
+`lifespan` now loads the models and yields; `_warm_models` runs the per-shape cuDNN compilation
+and the real-tile batch in the background on `_BATCH_EXECUTOR`. The backend answers about 2 s
+after a restart instead of 25-30 s. A site picked before warming finishes pays the remaining
+compilation inside its own run: measured cold, the page was usable at t+2 s, processing began at
+t+11 s and the first site (Esso, 54 tiles) finished at t+22 s, against ~14 s once warm.
+`/api/stats` exposes `warm` so it is visible which state a measurement came from.
+
 ## Two kinds of proximity (2026-09-23)
 
 The graph now separates them, at the user's request:

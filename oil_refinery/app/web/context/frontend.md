@@ -35,6 +35,10 @@ which React warns about on re-render.
 
 ## GraphPanel.tsx
 
+A component whose summary carries `counts_groups` renders its number as "N groups" (fan-unit),
+because for such a class the graph counts groups, not detections; the others are counts of
+individual objects. Without the word the three numbers read as comparable and they are not.
+
 The semantic-graph widget: parent node "oil refinery", four child nodes with their running count
 (`n / min_count` where the graph sets one). Child colour: grey = none at/above its floor, yellow =
 some but fewer than `min_count`, green = count reached. The parent is green only when the server's

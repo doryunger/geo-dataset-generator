@@ -82,4 +82,31 @@ def fuse(detections: list[dict], canonical_model: str) -> list[dict]:
         label_source = max(canonical_in_group, key=lambda d: d["confidence"]) if canonical_in_group else winner
         fused.append({**winner, "class_name": label_source["class_name"]})
 
-    return fused
+    return _one_class_per_object(fused)
+
+
+def _one_class_per_object(detections: list[dict]) -> list[dict]:
+    """Drop a detection when a *different* class claims the same object with more confidence.
+
+    Same-class overlaps are merged above; this is the cross-class case, e.g. the fan-unit model
+    firing at 0.6 on a storage tank the tank model has at 0.92. Without it both boxes are drawn on
+    one object and both are counted.
+    """
+    ordered = sorted(detections, key=lambda d: -d["confidence"])
+    kept: list[dict] = []
+    boxes: list[tuple[float, float, float, float]] = []
+    for det in ordered:
+        box = _bbox(det["corners"])
+        claimed = False
+        for other, other_box in zip(kept, boxes):
+            if same_concept(det["class_name"], other["class_name"]):
+                continue
+            if not _bboxes_overlap(box, other_box):
+                continue
+            if _iou(det["corners"], other["corners"]) >= IOU_MERGE_THRESHOLD:
+                claimed = True
+                break
+        if not claimed:
+            kept.append(det)
+            boxes.append(box)
+    return kept

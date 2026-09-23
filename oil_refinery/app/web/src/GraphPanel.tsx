@@ -8,7 +8,8 @@ const YELLOW = '#d9a400'
 const GREEN = '#2e9e4f'
 
 const PLACEHOLDER: ComponentSummary[] = ['storage tank', 'fan-unit', 'distillation-column'].map((component) => ({
-  component, min_confidence: 0, min_count: component === 'fan-unit' ? 3 : 1, count: 0, max_confidence: null, satisfied: false,
+  component, min_confidence: 0, min_count: 1, count: 0, max_confidence: null, satisfied: false,
+  counts_groups: component === 'fan-unit',
 }))
 
 function childColor(c: ComponentSummary): string {
@@ -64,6 +65,7 @@ export default function GraphPanel() {
               <div>{c.component}</div>
               <div style={{ fontSize: 11, opacity: 0.85 }}>
                 {c.count}{c.min_count > 1 ? ` / ${c.min_count}` : ''}
+                {c.counts_groups ? ` group${c.count === 1 ? '' : 's'}` : ''}
               </div>
             </div>
           </div>

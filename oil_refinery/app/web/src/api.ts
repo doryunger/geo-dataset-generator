@@ -8,6 +8,7 @@ export interface Stats {
   in_flight: number
   cached_tiles: number
   device: string
+  warm: boolean
   min_detect_zoom: number
 }
 
@@ -53,6 +54,8 @@ export interface ComponentSummary {
   min_confidence: number
   min_count: number
   count: number
+  counts_groups?: boolean
+  member_count?: number
   max_confidence: number | null
   satisfied: boolean
 }

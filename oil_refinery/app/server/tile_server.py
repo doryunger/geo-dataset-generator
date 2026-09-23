@@ -44,34 +44,18 @@ for _edge in _GRAPH["edges"]:
         )
 
 
-DISPLAY_FLOOR_MARGIN = 0.25
-MIN_DISPLAY_CONFIDENCE = 0.3
-
-
-def _floor_for(det: dict, margin: float) -> "float | None":
-    """The confidence a detection of this class must clear, or None if the graph ignores the class."""
-    floors = [
-        max(MIN_DISPLAY_CONFIDENCE, floor - margin) if margin else floor
-        for component, floor in _COMPONENT_MIN_CONFIDENCE.items()
-        if fuser.same_concept(det["class_name"], component)
-    ]
-    return min(floors) if floors else None
-
-
 def _is_graph_relevant(det: dict) -> bool:
-    """Counts toward the semantic graph: gates the expensive models and feeds the classifier."""
-    floor = _floor_for(det, margin=0.0)
-    return floor is not None and det["confidence"] >= floor
+    """Above the confidence floor its class is given in the semantic graph.
 
-
-def _is_worth_drawing(det: dict) -> bool:
-    """Shown on the map, dashed if it does not also clear its counting floor.
-
-    Drawing only what counts made the model look blind: at a 0.70 fan floor, half of a real fan
-    bank went undrawn. What is drawn and what is counted are separate decisions.
+    This is the only confidence rule: it decides what is drawn, what gates the expensive models and
+    what the classifier sees. A detection can still fail the graph's other rules (a fan with no
+    neighbouring fan), and those are drawn dashed rather than dropped -- but nothing below a class's
+    configured floor is kept, so lowering that floor is the deliberate way to show more.
     """
-    floor = _floor_for(det, margin=DISPLAY_FLOOR_MARGIN)
-    return floor is not None and det["confidence"] >= floor
+    return any(
+        fuser.same_concept(det["class_name"], component) and det["confidence"] >= floor
+        for component, floor in _COMPONENT_MIN_CONFIDENCE.items()
+    )
 
 
 CONF_THRESHOLD = 0.15
@@ -242,6 +226,7 @@ def get_stats_snapshot() -> dict:
         "in_flight": len(_state["in_flight"]),
         "cached_tiles": len(_state["cache"]),
         "device": INFERENCE_DEVICE,
+        "warm": bool(_state.get("warm")),
         "min_detect_zoom": MIN_DETECT_ZOOM,
     }
 
@@ -529,12 +514,12 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes | None, list[di
         )
 
         fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
-        detections = [d for d in fused if _is_worth_drawing(d)]
+        detections = [d for d in fused if _is_graph_relevant(d)]
         if len(detections) != len(fused):
-            dropped = [d for d in fused if not _is_worth_drawing(d)]
+            dropped = [d for d in fused if not _is_graph_relevant(d)]
             logger.info(
                 "Tile %s dropped %d fused detection(s) as graph-irrelevant (class not in semantic "
-                "graph, or too far below its required-edge confidence floor to draw): %s",
+                "graph, or below its required-edge confidence floor): %s",
                 tile_id, len(dropped),
                 [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
             )
@@ -660,24 +645,36 @@ def _warm_batch() -> None:
     logger.info("Warm-up batch of %d real tiles in %.1fs", TILE_BATCH_SIZE, time.perf_counter() - t0)
 
 
+def _warm_models(models: dict[str, YOLO]) -> None:
+    """Pay the per-shape cuDNN compilation up front, then one real batch for the post-processing.
+
+    Runs in the background: the app is usable the moment the models are loaded, and a site picked
+    before this finishes just pays the remaining compilation inside its first batch.
+    """
+    t0 = time.perf_counter()
+    for model_key, model in models.items():
+        for imgsz in _warmup_sizes(model_router.gsd_for(model_key)):
+            t_warm = time.perf_counter()
+            model.predict(
+                source=torch.zeros((TILE_BATCH_SIZE, 3, imgsz, imgsz), device=INFERENCE_DEVICE), imgsz=imgsz,
+                device=INFERENCE_DEVICE, quantize=16, verbose=False,
+            )
+            logger.info(
+                "Warmed up %s at batch %d x %dpx in %.1fs", model_key, TILE_BATCH_SIZE, imgsz,
+                time.perf_counter() - t_warm,
+            )
+    _warm_batch()
+    _state["warm"] = True
+    logger.info("Warm-up finished in %.1fs", time.perf_counter() - t0)
+
+
 @asynccontextmanager
 async def lifespan():
     models: dict[str, YOLO] = {}
     for model_key in model_router.MODELS:
         logger.info("Loading %s (device=%s, backend=%s)", model_key, INFERENCE_DEVICE, model_router.INFERENCE_BACKEND)
         model = _load_model(model_key)
-        if INFERENCE_DEVICE == "cuda":
-            for imgsz in _warmup_sizes(model_router.gsd_for(model_key)):
-                t_warm = time.perf_counter()
-                model.predict(
-                    source=torch.zeros((TILE_BATCH_SIZE, 3, imgsz, imgsz), device=INFERENCE_DEVICE), imgsz=imgsz,
-                    device=INFERENCE_DEVICE, quantize=16, verbose=False,
-                )
-                logger.info(
-                    "Warmed up %s at batch %d x %dpx in %.1fs", model_key, TILE_BATCH_SIZE, imgsz,
-                    time.perf_counter() - t_warm,
-                )
-        else:
+        if INFERENCE_DEVICE != "cuda":
             model.predict(
                 source=Image.new("RGB", (MAX_PREDICT_IMGSZ, MAX_PREDICT_IMGSZ)), imgsz=MAX_PREDICT_IMGSZ,
                 device=INFERENCE_DEVICE, verbose=False,
@@ -689,9 +686,7 @@ async def lifespan():
     _state["in_flight"] = {}
     _state["cache"] = TileCache(TILE_CACHE_CAPACITY)
     _state["stats"] = Stats()
-
-    if INFERENCE_DEVICE == "cuda":
-        await asyncio.get_running_loop().run_in_executor(_BATCH_EXECUTOR, _warm_batch)
+    _state["warm"] = INFERENCE_DEVICE != "cuda"
 
     if INFERENCE_DEVICE == "cpu":
         torch.set_num_threads(max(1, (os.cpu_count() or 1) // WORKER_POOL_SIZE))
@@ -699,9 +694,15 @@ async def lifespan():
     logger.info("Starting %d parallel detection worker(s)", WORKER_POOL_SIZE)
     worker_tasks = [asyncio.create_task(_worker_loop()) for _ in range(WORKER_POOL_SIZE)]
     logger.info("Backend ready: %d model(s) loaded, %d worker(s) running", len(models), WORKER_POOL_SIZE)
+
+    warm_task = None
+    if INFERENCE_DEVICE == "cuda":
+        warm_task = asyncio.get_running_loop().run_in_executor(_BATCH_EXECUTOR, _warm_models, models)
     yield
     for task in worker_tasks:
         task.cancel()
+    if warm_task is not None:
+        warm_task.cancel()
     _state.clear()
 
 

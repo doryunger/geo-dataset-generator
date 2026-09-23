@@ -110,14 +110,34 @@ def same_class_groups(
     return list(groups.values())
 
 
+GROUP_MIN_MEMBERS = 2
+
+
+def counted_groups(detections: list[dict], graph: dict, component: str, z: int, ref_lat: float) -> list[list[int]]:
+    """What this class contributes, as lists of indices into `detections`.
+
+    A class with `group_within_m` is counted in groups, never as single detections: members are
+    joined when one is within that distance of another, and a group is real only once it has
+    `GROUP_MIN_MEMBERS` (2) -- "fans within 20 m of each other" needs two of them, so no extra
+    setting says so. Two clusters too far apart to join are simply two groups, and both count.
+
+    A class without `group_within_m` has no notion of a group and counts one per detection.
+    """
+    within_m = site_graph.group_within_m(graph, component)
+    if within_m is None:
+        return [[i] for i in range(len(detections))]
+    return [g for g in same_class_groups(detections, z, ref_lat, within_m) if len(g) >= GROUP_MIN_MEMBERS]
+
+
 def counts_for(cluster_dets: list[dict], requirements: dict, graph: dict, z: int, ref_lat: float) -> dict[str, int]:
+    """What each class contributes: groups for a grouped class, detections for the rest."""
     counts: dict[str, int] = {}
     for name, req in requirements.items():
         passing = [
             d for d in cluster_dets
             if d["class_name"] == name and d["confidence"] >= req["min_confidence"]
         ]
-        counts[name] = largest_same_class_group(passing, z, ref_lat, site_graph.group_within_m(graph, name))
+        counts[name] = len(counted_groups(passing, graph, name, z, ref_lat))
     return counts
 
 
@@ -125,6 +145,7 @@ def score(cluster_dets: list[dict], site: str, graph: dict, z: int, ref_lat: flo
     requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
     counts = counts_for(cluster_dets, requirements, graph, z, ref_lat)
     matched_types = {name for name, n in counts.items() if n >= requirements[name].get("min_count", 1)}
+
     min_needed, total = site_graph.min_types_present(graph, site)
     return {
         "matched_types": sorted(matched_types),

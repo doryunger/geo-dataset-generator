@@ -49,16 +49,19 @@ def component_summary(detections: list[dict], graph: dict, ref_lat: float) -> li
         group_within_m = site_graph.group_within_m(graph, component)
         matching = [d for d in detections if fuser.same_concept(d["class_name"], component)]
         passing = [d for d in matching if d["confidence"] >= floor]
-        grouped = classifier.largest_same_class_group(passing, tile_server.DETECT_ZOOM, ref_lat, group_within_m)
+        groups = classifier.counted_groups(passing, graph, component, tile_server.DETECT_ZOOM, ref_lat)
+        counted = len(groups)
         rows.append({
             "component": component,
             "min_confidence": floor,
             "min_count": min_count,
             "group_within_m": group_within_m,
-            "count": grouped,
+            "counts_groups": group_within_m is not None,
+            "member_count": sum(len(g) for g in groups),
+            "count": counted,
             "loose_count": len(passing),
             "max_confidence": max((d["confidence"] for d in matching), default=None),
-            "satisfied": grouped >= min_count,
+            "satisfied": counted >= min_count,
         })
     return rows
 
@@ -76,7 +79,6 @@ def qualifying_keys(
     for component, edge in edges.items():
         floor = edge.get("min_confidence", 0.0)
         min_count = edge.get("min_count", 1)
-        within_m = site_graph.group_within_m(graph, component)
         members = [
             (common.tile_id(z, x, y), i, det)
             for (z, x, y), dets in detections_by_tile.items()
@@ -85,12 +87,13 @@ def qualifying_keys(
         ]
         if not members:
             continue
-        groups = classifier.same_class_groups(
-            [det for _, _, det in members], tile_server.DETECT_ZOOM, ref_lat, within_m,
+        groups = classifier.counted_groups(
+            [det for _, _, det in members], graph, component, tile_server.DETECT_ZOOM, ref_lat,
         )
+        if len(groups) < min_count:
+            continue
         for group in groups:
-            if len(group) >= min_count:
-                qualifying.update((members[i][0], members[i][1]) for i in group)
+            qualifying.update((members[i][0], members[i][1]) for i in group)
     return qualifying
 
 
