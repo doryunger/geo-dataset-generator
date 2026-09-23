@@ -356,35 +356,40 @@ below for why the data flow is split this way.
 - `INITIAL_CENTER` -- the same Hamburg refinery site already used elsewhere in this repo's own
   early probing, a known-good spot with real storage tanks to look at.
 
-### `maplibregl.setWorkerUrl(maplibreWorkerUrl)`
+### `maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')`
 
 **Real bug found and fixed 2026-09-23**: every GeoJSON-backed layer (`detections`, `site-fill`/
-`site-outline`) was silently invisible in production -- the raster `basemap` rendered fine, the
+`site-outline`) was silently invisible in production -- the raster `basemap` rendered fine and the
 graph panel's counts updated correctly (they come straight from the websocket payload, no MapLibre
-involved), but no detection outlines or site boundaries ever appeared on the map itself, at any
-zoom, however long processing ran. `map.getSource('detections')._data.geojson.features` (MapLibre
-v6's actual raw-storage path, not the `._data.features` you'd guess) held the right count and
-correct coordinates the whole time; `map.querySourceFeatures('detections')` -- the *tiled/indexed*
-view rendering actually reads from -- stayed at 0. That split (data present, index empty) pointed
-straight at MapLibre's GeoJSON worker never having actually processed it.
+involved), but no detection outlines or site boundaries ever appeared on the map. Every
+`setData()` call carried the right, growing feature count, the layer order was correct, yet
+`map.querySourceFeatures('detections')` stayed at 0 and `sourcedata` fired for `detections` exactly
+once (the initial empty source) and never again. Any GeoJSON source routes through MapLibre's web
+worker for tiling; the raster basemap doesn't, which is why only the vector overlays broke.
 
-Root cause: maplibre-gl v6 ships its worker as a prebuilt static file
-(`node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs`), not something Vite's bundler splits out
-of application source -- and the library resolves that file's URL at runtime via a *computed*
-`import.meta.url` string, not a literal `new URL('./x.mjs', import.meta.url)` Rollup's static
-analysis can see and copy into `dist/assets/` on its own. Every build (this repo's Docker image
-included) silently shipped zero worker file, so the browser's own `new Worker(...)` call 404'd --
-with no thrown exception anywhere in application code to surface it, since Worker construction
-failures don't propagate as normal JS errors. Confirmed by reproducing with a from-scratch
-`npm run build` (no worker chunk emitted, matching what `docker exec` into the deployed `web`
-container's `assets/` showed) before touching any config.
+Three stacked problems, each hiding the next -- fixing any one alone changed nothing visible:
 
-Fixed by importing the worker file with Vite's `?url` suffix (forces it to be treated as a static
-asset -- copied into `dist/assets/` with its own hashed name and the import resolves to that final
-URL, exactly like any other Vite asset import) and calling maplibre-gl's own
-`setWorkerUrl(maplibreWorkerUrl)` at module scope, before the mount effect ever constructs a `Map`
--- has to run before the first worker gets spawned, so module-scope (executed on import, ahead of
-any component effect) rather than inside `useEffect`.
+1. maplibre-gl v6 ships its worker as a prebuilt file (`node_modules/maplibre-gl/dist/
+   maplibre-gl-worker.mjs`) and resolves its URL at runtime from a *computed* string, so Vite's
+   static analysis never copies it into the build. The browser's `new Worker(...)` 404'd.
+2. That worker file itself does `import ... from "./maplibre-gl-shared.mjs"` -- a relative import
+   of a sibling file. A first fix (importing the worker with Vite's `?url` suffix) got the worker
+   into `dist/assets/` under a *hashed* name, but not its sibling, and a hashed name can't satisfy
+   a relative import baked into a prebuilt file anyway.
+3. nginx's stock `mime.types` has no `.mjs` entry, so both files were served as
+   `application/octet-stream`. Browsers refuse to run a module worker with a non-JS MIME type, even
+   on a 200 -- this is what finally surfaced as MapLibre's own `"Worker failed to load. Check that
+   the worker URL is correct."` map `error` event. Nothing was listening for map errors, which is
+   the only reason this took so long to find; `Map.tsx` now logs them (`[map] error:`).
+
+Fix: `npm run copy-maplibre-worker` (wired as both `predev` and `prebuild`) copies both files
+verbatim from `node_modules/maplibre-gl/dist/` into `public/maplibre/`, so Vite serves them unhashed
+side by side and the relative import resolves. `public/maplibre/` is gitignored -- copying from
+whatever version is actually installed on every build means the worker can never drift out of sync
+with the main-thread library after an upgrade. `setWorkerUrl` runs at module scope, not in an
+effect, because it has to happen before the mount effect constructs the first `Map`. The MIME fix
+lives in `deploy/nginx.conf` (`location ~ \.mjs$`). Note `getSource(...)._data` is not the raw
+GeoJSON in v6 (it's `._data.geojson`) -- don't trust it as evidence the source is empty.
 
 ### `tilesForViewport()`
 

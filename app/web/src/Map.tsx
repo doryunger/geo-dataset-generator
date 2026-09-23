@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'
 import {
   EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties,
 } from './api'
@@ -19,7 +18,7 @@ const DETECT_ZOOM = 17
 const MIN_VISIBLE_ZOOM = 12
 const REPAINT_INTERVAL_MS = 350
 
-maplibregl.setWorkerUrl(maplibreWorkerUrl)
+maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
 
 const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 2, MIN_DETECT_ZOOM, 1.2]
 
@@ -148,6 +147,7 @@ export default function Map() {
         sourceDataType: (e as unknown as { sourceDataType?: string }).sourceDataType,
       })
     })
+    map.on('error', (e) => console.error('[map] error:', e.error?.message))
     map.on('movestart', () => tileDebug('movestart'))
     map.on('moveend', () => tileDebug('moveend'))
     map.on('idle', () => tileDebug('idle'))

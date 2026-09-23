@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "copy-maplibre-worker": "node -e \"const fs=require('fs');fs.mkdirSync('public/maplibre',{recursive:true});for(const f of ['maplibre-gl-worker.mjs','maplibre-gl-shared.mjs'])fs.copyFileSync('node_modules/maplibre-gl/dist/'+f,'public/maplibre/'+f)\"",
+    "predev": "npm run copy-maplibre-worker",
     "dev": "vite",
+    "prebuild": "npm run copy-maplibre-worker",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
