@@ -34,17 +34,18 @@ type LngLat = [number, number]
 
 const STEPS: Step[] = [
   {
-    title: 'Sites',
-    body: 'Pick a site to run. The left column holds real oil refineries, the right one look-alikes '
-      + '(power stations, tank farms, ports...). Each site turns green or red once it has been run. '
-      + '"Free browsing" lets you roam and detect anywhere at zoom 16+.',
+    title: 'Sites menu',
+    body: 'Sites are split into two columns: real oil refineries on the left, look-alikes (power '
+      + 'stations, tank farms, ports...) on the right. Once a site\'s result comes back it turns green '
+      + 'if it was identified as a refinery, red if not. "Free browsing" lets you roam the map freely '
+      + 'and process tiles as you go.',
     target: { kind: 'dom', id: 'sites' },
   },
   {
     title: 'Semantic graph',
-    body: 'What makes a refinery: storage tanks, fan units and distillation columns. A component '
-      + 'turns yellow when something is detected and green once its required count is met. The '
-      + '"oil refinery" node turns green only when all three are found together.',
+    body: 'Breaks the refinery test down into its child components: storage tanks, fan units and '
+      + 'distillation columns. Each child has its own colour and requirements, and turns yellow when '
+      + 'they\'re partly met and green when they\'re fully met.',
     target: { kind: 'dom', id: 'graph' },
   },
   {
@@ -55,14 +56,16 @@ const STEPS: Step[] = [
   },
   {
     title: 'Identified refinery',
-    body: 'The outlined area is built from the detections themselves, not taken from a map of the site.',
+    body: 'The outline is an educated guess at the site\'s extent, based on where the child components '
+      + 'were found and how close they are to each other.',
     target: { kind: 'site' },
     nextLabel: 'Zoom in',
   },
   {
     title: 'Detections',
-    body: 'Each box is one detected object, coloured by class. Solid boxes passed the confidence floor '
-      + 'and count towards the verdict; dashed ones are weaker hits shown for context.',
+    body: 'This layer shows the models\' actual output: each box is one detected object, with its type '
+      + 'and confidence. Solid boxes count towards the verdict; dashed ones are below the confidence '
+      + 'threshold or don\'t fulfil their class rules.',
     target: { kind: 'detections' },
   },
 ]

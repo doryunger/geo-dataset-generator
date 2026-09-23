@@ -17,6 +17,7 @@ const MIN_DETECT_ZOOM = 16
 const DETECT_ZOOM = 17
 const MIN_VISIBLE_ZOOM = 12
 const REPAINT_INTERVAL_MS = 350
+const LANDING_SETTLE_MS = 1000
 
 maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
 
@@ -218,10 +219,12 @@ export default function Map() {
 
   useEffect(() => {
     if (!selectedSite || sitePhase !== 'landing') return
-    if (flyTo && arrivedGeneration === flyTo.generation) {
+    if (!flyTo || arrivedGeneration !== flyTo.generation) return
+    const timer = setTimeout(() => {
       extentSocket.sendSite(selectedSite.id)
       dispatch(siteProcessingStarted())
-    }
+    }, LANDING_SETTLE_MS)
+    return () => clearTimeout(timer)
   }, [dispatch, selectedSite, sitePhase, flyTo, arrivedGeneration])
 
   useEffect(() => {

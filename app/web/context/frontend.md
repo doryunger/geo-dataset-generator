@@ -353,6 +353,11 @@ below for why the data flow is split this way.
   current screen at `DETECT_ZOOM` resolution -- not "whatever tile the current zoom's grid happens
   to cover," which could include a lot of ground that's barely touching the edge of the viewport,
   not actually on it.
+- `LANDING_SETTLE_MS = 1000` -- pause between the fly-to landing on a site and sending the site
+  request. Starting processing the instant the camera arrived made the basemap tiles compete with
+  the detection work, so the user sat on a white or blurry map while the scan ran (reported
+  2026-09-23). The phase stays `landing` during the pause, so interaction stays locked but the
+  processing overlay doesn't yet cover the tiles.
 - `INITIAL_CENTER` -- the same Hamburg refinery site already used elsewhere in this repo's own
   early probing, a known-good spot with real storage tanks to look at.
 
