@@ -17,7 +17,7 @@ const DETECT_ZOOM = 17
 const MIN_VISIBLE_ZOOM = 12
 const REPAINT_INTERVAL_MS = 350
 
-const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 4, MIN_DETECT_ZOOM, 2]
+const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 2, MIN_DETECT_ZOOM, 1.2]
 
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')

@@ -20,6 +20,8 @@ export interface Graph {
 
 export type SitePhase = 'landing' | 'processing' | 'done'
 
+export const FLIGHT_MS = 7000
+
 interface MapState {
   zoom: number
   mapLoaded: boolean
@@ -106,7 +108,7 @@ const mapSlice = createSlice({
       state.paintedGeneration = Math.max(state.paintedGeneration, action.payload)
     },
     siteSelected(state, action: PayloadAction<{ site: Site; durationMs?: number }>) {
-      const { site, durationMs = 1600 } = action.payload
+      const { site, durationMs = FLIGHT_MS } = action.payload
       state.selectedSite = site
       state.sitePhase = 'landing'
       state.siteProgress = { done: 0, total: site.tiles, startedAt: 0, updatedAt: 0 }

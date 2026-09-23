@@ -71,8 +71,10 @@ The app opens at zoom 1 over the Atlantic (`INITIAL_ZOOM`, `INITIAL_CENTER`) and
 the same action a click sends, so the intro flies out of the globe view and then runs that site
 exactly as if the user had clicked it. Starting the camera already parked over a refinery made the
 demo look pre-arranged, which is what the user objected to; a camera-move-only intro was tried
-first and rejected too ("it should be triggered as we clicked on the first site"). `durationMs`
-keeps the intro flight (4 s) distinguishable from a site landing (1.6 s).
+first and rejected too ("it should be triggered as we clicked on the first site"). Every flight is
+`FLIGHT_MS` (7 s), the intro and each site picked from the list alike; `durationMs` on the action
+stays so a caller can override it. Site landings used to be 1.6 s, which made jumping between
+sites feel like a cut rather than a flight.
 
 `landing` becomes `processing` on the flight's own `moveend` (the flyTo effect registers
 `map.once('moveend')` and records `flyTo.generation` in `arrivedGeneration`), not on the next
@@ -125,9 +127,11 @@ before; per-class colours make it readable which component a box is without read
 
 At the zoom a site lands on (z14-15) a fan is 10-20 m, i.e. 3-6 px, and labels only start at
 zoom 16 -- a look-alike with a dozen detections looked like an empty map, and the detections
-seemed to "appear" only on zooming in. The outline width now interpolates from 4 px at z12 to
-2 px at z16 (`WIDE_WHEN_ZOOMED_OUT`), and a `detection-dot` circle layer (maxzoom 16) puts a
-coloured dot on every detection while zoomed out, faded for the ones that do not qualify.
+seemed to "appear" only on zooming in. The outline width interpolates from 2 px at z12 to
+1.2 px at z16 (`WIDE_WHEN_ZOOMED_OUT`), and a `detection-dot` circle layer (maxzoom 16) puts a
+coloured dot on every detection while zoomed out, faded for the ones that do not qualify. The dot
+is what carries visibility when zoomed out, so the outline can stay thin -- 4 px was tried first
+and the user found it too heavy.
 
 Detections come with a `qualifies` property. Two line layers read it: `detection-outline` (solid,
 2 px) filtered to everything not explicitly false, and `detection-outline-weak` (dashed 2/2,
