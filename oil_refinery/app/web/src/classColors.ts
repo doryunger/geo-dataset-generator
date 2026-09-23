@@ -1,6 +1,6 @@
 const COLORS: Record<string, string> = {
   storagetank: '#00c8ff',
-  fanunit: '#ffb000',
+  fanunit: '#a64dff',
   distillationcolumn: '#ff2bd1',
 }
 

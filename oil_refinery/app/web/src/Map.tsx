@@ -8,7 +8,7 @@ import { classColorExpression } from './classColors'
 import { extentSocket } from './socket'
 import {
   gestureStarted, layersPainted,
-  mapLoaded as mapLoadedAction, reset, type RootState, siteCleared, siteProcessingStarted,
+  mapLoaded as mapLoadedAction, reset, type RootState, siteProcessingStarted,
   useAppDispatch, useAppSelector, type Viewport, viewportSettled, zoomChanged,
 } from './store'
 
@@ -31,21 +31,6 @@ function lonLatToTile(lon: number, lat: number, z: number): [number, number] {
   const latRad = (lat * Math.PI) / 180
   const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n)
   return [x, y]
-}
-
-function intersects(v: Viewport, bbox: [number, number, number, number]): boolean {
-  const [west, south, east, north] = bbox
-  return v.west < east && v.east > west && v.south < north && v.north > south
-}
-
-function remainingSeconds(
-  progress: { done: number; total: number; startedAt: number; updatedAt: number }, now: number,
-): number | null {
-  if (progress.done < 1 || progress.startedAt === 0) return null
-  const perTileMs = (progress.updatedAt - progress.startedAt) / progress.done
-  const remainingAtUpdate = perTileMs * (progress.total - progress.done)
-  const elapsedSinceUpdate = now - progress.updatedAt
-  return (remainingAtUpdate - elapsedSinceUpdate) / 1000
 }
 
 function currentViewport(map: maplibregl.Map): Viewport {
@@ -109,19 +94,11 @@ export default function Map() {
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
+  const mode = useAppSelector((s: RootState) => s.map.mode)
   const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
-  const [now, setNow] = useState(() => Date.now())
-  const siteSeenInViewRef = useRef<string | null>(null)
-  const [hasRoamed, setHasRoamed] = useState(false)
   const [arrivedGeneration, setArrivedGeneration] = useState(0)
   const lastPaintAtRef = useRef(0)
-
-  useEffect(() => {
-    if (sitePhase !== 'processing') return
-    const id = setInterval(() => setNow(Date.now()), 250)
-    return () => clearInterval(id)
-  }, [sitePhase])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -198,9 +175,8 @@ export default function Map() {
       moveEndDebounceTimer = setTimeout(() => dispatch(viewportSettled(currentViewport(map))), 300)
     })
 
-    map.on('movestart', (e) => {
+    map.on('movestart', () => {
       clearTimeout(moveEndDebounceTimer)
-      if ((e as { originalEvent?: unknown }).originalEvent) setHasRoamed(true)
       dispatch(gestureStarted())
     })
 
@@ -213,9 +189,9 @@ export default function Map() {
   }, [dispatch])
 
   useEffect(() => {
-    if (!gestureActive || siteBusy) return
+    if (mode !== 'free' || !gestureActive || siteBusy) return
     extentSocket.send(DETECT_ZOOM, [])
-  }, [gestureActive, siteBusy])
+  }, [mode, gestureActive, siteBusy])
 
   useEffect(() => {
     const map = mapRef.current
@@ -233,27 +209,18 @@ export default function Map() {
   }, [isMapLoaded, flyTo])
 
   useEffect(() => {
-    if (!selectedSite) return
-    if (sitePhase === 'landing') {
-      if (flyTo && arrivedGeneration === flyTo.generation) {
-        extentSocket.sendSite(selectedSite.id)
-        dispatch(siteProcessingStarted())
-      }
-      return
+    if (!selectedSite || sitePhase !== 'landing') return
+    if (flyTo && arrivedGeneration === flyTo.generation) {
+      extentSocket.sendSite(selectedSite.id)
+      dispatch(siteProcessingStarted())
     }
-    if (sitePhase !== 'done' || !viewport) return
-    if (intersects(viewport, selectedSite.bbox)) {
-      siteSeenInViewRef.current = selectedSite.id
-    } else if (siteSeenInViewRef.current === selectedSite.id) {
-      dispatch(siteCleared())
-    }
-  }, [dispatch, viewport, selectedSite, sitePhase, flyTo, arrivedGeneration])
+  }, [dispatch, selectedSite, sitePhase, flyTo, arrivedGeneration])
 
   useEffect(() => {
-    if (siteBusy || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
+    if (mode !== 'free' || siteBusy || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
     const tiles = tilesForViewport(viewport)
     if (tiles.length > 0) extentSocket.send(DETECT_ZOOM, tiles)
-  }, [viewport, siteBusy])
+  }, [mode, viewport, siteBusy])
 
   useEffect(() => {
     const map = mapRef.current
@@ -365,20 +332,33 @@ export default function Map() {
             }}
           />
           <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
-            {backendWarm ? 'processing' : 'making things ready…'}
+            {backendWarm ? 'processing' : 'Warming up…'}
           </div>
-          {backendWarm && (
-            <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
-              {(() => {
-                const left = remainingSeconds(siteProgress, now)
-                if (left === null) return 'estimating…'
-                return left < 1.5 ? 'almost done…' : `about ${Math.ceil(left)} s left`
-              })()}
-            </div>
+          {backendWarm && siteProgress.total > 0 && (
+            <>
+              <div
+                style={{
+                  width: 240, height: 6, borderRadius: 3,
+                  background: 'rgba(255,255,255,0.22)', overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${(siteProgress.done / siteProgress.total) * 100}%`, height: '100%',
+                    background: '#ff00aa', transition: 'width 250ms linear',
+                  }}
+                />
+              </div>
+              {siteProgress.prefetching && (
+                <div style={{ fontSize: 14, opacity: 0.75, textShadow: '0 1px 4px #000' }}>
+                  calculating…
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
-      {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && hasRoamed && (
+      {mode === 'free' && zoom < MIN_DETECT_ZOOM && !siteBusy && (
         <div
           style={{
             position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
@@ -389,7 +369,7 @@ export default function Map() {
           Zoom in to zoom {MIN_DETECT_ZOOM}+ to run detection
         </div>
       )}
-      {sites.features.length > 0 && (
+      {mode === 'guided' && sites.features.length > 0 && (
         <div
           style={{
             position: 'absolute', top: 12, right: 56, zIndex: 1,

@@ -26,7 +26,7 @@ export default function App() {
             fontFamily: 'ui-monospace, monospace', fontSize: 14,
           }}
         >
-          Waiting for backend to start…
+          Warming up…
         </div>
       )}
     </div>

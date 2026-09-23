@@ -248,7 +248,9 @@ are systematically missed (6% of training data is that size); everything under 1
 Same two edits as fan-unit (`models/distillation-column_obb_v46.pt`, GSD 0.125, gated; node +
 `requires` edge). The graph itself changed around it, each on a measurement from
 `oil_refinery/eval_sites.py` (offline: the server's own `_run_detection_batch` + `classifier`
-over whole sites, per-tile detection cache): `min_types_present` 2 -> **4** (2-of-5 called
+over whole sites, per-tile detection cache; `--site NAME` evaluates any site from the loop's
+`sites.json` rather than the benchmark list, which is how candidates for the demo panel get
+checked before being added): `min_types_present` 2 -> **4** (2-of-5 called
 nearly every factory, port and power station a refinery -- chimney at 0.3 and fan-unit at 0.5
 are everywhere); `harbor` edge removed (inland refineries); 600 m -> **300 m**; `requires`
 edges take an optional **`min_count`** (`classifier.score` counts qualifying detections per
@@ -628,11 +630,38 @@ only grow" rule this module exists to implement.
 
 ## sites.py
 
-Helpers for the site panel plus `GET /api/sites`: the ten hand-picked demo sites from `sites.json`
-(five refineries where all four components fire on sharp imagery, and one look-alike per confuser
-type: lignite power station, tyre plant, container port, tank farm, steelworks; polygons come from
-the loop's `sites.json`), each with its z17 tile count. `site_tiles` takes **every** tile in the site's
-bounding box, not only the ones the OSM polygon touches (changed 2026-09-23): a storage tank a few
+Helpers for the site panel plus `GET /api/sites`: the fourteen hand-picked demo sites from
+`sites.json` (seven refineries and seven look-alikes: two chemical plants, crude oil tank farm,
+paper mill, lignite power station, steelworks, tyre plant; polygons come from the loop's
+`sites.json`), each with its z17 tile count. Seven a side, deliberately even. The look-alikes are
+ordered most-refinery-like first, in that order, so going down the column is a walk from "shares
+the actual hardware" to "shares nothing but being big and industrial". The order in the file is
+the order in the panel, so it is maintained by hand rather than sorted.
+
+It went 5+5 -> 7+7 on 2026-09-23: Raffinerie Heide (56 tiles), Zeeland Refinery (63), Smurfit Kappa
+Parenco (35), Dow Portugal (16) and Exxonmobil Chemical Holland (15) in; Mogden Sewage Works and
+INEOS Nitriles each added and swapped straight back out, and Container Terminal Tollerort dropped.
+The rule the user set for the removals: spend the confuser budget on sites that share refinery
+hardware, since a rejected container port proves nothing a rejected chemical plant does not prove
+better. INEOS Nitriles passed the verdict check but failed on sight -- its imagery is a mostly
+cleared site of empty concrete slabs, so there is nothing on screen to reject. **Look at a
+candidate's imagery before adding it, not just its verdict**; the mosaic trick is to fetch its z17
+tiles with `common.fetch_tile` and paste them into one image.
+
+The two chemical plants are there on purpose as the look-alikes that own real refinery hardware.
+All four candidates were checked with `eval_sites.py --site` before picking (2026-09-23): INEOS
+Nitriles and Exxonmobil Chemical Holland came back rejected with storage tanks only and no column
+or fan above its floor, Dow Portugal came back rejected for a more interesting reason, and Evonik
+Degussa Antwerpen -- a large petrochemical complex -- came back REFINERY, which is arguably
+correct and is why it was left out. Exxonmobil is the one that looks the part: 60 storage tanks
+across several tank farms plus process units and pipework, and still no refinery verdict. Dow Portugal is the instructive case: its detections include
+storage tanks and seven fan-units, and its best column scores 0.76, but only **one** column clears
+the 0.65 floor against `min_count` 3, so it stays red. It is the demo's evidence that the graph's
+thresholds, not the detectors alone, are what separate a refinery from a chemical works. Checked
+under both tile rules (polygon-touching 12, whole bbox 16) and the verdict and the detections are
+identical, so the app agrees with the offline number here.
+
+`site_tiles` takes **every** tile in the site's bounding box, not only the ones the OSM polygon touches (changed 2026-09-23): a storage tank a few
 metres outside the boundary was otherwise never looked at and turned up only when free roaming
 happened to cover its tile, which reads as the detector missing obvious objects. It costs 1.44x
 the tiles across the ten demo sites (592 -> 853) and Esso's tank count went 259 -> 307. Note this
@@ -757,6 +786,26 @@ after a restart instead of 25-30 s. A site picked before warming finishes pays t
 compilation inside its own run: measured cold, the page was usable at t+2 s, processing began at
 t+11 s and the first site (Esso, 54 tiles) finished at t+22 s, against ~14 s once warm.
 `/api/stats` exposes `warm` so it is visible which state a measurement came from.
+
+## Component radius 200 -> 300 m (2026-09-23)
+
+`default_max_distance_m` went to 300. At Gdańsk, three distillation-columns (0.71-0.79) and five
+storage tanks sat outside the identified cluster at 200 m and so outside the drawn polygon, which
+reads as the site boundary arbitrarily excluding real components. Measured by single-linkage over
+that site's 193 detections: 200 m gives 4 clusters (185/3/3/2), 300 m gives 2 (188/5) and pulls the
+three columns in, 360 m gives 1. Below 120 m the plant stops being one cluster at all, and below
+60 m it is not identified.
+
+Note the knob: `merge_distance_m` was raised first and changed nothing, because it merges two
+*already-identified site polygons* in `site_tracker`, while what decides whether a detection joins
+the cluster is `default_max_distance_m` in `classifier._component_clusters_for_site`. Easy to
+confuse; they are set to the same value now but they are not the same mechanism.
+
+Widening the radius can only ever merge clusters, so it cannot rescue a look-alike that fails on
+missing component *types* -- only one that has all three scattered. The demo's candidates for that
+were re-classified from cached detections at 200/300/360 m and all stay rejected at every
+radius: Dow Portugal, Exxonmobil Chemical Holland, Smurfit Kappa Parenco, Nord-West Oelleitung.
+The full 57-site benchmark was not re-run for this (no cached detections on disk for it).
 
 ## Two kinds of proximity (2026-09-23)
 
@@ -899,7 +948,10 @@ runs at zoom >= `MIN_DETECT_ZOOM` (16), which `Map.tsx` gates.
 
 A client message `{"site": id}` on the same `/ws/extent` socket (instead of an extent request)
 starts `process_site`: the site's tiles plus a one-tile halo ring are prefetched from Mapbox on a
-16-thread pool (edge tiles used to end the run with a burst of sequential downloads), then every
+16-thread pool (edge tiles used to end the run with a burst of sequential downloads), then a
+`site_start` message with the final `total` goes out -- it marks the end of the prefetch, which is
+what the frontend's progress bar needs to tell "still downloading imagery" apart from "no tiles
+done yet" (see the frontend doc) -- then every
 z17 tile of the polygon, centre-out, is handed to `get_or_process_detections`; as each future
 completes a `site_tile` message goes out with **that tile's** detections as GeoJSON, the cumulative
 component summary and `done/total`; the classifier + tracker (`sites`) are included at most once

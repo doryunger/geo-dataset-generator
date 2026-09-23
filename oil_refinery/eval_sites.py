@@ -101,6 +101,7 @@ def main():
     parser.add_argument("--without", default=None, help="component to remove for the comparison column")
     parser.add_argument("--batch", type=int, default=6)
     parser.add_argument("--only", default=None, help="substring filter on site names")
+    parser.add_argument("--site", action="append", default=[], metavar="NAME", help="evaluate this site from the loop's sites.json instead of the benchmark list (repeatable); reported as kind 'probe'")
     parser.add_argument("--cache", type=Path, default=None, help="JSON file of per-tile detections; reused when present so graph changes re-classify without re-detecting")
     parser.add_argument("--max-distance-m", type=float, default=None, help="override every site's default_max_distance_m and merge_distance_m")
     parser.add_argument("--floor", action="append", default=[], metavar="COMPONENT=CONF", help="override a required component's min_confidence (repeatable); the cache must have been built with a floor at or below it")
@@ -131,6 +132,8 @@ def main():
     cache = json.loads(args.cache.read_text()) if args.cache and args.cache.exists() else {}
     cfg = json.loads((L.loop_dir(args.class_name) / "benchmark.json").read_text(encoding="utf-8"))
     names = [("refinery", p["site"]) for p in cfg["positives"]] + [("look-alike", n) for n in cfg["negatives"]]
+    if args.site:
+        names = [("probe", n) for n in args.site]
     if args.only:
         names = [(k, n) for k, n in names if args.only.lower() in n.lower()]
 

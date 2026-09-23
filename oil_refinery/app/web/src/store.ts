@@ -20,9 +20,18 @@ export interface Graph {
 
 export type SitePhase = 'landing' | 'processing' | 'done'
 
+export type BrowseMode = 'guided' | 'free'
+
 export const FLIGHT_MS = 7000
 
+export interface SiteProgress {
+  done: number
+  total: number
+  prefetching: boolean
+}
+
 interface MapState {
+  mode: BrowseMode
   zoom: number
   mapLoaded: boolean
   sites: SiteFeatureCollection
@@ -35,11 +44,12 @@ interface MapState {
   flyTo: { bbox: [number, number, number, number]; durationMs: number; generation: number } | null
   selectedSite: Site | null
   sitePhase: SitePhase | null
-  siteProgress: { done: number; total: number; startedAt: number; updatedAt: number }
+  siteProgress: SiteProgress
   siteVerdicts: Record<string, boolean>
 }
 
 const initialState: MapState = {
+  mode: 'guided',
   zoom: INITIAL_ZOOM,
   mapLoaded: false,
   sites: EMPTY_FEATURE_COLLECTION,
@@ -52,7 +62,7 @@ const initialState: MapState = {
   flyTo: null,
   selectedSite: null,
   sitePhase: null,
-  siteProgress: { done: 0, total: 0, startedAt: 0, updatedAt: 0 },
+  siteProgress: { done: 0, total: 0, prefetching: false },
   siteVerdicts: {},
 }
 
@@ -85,10 +95,16 @@ const mapSlice = createSlice({
       }
       if (result.type === 'extent' && state.selectedSite) return
       if (result.type !== 'extent' && result.site !== state.selectedSite?.id) return
+      if (result.type === 'site_start') {
+        state.siteProgress = {
+          done: 0, total: result.total ?? state.siteProgress.total, prefetching: false,
+        }
+        return
+      }
       if (result.type === 'site_tile') {
         if (result.detections) state.detections.features.push(...result.detections.features)
         state.siteProgress = {
-          ...state.siteProgress, done: result.done ?? 0, total: result.total ?? 0, updatedAt: Date.now(),
+          ...state.siteProgress, done: result.done ?? 0, total: result.total ?? 0,
         }
       } else if (result.detections) {
         state.detections = result.detections
@@ -111,7 +127,7 @@ const mapSlice = createSlice({
       const { site, durationMs = FLIGHT_MS } = action.payload
       state.selectedSite = site
       state.sitePhase = 'landing'
-      state.siteProgress = { done: 0, total: site.tiles, startedAt: 0, updatedAt: 0 }
+      state.siteProgress = { done: 0, total: site.tiles, prefetching: false }
       state.graph = null
       state.sites = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
@@ -120,12 +136,17 @@ const mapSlice = createSlice({
     },
     siteProcessingStarted(state) {
       state.sitePhase = 'processing'
-      state.siteProgress = { ...state.siteProgress, startedAt: Date.now(), updatedAt: Date.now() }
+      state.siteProgress = { ...state.siteProgress, done: 0, prefetching: true }
     },
-    siteCleared(state) {
+    modeChanged(state, action: PayloadAction<BrowseMode>) {
+      state.mode = action.payload
       state.selectedSite = null
       state.sitePhase = null
       state.graph = null
+      state.sites = EMPTY_FEATURE_COLLECTION
+      state.detections = EMPTY_DETECTIONS
+      state.siteProgress = { done: 0, total: 0, prefetching: false }
+      state.readyGeneration += 1
     },
     reset() {
       return initialState
@@ -135,7 +156,7 @@ const mapSlice = createSlice({
 
 export const {
   zoomChanged, mapLoaded, gestureStarted, viewportSettled,
-  resultReceived, layersPainted, siteSelected, siteProcessingStarted, siteCleared, reset,
+  resultReceived, layersPainted, siteSelected, siteProcessingStarted, modeChanged, reset,
 } = mapSlice.actions
 
 interface ConnectionState {

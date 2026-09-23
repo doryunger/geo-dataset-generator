@@ -24,8 +24,9 @@ taking a fifth of the window.
 The backend answers a couple of seconds after a restart but warms its models for another ~10 s in
 the background (see the server doc). `SitesPanel` polls `/api/stats` every second until `warm` and
 dispatches `backendWarmed`; until then the site list is disabled, `Map.tsx` keeps every interaction
-handler off, and the spinner overlay reads "making things ready...". The intro flight waits for
-that flag too, so the app never lands on a site it cannot process yet.
+handler off, and the spinner overlay reads "Warming up...", the same words `App.tsx` shows before
+the backend answers at all, so the wait looks like one state rather than two. The intro flight
+waits for that flag too, so the app never lands on a site it cannot process yet.
 
 The map itself is up from the first second, showing the world view and the list -- deliberately,
 so the wait looks like a map loading rather than a blank "waiting for backend" screen. Measured
@@ -33,10 +34,27 @@ cold: map at t+2 s, warm at t+8 s, flight, processing at t+17 s, first verdict a
 
 ## SitesPanel.tsx
 
-Two columns, "Oil refineries" and "Others", of short `label`s from `GET /api/sites` (the full OSM
-`name` is long enough to wrap; `label` is a hand-written short form in `sites.json`). No body text,
-no tile counts. Clicking dispatches `siteSelected`, nothing else; the whole flow after that is
-driven from `Map.tsx` off store state. Buttons are disabled while a site is landing or processing.
+Two columns, "Oil refineries" and "Other sites", seven sites each, of short `label`s from
+`GET /api/sites` (the full OSM `name` is long enough to wrap; `label` is a hand-written short form
+in `sites.json`). The "Other sites" column adds each site's `type` under the label in small
+italics -- "chemical plant", "paper mill" and so on -- because a look-alike's name says nothing
+about why it is in the list; refineries are all the same type so theirs is left off. No tile
+counts. Clicking dispatches `siteSelected`, nothing else; the whole flow after that is driven from
+`Map.tsx` off store state. Buttons are disabled while a site is landing or processing, and while
+free browsing is on.
+
+The two columns are one CSS grid (`gridTemplateColumns: '1fr 1fr'`), not two stacked lists, so
+row *n* of one column lines up with row *n* of the other. They did not before: only the
+look-alikes carry a type line, so their rows are taller and the two lists drifted further apart
+the further down you read. Each cell stretches to its grid row's height (`height: '100%'` with the
+label centred in a flex column), which is also why the type line can stay small without leaving a
+ragged edge. `SiteCell` renders an empty `<div />` when a column runs out, so unequal column
+lengths would still align rather than shift.
+
+Under both columns is the mode button: "Free browsing" / "Back to guided tour", dispatching
+`modeChanged`. While free browsing is on it is filled bright yellow (`HIGHLIGHT_YELLOW`) rather
+than outlined -- the mode changes what every click and pan does, so it needs to be obvious at a
+glance which one is active. See the site flow section for what the two modes do.
 
 Once a site has a verdict (`store.siteVerdicts`, written on `site_done`) its entry is tinted and
 outlined bright green for identified / bright red for not. Colours are by *verdict*, not by
@@ -84,44 +102,80 @@ only in `processing`, so the flight itself is unobstructed.
 
 ## Site flow (store + Map.tsx)
 
+`store.mode` is `guided` (the default) or `free`, and it decides whether the map ever asks for
+anything on its own. **Guided tour**: the site list drives everything and *no* extent request is
+ever sent -- the extent-request effect and the gesture-cancel effect both return early. What the
+landing run produced stays on screen, untouched, until the next site is picked. **Free browsing**:
+there is no selected site, the list is disabled, and panning/zooming at zoom >= 16 requests tiles
+for the viewport as before. `modeChanged` clears selection, phase, graph, sites and detections on
+either transition, and because `mode` is in the extent effect's deps, switching to free browsing
+immediately requests the current view rather than waiting for a pan.
+
+Guided tour deliberately freezes after landing (2026-09-23, at the user's request). Before that,
+roaming inside a finished site kept firing extent requests and a `viewportSettled` that no longer
+intersected the site's bbox dispatched `siteCleared` -- so zooming in to look at a site made its
+polygon vanish and its graph re-derive from whatever happened to be in view, which reads as the
+verdict changing under you. Exploring a site is now free: move anywhere, nothing is requested,
+nothing is added, the graph does not move. The `siteSeenInViewRef` guard that used to protect that
+clearing (a stale debounced `moveend` from the previous camera move could otherwise clear a site
+the instant it finished, seen when clicking through sites quickly) went away with the clearing
+itself.
+
 `siteSelected` clears graph/sites/detections, sets `sitePhase: 'landing'` and a `flyTo` bbox.
 `Map.tsx` fits the bounds (padding 40, maxZoom 17 -- whole site in view, whatever zoom that is).
-On the next `viewportSettled` while `landing`, it sends `{site}` over the socket and moves to
-`processing`; every `site_tile` message updates progress, detections and graph; `site_done` moves
-to `done`. While landing or processing (`siteBusy`) all map interaction handlers are disabled, a
-full-map overlay with a large spinner, the word "processing" and a live countdown sits on top, and
-both the extent-request effect and the gesture-cancel effect are gated off -- an extent message during
-processing would prune the site's queued jobs server-side (see the server doc). Once `done`, a
-`viewportSettled` whose bounds no longer intersect the site's bbox dispatches `siteCleared`, but
-only once that site has actually been seen in view (`siteSeenInViewRef` holds the id) -- a stale
-debounced `moveend` from the previous site's camera move otherwise arrived after the new site
-finished and cleared it immediately, which showed up when clicking through sites quickly
-(selection and graph go; the next extent result repopulates the graph from the live view).
+On arrival it sends `{site}` over the socket and moves to `processing`; every `site_tile` message
+updates progress, detections and graph; `site_done` moves to `done`. While landing or processing
+(`siteBusy`) all map interaction handlers are disabled and a full-map overlay with a large spinner,
+the word "processing" and a progress bar sits on top. The extent effect is gated off during
+processing in free browsing too, not only by mode -- an extent message mid-run would prune the
+site's queued jobs server-side (see the server doc).
+The site read-out in the top right (name, coverage, component count, matched types) renders from
+`store.sites`, and it is gated on guided tour: free browsing hides it even though roaming still
+produces `sites` from extent results, because a verdict box that re-derives itself as you pan was
+what made roaming feel like the site's answer was changing under you. It also clears the moment a
+new site is clicked, since `siteSelected` empties `sites` before the flight starts rather than
+after the new results arrive.
+
 `resultReceived` ignores `site_*` messages whose `site` isn't the currently selected one, so a
 late message from a cancelled run can't paint over a new selection. It also ignores `extent`
-messages entirely while a site is selected: panning inside a finished site used to replace the
-graph's counts with whatever was in the viewport while the header still named the site, which read
-as the site's verdict changing under the user. The site's own result stands until `siteCleared`. `site_tile` messages are
+messages entirely while a site is selected -- now belt-and-braces, since guided tour no longer
+sends any, but it still catches an extent result already in flight when a site is picked.
+`site_tile` messages are
 deltas: their `detections` are appended to the store's collection, `sites` is only present when
 the server ran the classifier this second (else the previous polygons and `identified` stand), and
 `extent` messages replace everything as before. `extent_tile` messages (free roam) replace just
 that tile's features by the `tile` property, so roaming paints detections as each tile finishes
 instead of in one jump at the end.
 
-The countdown (`remainingSeconds` in `Map.tsx`) is measured, not estimated up front: observed
-ms/tile since `siteProcessingStarted` times the tiles left, counting down between messages off a
-250 ms ticker. It reads "estimating..." until the first tile lands. Deliberately no "tile n / N" --
-the user asked for the time only (2026-09-22). A cached site finishes before the first tick, which
-is fine.
+Progress during a site run is a determinate bar (`siteProgress.done / total`) and nothing else.
+There is no time estimate: the earlier version showed a measured countdown and no "tile n / N"
+because the user asked for time only (2026-09-22), and that was reversed on 2026-09-23 -- with a
+bar there is no need for seconds. Worth knowing before anyone reintroduces one, because the
+countdown that was there did not work and the reasons are structural: it timed ms/tile from
+`siteProcessingStarted`, which is when the request is sent, so the server's prefetch of the site's
+tiles plus halo ring landed inside the average. At the k-th update the estimate was off by exactly
+`prefetch_ms * (total - done) / done` -- an error that halves every update, so the number fell in
+big steps instead of counting down, and it varied by site because a site whose tiles are already
+in `tiles/images` prefetches almost instantly while a fresh one does not. On top of that, tiles
+complete in bursts of up to `TILE_BATCH_SIZE` (16), so `done` steps 0 -> 16 -> 32 and a site under
+16 tiles is a single batch that never yields a second data point at all.
+
+The server's `site_start` message (sent when the prefetch finishes) is what the bar uses to know
+detection has actually begun: until it arrives `siteProgress.prefetching` is true, and the overlay
+adds a "calculating..." line under the bar to explain why it is sitting at zero. A cached site can
+finish before any of this is visible, which is fine.
 
 ## classColors.ts
 
-One colour per component class -- storage tank cyan, fan-unit amber, distillation-column magenta --
+One colour per component class -- storage tank cyan, fan-unit purple, distillation-column magenta --
 used in two places that must agree: `classColorExpression()` is the MapLibre `match` expression for
 the detection outline and label halo, and `classColor()` gives the same colour to each child node's
 border in `GraphPanel`. Both spellings a model can emit are listed in the match (`fan-unit` and
 `fanunit`, etc.), because `fuser` keeps whichever label won the merge. Everything was one pink
 before; per-class colours make it readable which component a box is without reading its label.
+Fan-unit was amber (#ffb000) until 2026-09-23 and moved to purple (#a64dff): amber sat too close to
+the graph widget's "partially satisfied" yellow (#d9a400), so a fan-unit outline on the map and a
+half-met requirement in the graph read as the same signal.
 
 ## Painting
 
