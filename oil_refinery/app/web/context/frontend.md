@@ -123,6 +123,12 @@ before; per-class colours make it readable which component a box is without read
 
 ## Painting
 
+At the zoom a site lands on (z14-15) a fan is 10-20 m, i.e. 3-6 px, and labels only start at
+zoom 16 -- a look-alike with a dozen detections looked like an empty map, and the detections
+seemed to "appear" only on zooming in. The outline width now interpolates from 4 px at z12 to
+2 px at z16 (`WIDE_WHEN_ZOOMED_OUT`), and a `detection-dot` circle layer (maxzoom 16) puts a
+coloured dot on every detection while zoomed out, faded for the ones that do not qualify.
+
 Detections come with a `qualifies` property. Two line layers read it: `detection-outline` (solid,
 2 px) filtered to everything not explicitly false, and `detection-outline-weak` (dashed 2/2,
 2 px) filtered to `qualifies == false`. Dash pattern only -- an earlier version also dropped the

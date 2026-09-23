@@ -17,6 +17,8 @@ const DETECT_ZOOM = 17
 const MIN_VISIBLE_ZOOM = 12
 const REPAINT_INTERVAL_MS = 350
 
+const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 4, MIN_DETECT_ZOOM, 2]
+
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
 }
@@ -281,13 +283,25 @@ export default function Map() {
       filter: ['==', ['get', 'qualifies'], false],
       paint: {
         'line-color': classColorExpression() as maplibregl.ExpressionSpecification,
-        'line-width': 2, 'line-dasharray': [2, 2],
+        'line-width': WIDE_WHEN_ZOOMED_OUT as maplibregl.ExpressionSpecification,
+        'line-dasharray': [2, 2],
       },
     })
     map.addLayer({
       id: 'detection-outline', type: 'line', source: 'detections',
       filter: ['!=', ['get', 'qualifies'], false],
-      paint: { 'line-color': classColorExpression() as maplibregl.ExpressionSpecification, 'line-width': 2 },
+      paint: {
+        'line-color': classColorExpression() as maplibregl.ExpressionSpecification,
+        'line-width': WIDE_WHEN_ZOOMED_OUT as maplibregl.ExpressionSpecification,
+      },
+    })
+    map.addLayer({
+      id: 'detection-dot', type: 'circle', source: 'detections', maxzoom: MIN_DETECT_ZOOM,
+      paint: {
+        'circle-color': classColorExpression() as maplibregl.ExpressionSpecification,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 2, MIN_DETECT_ZOOM, 5],
+        'circle-opacity': ['case', ['==', ['get', 'qualifies'], false], 0.35, 0.9],
+      },
     })
     map.addLayer({
       id: 'detection-label', type: 'symbol', source: 'detections', minzoom: MIN_DETECT_ZOOM,

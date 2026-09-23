@@ -3,6 +3,7 @@ import { fetchSites, fetchStats, type Site } from './api'
 import { backendWarmed, type RootState, siteSelected, useAppDispatch, useAppSelector } from './store'
 
 const WARM_POLL_INTERVAL_MS = 1000
+const INTRO_FLIGHT_MS = 15000
 
 const VERDICT_GREEN = '#16c60c'
 const VERDICT_RED = '#ff2d2d'
@@ -86,7 +87,7 @@ export default function SitesPanel() {
   useEffect(() => {
     if (introDone || !backendWarm || sites.length === 0) return
     setIntroDone(true)
-    dispatch(siteSelected({ site: sites[0], durationMs: 9000 }))
+    dispatch(siteSelected({ site: sites[0], durationMs: INTRO_FLIGHT_MS }))
   }, [dispatch, introDone, backendWarm, sites])
 
   const busy = !backendWarm || sitePhase === 'landing' || sitePhase === 'processing'
