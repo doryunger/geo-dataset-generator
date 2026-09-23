@@ -80,7 +80,10 @@ debounced `moveend` from the previous site's camera move otherwise arrived after
 finished and cleared it immediately, which showed up when clicking through sites quickly
 (selection and graph go; the next extent result repopulates the graph from the live view).
 `resultReceived` ignores `site_*` messages whose `site` isn't the currently selected one, so a
-late message from a cancelled run can't paint over a new selection. `site_tile` messages are
+late message from a cancelled run can't paint over a new selection. It also ignores `extent`
+messages entirely while a site is selected: panning inside a finished site used to replace the
+graph's counts with whatever was in the viewport while the header still named the site, which read
+as the site's verdict changing under the user. The site's own result stands until `siteCleared`. `site_tile` messages are
 deltas: their `detections` are appended to the store's collection, `sites` is only present when
 the server ran the classifier this second (else the previous polygons and `identified` stand), and
 `extent` messages replace everything as before. `extent_tile` messages (free roam) replace just
@@ -106,8 +109,8 @@ before; per-class colours make it readable which component a box is without read
 
 Detections come with a `qualifies` property. Two line layers read it: `detection-outline` (solid,
 2 px) filtered to everything not explicitly false, and `detection-outline-weak` (dashed 2/2,
-1.5 px, 45% opacity) filtered to `qualifies == false`; labels drop to 50% opacity for the same
-features. So a fan with no neighbouring fan within 20 m is visible but visibly not counted. The
+2 px) filtered to `qualifies == false`. Dash pattern only -- an earlier version also dropped the
+opacity of the line and the label, and the user asked for the dashes alone. So a fan with no neighbouring fan within 20 m is visible but visibly not counted. The
 property arrives only on whole collections (`extent`, `site_done`); per-tile deltas leave it
 undefined, which the `!=` filter treats as qualifying, so boxes look normal while a site streams
 and settle when it finishes.

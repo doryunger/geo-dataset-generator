@@ -44,11 +44,34 @@ for _edge in _GRAPH["edges"]:
         )
 
 
-def _is_graph_relevant(det: dict) -> bool:
-    return any(
-        fuser.same_concept(det["class_name"], component) and det["confidence"] >= floor
+DISPLAY_FLOOR_MARGIN = 0.25
+MIN_DISPLAY_CONFIDENCE = 0.3
+
+
+def _floor_for(det: dict, margin: float) -> "float | None":
+    """The confidence a detection of this class must clear, or None if the graph ignores the class."""
+    floors = [
+        max(MIN_DISPLAY_CONFIDENCE, floor - margin) if margin else floor
         for component, floor in _COMPONENT_MIN_CONFIDENCE.items()
-    )
+        if fuser.same_concept(det["class_name"], component)
+    ]
+    return min(floors) if floors else None
+
+
+def _is_graph_relevant(det: dict) -> bool:
+    """Counts toward the semantic graph: gates the expensive models and feeds the classifier."""
+    floor = _floor_for(det, margin=0.0)
+    return floor is not None and det["confidence"] >= floor
+
+
+def _is_worth_drawing(det: dict) -> bool:
+    """Shown on the map, dashed if it does not also clear its counting floor.
+
+    Drawing only what counts made the model look blind: at a 0.70 fan floor, half of a real fan
+    bank went undrawn. What is drawn and what is counted are separate decisions.
+    """
+    floor = _floor_for(det, margin=DISPLAY_FLOOR_MARGIN)
+    return floor is not None and det["confidence"] >= floor
 
 
 CONF_THRESHOLD = 0.15
@@ -506,12 +529,12 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes | None, list[di
         )
 
         fused = fuser.fuse(raw_detections, model_router.CANONICAL_MODEL)
-        detections = [d for d in fused if _is_graph_relevant(d)]
+        detections = [d for d in fused if _is_worth_drawing(d)]
         if len(detections) != len(fused):
-            dropped = [d for d in fused if not _is_graph_relevant(d)]
+            dropped = [d for d in fused if not _is_worth_drawing(d)]
             logger.info(
                 "Tile %s dropped %d fused detection(s) as graph-irrelevant (class not in semantic "
-                "graph, or below its required-edge confidence floor): %s",
+                "graph, or too far below its required-edge confidence floor to draw): %s",
                 tile_id, len(dropped),
                 [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
             )

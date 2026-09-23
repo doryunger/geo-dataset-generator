@@ -696,6 +696,20 @@ those before touching any of this again. A faster GPU lowers the model stages ro
 proportion; the ~20 ms/tile of prep + fuse + message building and the ~2 s fixed cost per site
 (fit animation, prefetch, first partial batch) do not move with it.
 
+## Drawn is not the same as counted (2026-09-23)
+
+`_is_graph_relevant` (unchanged) is the counting rule: it gates the expensive models and is what
+the classifier sees. `_is_worth_drawing` is new and keeps anything within `DISPLAY_FLOOR_MARGIN`
+(0.25) below a class's counting floor, never below `MIN_DISPLAY_CONFIDENCE` (0.3) -- so fans are
+drawn from 0.45, tanks from 0.50, columns from 0.40. Whatever is drawn but does not count comes
+back with `qualifies: false` and is drawn dashed.
+
+Why: with drawing tied to the counting floor, raising the fan floor to 0.70 left half of a real
+fan bank undrawn and the demo looked like the model was blind to obvious objects. The user's point
+was explicitly about appearance, not verdicts -- and the benchmark says the fan floor does not
+move verdicts at all (16/18 refineries and 0/39 look-alikes at every floor from 0.50 to 0.70,
+once fans are grouped), so visibility and strictness can be set independently.
+
 ## Where the thresholds landed (2026-09-23)
 
 Tank >= 0.75; fan-unit >= 0.70 with at least 2 within 20 m of each other; distillation-column

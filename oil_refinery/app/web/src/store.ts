@@ -81,6 +81,7 @@ const mapSlice = createSlice({
         state.readyGeneration += 1
         return
       }
+      if (result.type === 'extent' && state.selectedSite) return
       if (result.type !== 'extent' && result.site !== state.selectedSite?.id) return
       if (result.type === 'site_tile') {
         if (result.detections) state.detections.features.push(...result.detections.features)
