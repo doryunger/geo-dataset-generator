@@ -19,6 +19,18 @@ under the list. A fixed 340 px left sidebar was tried first and rejected by the 
 2026-09-22: they had asked for a list of sites in two columns, not a panel with explanatory prose
 taking a fifth of the window.
 
+## Waiting for the GPU
+
+The backend answers a couple of seconds after a restart but warms its models for another ~10 s in
+the background (see the server doc). `SitesPanel` polls `/api/stats` every second until `warm` and
+dispatches `backendWarmed`; until then the site list is disabled, `Map.tsx` keeps every interaction
+handler off, and the spinner overlay reads "making things ready...". The intro flight waits for
+that flag too, so the app never lands on a site it cannot process yet.
+
+The map itself is up from the first second, showing the world view and the list -- deliberately,
+so the wait looks like a map loading rather than a blank "waiting for backend" screen. Measured
+cold: map at t+2 s, warm at t+8 s, flight, processing at t+17 s, first verdict at t+29 s.
+
 ## SitesPanel.tsx
 
 Two columns, "Oil refineries" and "Others", of short `label`s from `GET /api/sites` (the full OSM

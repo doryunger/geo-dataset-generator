@@ -138,10 +138,12 @@ export const {
 
 interface ConnectionState {
   serverReady: boolean
+  backendWarm: boolean
 }
 
 const connectionInitialState: ConnectionState = {
   serverReady: false,
+  backendWarm: false,
 }
 
 const connectionSlice = createSlice({
@@ -151,10 +153,13 @@ const connectionSlice = createSlice({
     serverReadyReceived(state) {
       state.serverReady = true
     },
+    backendWarmed(state) {
+      state.backendWarm = true
+    },
   },
 })
 
-export const { serverReadyReceived } = connectionSlice.actions
+export const { serverReadyReceived, backendWarmed } = connectionSlice.actions
 
 export const store = configureStore({
   reducer: { map: mapSlice.reducer, connection: connectionSlice.reducer },

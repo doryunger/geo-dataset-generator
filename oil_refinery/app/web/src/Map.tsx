@@ -107,6 +107,7 @@ export default function Map() {
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
+  const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
   const [now, setNow] = useState(() => Date.now())
   const siteSeenInViewRef = useRef<string | null>(null)
@@ -257,10 +258,10 @@ export default function Map() {
     if (!map) return
     const handlers = [map.dragPan, map.scrollZoom, map.keyboard, map.doubleClickZoom, map.touchZoomRotate, map.boxZoom]
     for (const handler of handlers) {
-      if (siteBusy) handler.disable()
+      if (siteBusy || !backendWarm) handler.disable()
       else handler.enable()
     }
-  }, [siteBusy])
+  }, [siteBusy, backendWarm])
 
   useEffect(() => {
     const map = mapRef.current
@@ -335,7 +336,7 @@ export default function Map() {
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
-      {sitePhase === 'processing' && (
+      {(!backendWarm || sitePhase === 'processing') && (
         <div
           style={{
             position: 'absolute', inset: 0, zIndex: 2, display: 'flex', flexDirection: 'column',
@@ -349,14 +350,18 @@ export default function Map() {
               borderTopColor: '#ff00aa', animation: 'spin 1s linear infinite',
             }}
           />
-          <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>processing</div>
-          <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
-            {(() => {
-              const left = remainingSeconds(siteProgress, now)
-              if (left === null) return 'estimating…'
-              return left < 1.5 ? 'almost done…' : `about ${Math.ceil(left)} s left`
-            })()}
+          <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
+            {backendWarm ? 'processing' : 'making things ready…'}
           </div>
+          {backendWarm && (
+            <div style={{ fontSize: 16, opacity: 0.85, textShadow: '0 1px 4px #000' }}>
+              {(() => {
+                const left = remainingSeconds(siteProgress, now)
+                if (left === null) return 'estimating…'
+                return left < 1.5 ? 'almost done…' : `about ${Math.ceil(left)} s left`
+              })()}
+            </div>
+          )}
         </div>
       )}
       {zoom < MIN_DETECT_ZOOM && !siteBusy && !selectedSite && hasRoamed && (

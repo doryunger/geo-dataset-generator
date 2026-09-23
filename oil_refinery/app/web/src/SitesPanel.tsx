@@ -1,6 +1,8 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { fetchSites, type Site } from './api'
-import { type RootState, siteSelected, useAppDispatch, useAppSelector } from './store'
+import { fetchSites, fetchStats, type Site } from './api'
+import { backendWarmed, type RootState, siteSelected, useAppDispatch, useAppSelector } from './store'
+
+const WARM_POLL_INTERVAL_MS = 1000
 
 const VERDICT_GREEN = '#16c60c'
 const VERDICT_RED = '#ff2d2d'
@@ -54,18 +56,40 @@ export default function SitesPanel() {
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const verdicts = useAppSelector((s: RootState) => s.map.siteVerdicts)
+  const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const [sites, setSites] = useState<Site[]>([])
+  const [introDone, setIntroDone] = useState(false)
 
   useEffect(() => {
-    fetchSites()
-      .then((loaded) => {
-        setSites(loaded)
-        if (loaded.length > 0) dispatch(siteSelected({ site: loaded[0], durationMs: 9000 }))
-      })
-      .catch(() => setSites([]))
-  }, [dispatch])
+    fetchSites().then(setSites).catch(() => setSites([]))
+  }, [])
 
-  const busy = sitePhase === 'landing' || sitePhase === 'processing'
+  useEffect(() => {
+    if (backendWarm) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const stats = await fetchStats()
+        if (!cancelled && stats.warm) dispatch(backendWarmed())
+      } catch {
+        // backend still starting; the next tick tries again
+      }
+    }
+    poll()
+    const id = setInterval(poll, WARM_POLL_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [dispatch, backendWarm])
+
+  useEffect(() => {
+    if (introDone || !backendWarm || sites.length === 0) return
+    setIntroDone(true)
+    dispatch(siteSelected({ site: sites[0], durationMs: 9000 }))
+  }, [dispatch, introDone, backendWarm, sites])
+
+  const busy = !backendWarm || sitePhase === 'landing' || sitePhase === 'processing'
   const select = (site: Site) => dispatch(siteSelected({ site }))
 
   if (sites.length === 0) return null
