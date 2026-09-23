@@ -157,7 +157,9 @@ samples, then the model proposes and the person judges, one refinery site per ro
 coverage on unseen sites as the metric. **The runbook, the rules learned from running it, and the
 current state of each class in progress live in `scripts/loop/context/loop.md`, not here** --
 read that file before starting or continuing a round. Everything there runs with
-`WORKSPACE=experiments` so production data, `/manual` on 8000 and S3 `packages/` are untouched.
+`WORKSPACE=experiments` so production data, `/manual` on 8000 and S3 `packages/` are untouched --
+for a *new* class. `fan-unit` and `distillation-column` (promoted 2026-09-23) are production and
+run with `WORKSPACE` unset.
 
 ## S3 backup (`scripts/s3_sync.py`)
 

@@ -17,10 +17,12 @@ is the operator's command-level version.
 
 This is the method for adding a new detection class, settled on 2026-09-14/19 after fan-unit
 and distillation-column. The rationale and measurements behind each rule are in the sections
-below this one; this section is the runbook. Everything below runs with `WORKSPACE=experiments` (see
+below this one; this section is the runbook. A *new* class runs everything below with `WORKSPACE=experiments` (see
 `scripts/common.py`) and with `.env` sourced into the shell (`set -a && source .env && set +a`
 -- `apply.py` fetches crops from Mapbox and dies without the token) so production `classes/`, `/manual` on port 8000 and S3 `packages/` are
 never touched; `run-experiments.ps1` serves `/manual` against the experiment workspace on 8001.
+A promoted class (`fan-unit`; `distillation-column` since 2026-09-23) runs the same commands
+with `WORKSPACE` unset -- its loop state is in `loop/<class>/` at the repo root.
 
 **The idea.** Nobody draws a whole class from scratch. A person seeds a few dozen samples,
 a weak model is trained, and from then on the model proposes and the person judges. Each round
@@ -237,6 +239,10 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Promoted to production (2026-09-23).** `distillation-column` data moved out of `experiments/`
+into `classes/`, `loop/` and the root embedding index; further rounds run without `WORKSPACE`.
+Paths quoted below as `experiments/...` from before this date are now at the repo root.
+
 **Integration and the look-alike round (2026-09-21/22).** v37 was wired into `oil_refinery`
 (`config.json` models + `model_gsd_m` 0.125 + gated; `semantic_graph.json` node + requires
 edge) and `oil_refinery/eval_sites.py` was written to run the server's own detection batch and
@@ -270,7 +276,7 @@ in seconds. Findings, in order:
   table stays as the per-round proxy.
 
 Run the site test: `INFERENCE_DEVICE=cuda python oil_refinery/eval_sites.py --class
-distillation-column --cache experiments/loop/distillation-column/site_detections_v46.json`
+distillation-column --cache loop/distillation-column/site_detections_v46.json`
 (`--floor`, `--count`, `--min-types`, `--max-distance-m` override the graph from the cache in
 seconds; a new column model needs a new cache, ~45 min on the GPU, and OOMs if anything else
 holds the card -- `--batch 4`).
@@ -459,7 +465,7 @@ fine-tune + gate mechanism is the way each further round is tested.
 
 **Look-alike layer (2026-09-20).** Ten sites pulled from Overpass (power=plant coal/gas,
 landuse=harbour, industrial=port/oil/oil_storage within DE/NL/BE) and merged as
-`sites.py --layer lookalikes` from `experiments/loop/distillation-column/lookalikes.geojson`:
+`sites.py --layer lookalikes` from `loop/distillation-column/lookalikes.geojson`:
 power stations Weisweiler, Niederaussem, Gersteinwerk, Datteln 4; ports Bremerhaven, Dortmund,
 Tollerort; tank-only terminals Nord-West Oelleitung, Grosstanklager, Chane Nieuwe Maas. Shell
 Pernis / Moerdijk and Dow Schkopau came back tagged `industrial=oil` but are refineries or

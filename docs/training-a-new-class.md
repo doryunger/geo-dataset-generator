@@ -36,7 +36,8 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
 1. **Everything runs in the experiments workspace.** `WORKSPACE=experiments` for every command,
    `.env` sourced (`set -a && source .env && set +a`). Production `classes/`, the `/manual`
    editor on port 8000 and the S3 `packages/` prefix are never touched until a class is
-   promoted deliberately.
+   promoted deliberately. Once promoted (`fan-unit`, `distillation-column`), the class's rounds
+   run with `WORKSPACE` unset, against the root `classes/` and `loop/`.
 2. **Data is never dropped on suspicion.** Every sample and every triage "yes" from every round
    stays enabled. Candidate *models* are rejected freely; candidate *data* is disabled only with
    evidence strong enough to be certain, and a single ablation run is not that (see rule 6).
@@ -70,7 +71,7 @@ These were each learned by getting it wrong once; the evidence is in `loop.md`.
 
 ## 3. One round
 
-All paths are under `experiments/loop/<class>/`. Commands are `python scripts/loop/<tool>.py
+All paths are under `<workspace>/loop/<class>/` (`experiments/loop/<class>/` for a new class, `loop/<class>/` once promoted). Commands are `python scripts/loop/<tool>.py
 --class <class> ...`; on Windows prefix `PYTHONIOENCODING=utf-8`.
 
 | step | who | command / action |

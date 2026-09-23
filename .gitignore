@@ -6,6 +6,7 @@ models/
 classes/
 archive/
 experiments/
+loop/
 .scratch/
 
 # oil_refinery experiments — probe/benchmark outputs, raw downloaded datasets, and the
