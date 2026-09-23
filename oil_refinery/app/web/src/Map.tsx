@@ -5,6 +5,7 @@ import {
   EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties,
 } from './api'
 import { classColorExpression } from './classColors'
+import { mapHandle } from './mapHandle'
 import { extentSocket } from './socket'
 import {
   gestureStarted, layersPainted,
@@ -131,6 +132,7 @@ export default function Map() {
       zoom: INITIAL_ZOOM,
     })
     mapRef.current = map
+    mapHandle.current = map
     tileDebug('map constructed -- basemap/detections sources+layers declared in initial style')
     map.addControl(new maplibregl.NavigationControl())
     map.on('zoom', () => dispatch(zoomChanged(map.getZoom())))
@@ -186,6 +188,7 @@ export default function Map() {
       clearTimeout(moveEndDebounceTimer)
       map.remove()
       mapRef.current = null
+      mapHandle.current = null
       dispatch(reset())
     }
   }, [dispatch])
@@ -373,6 +376,7 @@ export default function Map() {
       )}
       {mode === 'guided' && sites.features.length > 0 && (
         <div
+          data-tour="site-details"
           style={{
             position: 'absolute', top: 12, right: 56, zIndex: 1,
             background: 'rgba(20,20,20,0.82)', color: '#fff', fontSize: 12,

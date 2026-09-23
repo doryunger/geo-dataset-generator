@@ -47,6 +47,9 @@ set -a && source "$REPO_ROOT/.env" && set +a
 : "${HOST:=127.0.0.1}"
 : "${PORT:=8010}"
 export INFERENCE_DEVICE
+VITE_TOUR=1
+for arg in "$@"; do [ "$arg" = "notour" ] && VITE_TOUR=""; done
+export VITE_TOUR
 
 nohup "$REPO_ROOT/.venv/bin/uvicorn" server:app --app-dir server --host "$HOST" --port "$PORT" \
     >> server.log 2>> server.err.log &

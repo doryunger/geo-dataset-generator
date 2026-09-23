@@ -65,7 +65,7 @@ export interface DetectionFeatureCollection {
   features: {
     type: 'Feature'
     geometry: { type: 'Polygon'; coordinates: number[][][] }
-    properties: { tile: string; class_name: string; confidence: number; label: string }
+    properties: { tile: string; class_name: string; confidence: number; label: string; qualifies?: boolean }
   }[]
 }
 

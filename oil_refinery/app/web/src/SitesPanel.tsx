@@ -124,7 +124,7 @@ export default function SitesPanel() {
   const rows = Math.max(refineries.length, others.length)
 
   return (
-    <div style={panel}>
+    <div data-tour="sites" style={panel}>
       <div style={grid}>
         <div style={heading}>Oil refineries</div>
         <div style={heading}>Other sites</div>

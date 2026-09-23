@@ -573,3 +573,23 @@ triggered directly by the request/gesture-cancel effects.
 Polls `/api/stats` every `POLL_INTERVAL_MS`. A failed fetch (server not up yet, or a transient
 network blip) is silently swallowed in the poll loop's `catch` -- the next tick just tries again, no
 need to surface a one-off failure to the user.
+
+## Tour.tsx
+
+Opt-in walkthrough, mounted only when `VITE_TOUR=1` (set by `restart.*` by default, cleared by `restart.* notour`) or `?tour` is in
+the URL. Starts once, when the first guided site reaches `sitePhase === 'done'` *and* its results
+are painted (`readyGeneration === paintedGeneration`), plus a short delay so the map has settled --
+before that the site-verdict box and outline don't exist yet to point at. Steps whose target is
+missing (e.g. no verdict box because a look-alike was first) are dropped at start.
+
+Custom rather than Shepherd.js: Shepherd is AGPL-licensed since v12, and its steps anchor to DOM
+elements, while two of the steps here are regions of the map canvas (the site polygon and a
+detection cluster), projected to screen rects with `map.project`. Panels are found by `data-tour`
+attributes; the map instance comes from `mapHandle.ts`, which `Map.tsx` fills in.
+
+The dimming is a `box-shadow: 0 0 0 9999px` on the highlight rectangle, so only the rectangle and
+the card stay bright. A shadow doesn't capture pointer events, so a separate transparent
+full-screen blocker sits under it to stop clicks and map gestures reaching the app mid-tour.
+The zoom step picks the qualifying detection with the most qualifying neighbours within 80 m and
+fits that group at max zoom 18 (the basemap tops out at 17, so further is just upscaled blur);
+finishing flies back to the site's bbox.

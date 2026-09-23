@@ -58,6 +58,11 @@ but not the parent, and each site's entry in the list turns green ("oil refinery
 refinery") once it has been run. Panning off the site clears the graph, which then follows the
 live view. Add `?debug` to the URL for the inference stats box.
 
+**Guided tutorial.** On by default when started via `restart.bat` / `./restart.sh` (pass `notour`
+to turn it off; with a plain `npm run dev`, add `?tour` to the URL). Once the first site finishes, a step-by-step overlay walks through the site list, the graph,
+the site-verdict box, the identified-site outline, then zooms the map in on a cluster of detections
+and highlights them. Esc skips it.
+
 ## What you're looking at
 
 - Pan/zoom the map like any satellite map. Base satellite imagery (`GET /api/tile/{z}/{x}/{y}`,

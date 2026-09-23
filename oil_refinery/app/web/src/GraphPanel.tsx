@@ -43,6 +43,7 @@ export default function GraphPanel() {
 
   return (
     <div
+      data-tour="graph"
       style={{
         position: 'absolute', bottom: 12, left: 12, zIndex: 1,
         background: 'rgba(20,20,20,0.88)', color: '#fff', fontFamily: 'ui-monospace, monospace',

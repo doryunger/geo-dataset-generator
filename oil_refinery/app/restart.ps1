@@ -49,6 +49,7 @@ Get-Content (Join-Path $REPO_ROOT ".env") | Where-Object { $_ -match '^\s*[^#\s]
 if (-not $env:INFERENCE_DEVICE) { $env:INFERENCE_DEVICE = "cuda" }
 if (-not $env:HOST) { $env:HOST = "127.0.0.1" }
 if (-not $env:PORT) { $env:PORT = "8010" }
+if ($args -contains "notour") { $env:VITE_TOUR = "" } else { $env:VITE_TOUR = "1" }
 
 $uvicornExe = Join-Path $REPO_ROOT ".venv\Scripts\uvicorn.exe"
 $serverProc = Start-Process -FilePath $uvicornExe `
