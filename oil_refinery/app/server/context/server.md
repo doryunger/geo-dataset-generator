@@ -949,9 +949,8 @@ runs at zoom >= `MIN_DETECT_ZOOM` (16), which `Map.tsx` gates.
 A client message `{"site": id}` on the same `/ws/extent` socket (instead of an extent request)
 starts `process_site`: the site's tiles plus a one-tile halo ring are prefetched from Mapbox on a
 16-thread pool (edge tiles used to end the run with a burst of sequential downloads), then a
-`site_start` message with the final `total` goes out -- it marks the end of the prefetch, which is
-what the frontend's progress bar needs to tell "still downloading imagery" apart from "no tiles
-done yet" (see the frontend doc) -- then every
+`site_start` message with the final `total` goes out -- the authoritative tile count, which the
+frontend scales its progress bar by instead of the one `sites.json` implies -- then every
 z17 tile of the polygon, centre-out, is handed to `get_or_process_detections`; as each future
 completes a `site_tile` message goes out with **that tile's** detections as GeoJSON, the cumulative
 component summary and `done/total`; the classifier + tracker (`sites`) are included at most once

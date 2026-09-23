@@ -71,9 +71,6 @@ export default function GraphPanel() {
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 10, opacity: 0.5, marginTop: 8 }}>
-        parent turns green only when all three sit within 200 m of each other
-      </div>
     </div>
   )
 }

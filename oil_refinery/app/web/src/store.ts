@@ -27,7 +27,6 @@ export const FLIGHT_MS = 7000
 export interface SiteProgress {
   done: number
   total: number
-  prefetching: boolean
 }
 
 interface MapState {
@@ -62,7 +61,7 @@ const initialState: MapState = {
   flyTo: null,
   selectedSite: null,
   sitePhase: null,
-  siteProgress: { done: 0, total: 0, prefetching: false },
+  siteProgress: { done: 0, total: 0 },
   siteVerdicts: {},
 }
 
@@ -96,9 +95,7 @@ const mapSlice = createSlice({
       if (result.type === 'extent' && state.selectedSite) return
       if (result.type !== 'extent' && result.site !== state.selectedSite?.id) return
       if (result.type === 'site_start') {
-        state.siteProgress = {
-          done: 0, total: result.total ?? state.siteProgress.total, prefetching: false,
-        }
+        state.siteProgress = { done: 0, total: result.total ?? state.siteProgress.total }
         return
       }
       if (result.type === 'site_tile') {
@@ -127,7 +124,7 @@ const mapSlice = createSlice({
       const { site, durationMs = FLIGHT_MS } = action.payload
       state.selectedSite = site
       state.sitePhase = 'landing'
-      state.siteProgress = { done: 0, total: site.tiles, prefetching: false }
+      state.siteProgress = { done: 0, total: site.tiles }
       state.graph = null
       state.sites = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
@@ -136,7 +133,14 @@ const mapSlice = createSlice({
     },
     siteProcessingStarted(state) {
       state.sitePhase = 'processing'
-      state.siteProgress = { ...state.siteProgress, done: 0, prefetching: true }
+      state.siteProgress = { ...state.siteProgress, done: 0 }
+    },
+    roamCleared(state) {
+      if (state.graph === null && state.detections.features.length === 0) return
+      state.graph = null
+      state.sites = EMPTY_FEATURE_COLLECTION
+      state.detections = EMPTY_DETECTIONS
+      state.readyGeneration += 1
     },
     modeChanged(state, action: PayloadAction<BrowseMode>) {
       state.mode = action.payload
@@ -145,7 +149,7 @@ const mapSlice = createSlice({
       state.graph = null
       state.sites = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
-      state.siteProgress = { done: 0, total: 0, prefetching: false }
+      state.siteProgress = { done: 0, total: 0 }
       state.readyGeneration += 1
     },
     reset() {
@@ -156,7 +160,8 @@ const mapSlice = createSlice({
 
 export const {
   zoomChanged, mapLoaded, gestureStarted, viewportSettled,
-  resultReceived, layersPainted, siteSelected, siteProcessingStarted, modeChanged, reset,
+  resultReceived, layersPainted, siteSelected, siteProcessingStarted, modeChanged, roamCleared,
+  reset,
 } = mapSlice.actions
 
 interface ConnectionState {

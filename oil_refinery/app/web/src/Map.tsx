@@ -8,7 +8,7 @@ import { classColorExpression } from './classColors'
 import { extentSocket } from './socket'
 import {
   gestureStarted, layersPainted,
-  mapLoaded as mapLoadedAction, reset, type RootState, siteProcessingStarted,
+  mapLoaded as mapLoadedAction, reset, type RootState, roamCleared, siteProcessingStarted,
   useAppDispatch, useAppSelector, type Viewport, viewportSettled, zoomChanged,
 } from './store'
 
@@ -97,6 +97,8 @@ export default function Map() {
   const mode = useAppSelector((s: RootState) => s.map.mode)
   const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
+  const progressRatio = siteProgress.total > 0 ? siteProgress.done / siteProgress.total : 0
+  const modeRef = useRef(mode)
   const [arrivedGeneration, setArrivedGeneration] = useState(0)
   const lastPaintAtRef = useRef(0)
 
@@ -217,10 +219,18 @@ export default function Map() {
   }, [dispatch, selectedSite, sitePhase, flyTo, arrivedGeneration])
 
   useEffect(() => {
-    if (mode !== 'free' || siteBusy || !viewport || viewport.zoom < MIN_DETECT_ZOOM) return
+    modeRef.current = mode
+  }, [mode])
+
+  useEffect(() => {
+    if (modeRef.current !== 'free' || siteBusy || !viewport) return
+    if (viewport.zoom < MIN_DETECT_ZOOM) {
+      dispatch(roamCleared())
+      return
+    }
     const tiles = tilesForViewport(viewport)
     if (tiles.length > 0) extentSocket.send(DETECT_ZOOM, tiles)
-  }, [mode, viewport, siteBusy])
+  }, [dispatch, viewport, siteBusy])
 
   useEffect(() => {
     const map = mapRef.current
@@ -334,28 +344,20 @@ export default function Map() {
           <div style={{ fontSize: 20, fontWeight: 'bold', textShadow: '0 1px 4px #000' }}>
             {backendWarm ? 'processing' : 'Warming up…'}
           </div>
-          {backendWarm && siteProgress.total > 0 && (
-            <>
-              <div
-                style={{
-                  width: 240, height: 6, borderRadius: 3,
-                  background: 'rgba(255,255,255,0.22)', overflow: 'hidden',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${(siteProgress.done / siteProgress.total) * 100}%`, height: '100%',
-                    background: '#ff00aa', transition: 'width 250ms linear',
-                  }}
-                />
-              </div>
-              {siteProgress.prefetching && (
-                <div style={{ fontSize: 14, opacity: 0.75, textShadow: '0 1px 4px #000' }}>
-                  calculating…
-                </div>
-              )}
-            </>
-          )}
+          <div
+            style={{
+              width: 240, height: 6, borderRadius: 3, overflow: 'hidden',
+              background: 'rgba(255,255,255,0.22)',
+              visibility: backendWarm && siteProgress.total > 0 ? 'visible' : 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: `${progressRatio * 100}%`, height: '100%',
+                background: '#ff00aa', transition: 'width 250ms linear',
+              }}
+            />
+          </div>
         </div>
       )}
       {mode === 'free' && zoom < MIN_DETECT_ZOOM && !siteBusy && (

@@ -73,7 +73,8 @@ The semantic-graph widget: parent node "oil refinery", four child nodes with the
 (`n / min_count` where the graph sets one). Child colour: grey = none at/above its floor, yellow =
 some but fewer than `min_count`, green = count reached. The parent is green only when the server's
 classifier actually identified a site (`sites.features.length > 0`), which is the 300 m rule --
-four green children with a grey parent is possible and correct, hence the caption. Reads
+four green children with a grey parent is possible and correct. A caption saying so used to sit
+under the nodes; it was removed on 2026-09-23 (and had gone stale at "200 m" by then). Reads
 `s.map.graph`, which `resultReceived` sets from every server message, so it shows the site's
 accumulated counts during/after processing and the live viewport's counts when roaming; a
 placeholder row of grey nodes keeps the layout stable once a site is selected but nothing has come
@@ -110,6 +111,14 @@ there is no selected site, the list is disabled, and panning/zooming at zoom >= 
 for the viewport as before. `modeChanged` clears selection, phase, graph, sites and detections on
 either transition, and because `mode` is in the extent effect's deps, switching to free browsing
 immediately requests the current view rather than waiting for a pan.
+
+In free browsing, dropping below zoom 16 dispatches `roamCleared`, which empties graph, sites and
+detections. Without it the last thing detected stayed on the graph while the map showed open
+farmland, so the widget read as a verdict on whatever was in view. The extent effect also no longer
+re-runs when `mode` changes -- it reads the mode through `modeRef` and depends only on the viewport
+-- so switching to free browsing leaves the map clean until the user actually moves, instead of
+immediately re-requesting the site they were just looking at and refilling the graph with the same
+numbers `modeChanged` had just cleared.
 
 Guided tour deliberately freezes after landing (2026-09-23, at the user's request). Before that,
 roaming inside a finished site kept firing extent requests and a `viewportSettled` that no longer
@@ -160,9 +169,16 @@ in `tiles/images` prefetches almost instantly while a fresh one does not. On top
 complete in bursts of up to `TILE_BATCH_SIZE` (16), so `done` steps 0 -> 16 -> 32 and a site under
 16 tiles is a single batch that never yields a second data point at all.
 
-The server's `site_start` message (sent when the prefetch finishes) is what the bar uses to know
-detection has actually begun: until it arrives `siteProgress.prefetching` is true, and the overlay
-adds a "calculating..." line under the bar to explain why it is sitting at zero. A cached site can
+The server's `site_start` message (sent when the prefetch finishes) carries the authoritative
+`total` and resets `done`, so the bar is scaled by the tile count the server will really process
+rather than the one `sites.json` implies.
+
+The overlay's three elements -- spinner, word, bar -- never change the stack's height. The bar's
+track is always in the layout and only toggles `visibility`, and there is no status line under it.
+An earlier version added a "calculating..." line while the prefetch ran and removed it afterwards;
+because the overlay is centre-justified, that line appearing and disappearing moved the spinner and
+the word up and down, which read as the spinner jumping at the moment progress started (reported
+2026-09-23). Anything added here has to hold a fixed height for the same reason. A cached site can
 finish before any of this is visible, which is fine.
 
 ## classColors.ts
