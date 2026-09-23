@@ -23,6 +23,13 @@ it is production-only). `distillation-column` is the first tenant: copied from
 into `experiments/embeddings/`, stale `dataset_obb/` dropped so it regenerates under the fixed
 pipeline. The `archive/` copy is untouched.
 
+**Promotion: `distillation-column` (2026-09-23).** Moved to production by hand: class dir to
+`classes/`, loop state to `loop/distillation-column/` (gitignored, ~830 MB), and its 938
+experiments embedding entries appended to the root index (ids were disjoint from production's
+388; `embeddings/*.bak` holds the pre-merge index). First production package
+`packages/distillation-column/1790154241.tar.gz`; the `experiments/packages/` snapshots stay
+on S3 as history. `experiments/` is empty of classes again, ready for the next new one.
+
 Global tile/embedding cache, per-class paths, tile math, jsonl/registry IO, Mapbox tile
 fetch+cache.
 
@@ -554,6 +561,37 @@ lexicographically, which would put `"999..."` ahead of `"1000..."`).
 -- `review|predictions/` legitimately symlink into the shared tile cache with absolute targets,
 which `"data"` (meant for untrusted archives) rejects. Safe here specifically because the archive is
 self-produced by `upload_package` in this same file, never from an untrusted source.
+
+## stac_export.py -- STAC catalog of samples and hard negatives (2026-09-23)
+
+Writes `classes/<class>/stac/{samples,hard_negatives}.parquet` (stac-geoparquet, one collection
+each, collection JSON embedded in the Parquet metadata and also written alongside as
+`*.collection.json`). It is a derived export like `dataset_obb/`, rebuilt from the jsonl files on
+every package generation (CLI `generate_package.py`, `obb.py`, and `/manual`'s Generate Package)
+just before the S3 upload so the tarball carries it; the jsonl files stay the source of truth.
+Standalone: `python scripts/stac_export.py [--class X]`, all classes if omitted, respects
+`WORKSPACE`. Chose stac-geoparquet over a static JSON tree (thousands of small files) or SQLite
+(not a STAC format, no tool reads it); DuckDB/GeoPandas query the Parquet directly.
+
+- Sample crops are exactly the polygon's bbox in Web Mercator (checked: crop aspect ratio matches
+  the Mercator bbox ratio to <0.3%), so each image asset is georeferenced by `proj:code=EPSG:3857`
+  + `proj:transform` with no reprojection. Verified by projecting item geometries back onto their
+  crops -- polygons touch all four crop edges.
+- Hard negatives have no stored image, so the export fetches the same bbox crop `/manual` uses for
+  its thumbnail (`hard_negatives_review/<id>.jpg`, `SAMPLE_FETCH_ZOOM`) when missing -- 1031
+  crops for experiments' distillation-column took ~13s off the tile cache. An item with an empty
+  `assets` dict can't be written: Parquet rejects a struct column with no children, and dropping
+  the column breaks `stac_table_to_items` on read.
+- `datetime` is the labelling time (`created_at` / `added_at`), not the imagery date -- Mapbox
+  doesn't expose acquisition dates.
+- Label extension: `label:type=vector`, `label:properties=["class"]` and a named class set. The
+  schema rejects `null` for either on a vector label.
+- Items set `collection`, which STAC 1.1 only accepts with a `rel=collection` link, hence the
+  sidecar collection JSON.
+- Project-specific fields use a `gdg:` prefix (`gdg:zoom`, `gdg:label_polygon`, `gdg:enabled`,
+  `gdg:origin`).
+- Mapbox imagery can't generally be redistributed, so treat the catalog plus its image assets as
+  internal. Sharing it externally means dropping the assets.
 
 ## train_obb.py / train_obb_kfold.py
 

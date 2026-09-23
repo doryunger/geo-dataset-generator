@@ -4,6 +4,7 @@ import common
 import obb
 import reconcile
 import s3_sync
+import stac_export
 from embedder import Embedder
 
 
@@ -47,6 +48,8 @@ def main():
         f"OBB package: {obb_result['train']} train (+{obb_result.get('negatives', 0)} hard negatives), "
         f"{obb_result['val']} val -> {common.obb_dataset_dir(class_name)}"
     )
+
+    print(stac_export.summary_line(stac_export.export_class(class_name)))
 
     if s3_sync.s3_configured():
         key = s3_sync.upload_package(class_name)

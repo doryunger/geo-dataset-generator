@@ -30,6 +30,7 @@ import obb
 import reconcile
 import s3_sync
 import search
+import stac_export
 import subclass_graph
 import train
 import train_obb
@@ -850,6 +851,9 @@ def _run_generate_package_job(job: Job, req: GeneratePackageRequest) -> None:
         )
         logger.info(f"[{class_name}] OBB dataset done: {obb_result['train']} train, {obb_result['val']} val")
 
+        job.progress = {"step": "Exporting STAC catalog", "percent": 91}
+        stac_result = stac_export.export_class(class_name)
+
         job.progress = {"step": "Uploading to S3", "percent": 92}
         s3_key = s3_sync.upload_package(class_name) if s3_sync.s3_configured() else None
         logger.info(f"[{class_name}] generate_package finished, s3_key={s3_key}")
@@ -857,7 +861,7 @@ def _run_generate_package_job(job: Job, req: GeneratePackageRequest) -> None:
         job.progress = {"step": "Done", "percent": 100}
         job.result = {
             "segmentation": seg_result, "obb": obb_result, "merge": merge_result,
-            "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(),
+            "s3_key": s3_key, "s3_configured": s3_sync.s3_configured(), "stac": stac_result,
         }
         job.status = "done"
     except ValueError as e:

@@ -685,6 +685,9 @@ def main():
     if changes:
         print(f"Changes since last generation: {changes}")
 
+    import stac_export
+    print(stac_export.summary_line(stac_export.export_class(args.class_name)))
+
     import s3_sync
     if s3_sync.s3_configured():
         key = s3_sync.upload_package(args.class_name)
