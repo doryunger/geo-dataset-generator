@@ -1,0 +1,9 @@
+name: refinery-wake-service
+
+services:
+  wake:
+    build: .
+    env_file: .env
+    ports:
+      - "127.0.0.1:8090:8090"
+    restart: unless-stopped

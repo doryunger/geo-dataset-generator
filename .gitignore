@@ -44,3 +44,6 @@ logs/
 .DS_Store
 
 app/data/
+
+DEPLOY_EC2.md
+iptsd_calib_*.conf
