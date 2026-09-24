@@ -28,7 +28,8 @@ function node(color: string, wide: boolean, outline?: string): CSSProperties {
   }
 }
 
-const connector: CSSProperties = { width: 2, height: 14, background: '#777' }
+const LINE = '#777'
+const connector: CSSProperties = { width: 2, height: 14, background: LINE }
 
 export default function GraphPanel() {
   const graph = useAppSelector((s: RootState) => s.map.graph)
@@ -57,12 +58,15 @@ export default function GraphPanel() {
       </div>
       <div style={node(identified ? GREEN : GREY, true)}>oil refinery</div>
       <div style={connector} />
-      <div style={{ width: 'calc(100% - 108px)', height: 2, background: '#777' }} />
-      <div style={{ display: 'flex', gap: 12 }}>
-        {components.map((c) => (
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${components.length}, 1fr)` }}>
+        {components.map((c, i) => (
           <div key={c.component} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignSelf: 'stretch', height: 2 }}>
+              <div style={{ flex: 1, background: i === 0 ? 'transparent' : LINE }} />
+              <div style={{ flex: 1, background: i === components.length - 1 ? 'transparent' : LINE }} />
+            </div>
             <div style={connector} />
-            <div style={node(childColor(c), false, classColor(c.component))}>
+            <div style={{ ...node(childColor(c), false, classColor(c.component)), margin: '0 6px' }}>
               <div>{c.component}</div>
               <div style={{ fontSize: 11, opacity: 0.85 }}>
                 {c.count}{c.min_count > 1 ? ` / ${c.min_count}` : ''}
