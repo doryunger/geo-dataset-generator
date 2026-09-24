@@ -124,21 +124,21 @@ WAKING_PAGE = """<!doctype html>
   .radar {
     position: relative; width: 140px; height: 140px; border-radius: 50%; overflow: hidden;
     background:
-      radial-gradient(circle, transparent 0 32%, rgba(255,0,170,0.22) 32.5% 33.5%, transparent 34% 65%,
-        rgba(255,0,170,0.22) 65.5% 66.5%, transparent 67%),
-      linear-gradient(transparent calc(50% - 0.5px), rgba(255,0,170,0.18) 0 calc(50% + 0.5px), transparent 0),
-      linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(255,0,170,0.18) 0 calc(50% + 0.5px), transparent 0),
+      radial-gradient(circle, transparent 0 32%, rgba(46,255,138,0.22) 32.5% 33.5%, transparent 34% 65%,
+        rgba(46,255,138,0.22) 65.5% 66.5%, transparent 67%),
+      linear-gradient(transparent calc(50% - 0.5px), rgba(46,255,138,0.18) 0 calc(50% + 0.5px), transparent 0),
+      linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(46,255,138,0.18) 0 calc(50% + 0.5px), transparent 0),
       #14161c;
-    box-shadow: 0 0 0 1px rgba(255,0,170,0.4), 0 0 32px rgba(255,0,170,0.15);
+    box-shadow: 0 0 0 1px rgba(46,255,138,0.4), 0 0 32px rgba(46,255,138,0.15);
   }
   .sweep {
     position: absolute; inset: 0; border-radius: 50%;
-    background: conic-gradient(from 0deg, transparent 0deg 280deg, rgba(255,0,170,0.6) 360deg);
+    background: conic-gradient(from 0deg, transparent 0deg 280deg, rgba(46,255,138,0.6) 360deg);
     animation: sweep 2.4s linear infinite;
   }
   .blip {
     position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
-    background: #ff4fc4; box-shadow: 0 0 8px #ff00aa; opacity: 0;
+    background: #8dffbf; box-shadow: 0 0 8px #2eff8a; opacity: 0;
     animation: blip 2.4s linear infinite;
   }
   .b1 { top: 28%; left: 64%; animation-delay: 0.25s; }
