@@ -6,4 +6,6 @@ services:
     env_file: .env
     ports:
       - "127.0.0.1:8090:8090"
+    volumes:
+      - ./logs:/app/logs
     restart: unless-stopped

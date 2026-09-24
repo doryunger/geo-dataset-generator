@@ -10,6 +10,8 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+import usage_log
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
@@ -315,12 +317,18 @@ async def _send_result(
 @router.websocket("/ws/extent")
 async def ws_extent(websocket: WebSocket):
     await websocket.accept()
+    ws_key = id(websocket)
+    usage_log.ws_opened(
+        ws_key, usage_log.client_info(websocket.headers, websocket.client.host if websocket.client else None),
+        websocket.query_params.get("session"),
+    )
     await websocket.send_json({"type": "server_ready"})
     session = _get_or_create_session(websocket.query_params.get("session"))
     current_task: asyncio.Task | None = None
     try:
         while True:
             data = await websocket.receive_json()
+            usage_log.ws_message(ws_key, data.get("site") if isinstance(data, dict) else None)
             if isinstance(data, dict) and "site" in data:
                 site = sites.SITES_BY_ID.get(data["site"])
                 if site is None:
@@ -367,5 +375,6 @@ async def ws_extent(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        usage_log.ws_closed(ws_key)
         if current_task is not None:
             current_task.cancel()

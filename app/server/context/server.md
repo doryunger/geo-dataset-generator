@@ -1173,3 +1173,31 @@ new processes to the console window, while `Start-Process -WindowStyle Hidden` d
 `+cuXXX` suffix stripped so re-runs stay idempotent): torchvision's compiled ops must match
 torch's CUDA build or NMS fails at runtime ("could not run torchvision::nms with CUDA backend").
 `install.sh` installs Node 22 via NodeSource because distro Node is too old for Vite 8.
+
+## usage_log.py -- what the EC2 instance is doing (2026-09-24)
+
+The demo runs on a g4dn.xlarge that costs money every minute it's up, so this module writes JSON
+lines to `logs/usage.jsonl`. In deploy that's the `logs` named volume, which lives on the instance's
+EBS disk, so it survives both instance stops and container rebuilds. The wake-service on Lightsail
+logs who *woke* the instance. This log shows what the instance did while it was up.
+
+- `app_start` / `app_stop`: process lifetime. On an EC2 stop, Docker sends SIGTERM and uvicorn
+  runs the lifespan shutdown, so `app_stop` normally does get written. `host_boot_at` comes from
+  `/proc/uptime`; a container sees the host's uptime, so this is the instance boot time.
+- `heartbeat` every `USAGE_HEARTBEAT_S` (60 s), written whether or not anyone is using the app:
+  - GPU util/memory/power/temperature from `nvidia-smi`;
+  - request count and per-IP visitors for the window;
+  - tiles inferred, cache hits and dropped tiles since the last beat, taken as deltas of
+    `tile_server.get_stats_snapshot()`.
+
+  A run of beats with `requests: 0` and `tiles_inferred: 0` is paid-for idle time. The first and
+  last beats bracket the time the instance was up, to within a minute. `nvidia-smi` is only mounted
+  into the container when `NVIDIA_DRIVER_CAPABILITIES` includes `utility`, which is why
+  `deploy/docker-compose.yml` sets it explicitly. Without it, `gpu` is `null`.
+- `ws_open` / `ws_close`: one pair per visitor WebSocket, with duration, message count and the
+  sites requested.
+- Client IP comes from `CF-Connecting-IP` first. The chain is Cloudflare -> Lightsail nginx ->
+  wake-service -> EC2 nginx -> app, and every hop forwards request headers unchanged, so the socket
+  peer is always a proxy.
+- `/api/stats` isn't counted: the wake-service's readiness check and the Docker healthcheck poll it,
+  so counting it would make an idle instance look busy.

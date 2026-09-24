@@ -97,3 +97,28 @@ the waking flow is unchanged -- and `idle_stop_loop` clears it when it stops the
 `/_wake/status` still calls `current_status()` directly (the waking page needs the live stage).
 Also switched `_proxy_http` from a new `httpx.AsyncClient` per request (a fresh TCP connection to
 EC2 per tile) to one pooled keep-alive client created in `lifespan`.
+
+## Session log (added 2026-09-24)
+
+Added after the instance was found running with no way to tell who woke it or when it last
+stopped -- the IAM user in the repo's `.env` can't read CloudTrail, and EC2's `LaunchTime` only
+gives the latest start. A "session" runs from one `StartInstances` call to the matching idle stop.
+It's opened in `maybe_start` (only when `StartInstances` actually fires, not on a debounced call),
+so the request that triggered the start is recorded as the session's `trigger`. It's closed in
+`idle_stop_loop` with a `stop` line that has the summary. Events go to stdout and to `WAKE_LOG_PATH`
+(a bind-mounted `./logs` so they survive container rebuilds).
+
+- **Client IP comes from `CF-Connecting-IP` first.** The domain goes through Cloudflare, so
+  nginx's `$remote_addr` (sent on as `X-Real-IP`) is a Cloudflare edge IP, not the visitor.
+  After that it tries the first `X-Forwarded-For` entry, then `X-Real-IP`.
+  `ip_version` is derived from whichever address wins; `country` is Cloudflare's `CF-IPCountry`.
+- **`adopted` sessions**: session state lives only in memory, so after a container restart
+  while the instance is running, the next request opens a session with `kind: "adopted"`
+  (its `awake_seconds` undercounts). If a stop happened outside this service (console, manual),
+  the open session is closed with reason `stopped_outside_wake_service` on the next wake. So a
+  manual stop only shows up late, and without its real stop time.
+- Requests that arrive while the instance is still `stopping` aren't tracked. The wake is
+  attributed to whichever later request triggers `StartInstances`, which is normally the same
+  visitor's waking-page poll.
+- Visitors and path buckets are capped (200 / 100) so a crawler can't grow a session without
+  bound. Paths are bucketed to their first two segments (`/api/tile`) so the `stop` line stays small.

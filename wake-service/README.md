@@ -43,3 +43,14 @@ so the origin IP stays hidden).
 scp -i "$LIGHTSAIL_KEY" main.py ubuntu@"$LIGHTSAIL_HOST":~/wake-service/main.py
 ssh -i "$LIGHTSAIL_KEY" ubuntu@"$LIGHTSAIL_HOST" "cd ~/wake-service && docker compose up -d --build"
 ```
+
+## Wake/stop log
+
+Every wake, ready and stop is appended as one JSON line to `~/wake-service/logs/wake-events.jsonl`
+on the Lightsail box (also printed to `docker compose logs wake`). The `stop` line summarizes the
+whole session: when it woke and what triggered it (IP, IPv4/IPv6, country, user agent, path), boot
+time, total time awake, and per-visitor request counts.
+
+```
+ssh -i "$LIGHTSAIL_KEY" ubuntu@"$LIGHTSAIL_HOST" "tail -n 20 ~/wake-service/logs/wake-events.jsonl"
+```
