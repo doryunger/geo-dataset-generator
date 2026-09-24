@@ -617,45 +617,46 @@ def _warmup_sizes(gsd_m: float | None) -> list[int]:
 
 
 WARM_BATCH_TILE = (DETECT_ZOOM, 67115, 43729)
-WARM_MAX_PASSES = 3
+WARM_MAX_PASSES = 2
 WARM_STEADY_RATIO = 0.85
 
 
-def _warm_batch() -> float | None:
+def _warm_tiles() -> list[tuple[int, int, int]]:
     z, x0, y0 = WARM_BATCH_TILE
+    return [(z, x0 + i % 8, y0 + i // 8) for i in range(WORKER_POOL_SIZE * TILE_BATCH_SIZE)]
+
+
+async def _warm_through_queue(tiles: list[tuple[int, int, int]]) -> float | None:
     t0 = time.perf_counter()
-    jobs = []
-    for i in range(TILE_BATCH_SIZE):
-        x, y = x0 + i % 4, y0 + i // 4
-        try:
-            image_bytes = common.fetch_tile(z, x, y).read_bytes()
-        except Exception:
-            continue
-        jobs.append(Job(
-            tile_id=f"warmup_{i}", z=z, x=x, y=y, image_bytes=image_bytes, request=None,
-            has_interactive_request=False, fetch_ms=0.0, enqueued_at=0.0, future=None,
-        ))
-    if not jobs:
-        logger.warning("Warm-up batch skipped: no tiles around %s available", common.tile_id(z, x0, y0))
+    try:
+        await asyncio.gather(*(_ensure_processed(z, x, y, force_all_models=True) for z, x, y in tiles))
+    except Exception:
+        logger.exception("Warm-up pass failed")
         return None
-    _run_detection_batch(jobs)
+    finally:
+        forget(tiles)
     return time.perf_counter() - t0
 
 
-def _warm_until_steady() -> None:
+async def _warm_up(models: dict[str, YOLO]) -> None:
+    t0 = time.perf_counter()
+    await asyncio.get_running_loop().run_in_executor(_BATCH_EXECUTOR, _warm_shapes, models)
+    tiles = _warm_tiles()
     previous = None
     for attempt in range(1, WARM_MAX_PASSES + 1):
-        elapsed = _warm_batch()
+        elapsed = await _warm_through_queue(tiles)
         if elapsed is None:
-            return
-        logger.info("Warm-up pass %d: %d real tiles in %.1fs", attempt, TILE_BATCH_SIZE, elapsed)
+            break
+        logger.info("Warm-up pass %d: %d real tiles through the worker queue in %.1fs", attempt, len(tiles), elapsed)
         if previous is not None and elapsed > previous * WARM_STEADY_RATIO:
-            return
+            break
         previous = elapsed
+    _state["stats"] = Stats()
+    _state["warm"] = True
+    logger.info("Warm-up finished in %.1fs", time.perf_counter() - t0)
 
 
-def _warm_models(models: dict[str, YOLO]) -> None:
-    t0 = time.perf_counter()
+def _warm_shapes(models: dict[str, YOLO]) -> None:
     for model_key, model in models.items():
         for imgsz in _warmup_sizes(model_router.gsd_for(model_key)):
             t_warm = time.perf_counter()
@@ -667,9 +668,6 @@ def _warm_models(models: dict[str, YOLO]) -> None:
                 "Warmed up %s at batch %d x %dpx in %.1fs", model_key, TILE_BATCH_SIZE, imgsz,
                 time.perf_counter() - t_warm,
             )
-    _warm_until_steady()
-    _state["warm"] = True
-    logger.info("Warm-up finished in %.1fs", time.perf_counter() - t0)
 
 
 @asynccontextmanager
@@ -701,7 +699,7 @@ async def lifespan():
 
     warm_task = None
     if INFERENCE_DEVICE == "cuda":
-        warm_task = asyncio.get_running_loop().run_in_executor(_BATCH_EXECUTOR, _warm_models, models)
+        warm_task = asyncio.create_task(_warm_up(models))
     yield
     for task in worker_tasks:
         task.cancel()

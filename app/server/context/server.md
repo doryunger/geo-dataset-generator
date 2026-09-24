@@ -703,16 +703,21 @@ numbers, they are what make the design decisions legible:
   recompiles. Shapes are pinned: the batch tensor is always `TILE_BATCH_SIZE` (16) images, blank
   ones padded and their results dropped, and H=W is rounded up to a `SIZE_BUCKET_PX` (256)
   multiple. `lifespan()` warms every bucket the models will see between latitudes 45 and 60
-  (`_warmup_sizes`: 768 / 1280,1536 / 1792,2048 px), then runs real-tile batches
-  (`_warm_until_steady`) because zero images never exercise the NMS/postprocess kernels (the first
-  real batch was still 5 s slow without it). Startup is ~25 s longer for it. Since 2026-09-24 the
-  batch is 16 *distinct* tiles, a 4x4 block around `WARM_BATCH_TILE` inside Esso Belgium (the site
-  every visitor lands on first), instead of one tile copied 16 times, and it repeats up to
-  `WARM_MAX_PASSES` (3) until a pass is no longer >=15% faster than the last. Added because the
-  first site run after a cold start was still visibly slower than later ones. One pass measured
-  5.6 s, of which `prep` was 4.0 s and the gated models 1.3 s. The per-pass log lines show whether
-  the extra passes pay off; `warm` only flips once they're done, so the wake-service's waiting
-  page covers the extra seconds.
+  (`_warmup_sizes`: 768 / 1280,1536 / 1792,2048 px), then pushes real tiles through the actual
+  worker queue (`_warm_up`), because zero images never exercise the NMS/postprocess kernels.
+  **Warm through the real queue, not by calling `_run_detection_batch` directly** (measured
+  2026-09-24 on the g4dn): a direct single-batch warm-up on one executor thread finished cleanly
+  (1.3 s gated models), yet the first real site scan straight after still took 24 s against 10 s
+  for a hot rerun. Its first tile came back at 10.1 s, with `gated_models` at 9-12 s per batch.
+  A real scan keeps all `WORKER_POOL_SIZE` workers (4 on EC2) busy at once, contending for
+  `_GPU_LOCK` on their own threads; the one-thread warm-up never touched that path. Now each pass
+  queues `WORKER_POOL_SIZE * TILE_BATCH_SIZE` distinct tiles around `WARM_BATCH_TILE` (inside Esso
+  Belgium, the site every visitor lands on first) with `force_all_models=True`, then `forget()`s
+  them so the first visitor's scan is still live. The first pass took 21.9 s and later passes 6.1 s;
+  after that, the first site scan matched a hot run (first tile 2.8 s, whole site 9.6 s).
+  `WARM_MAX_PASSES` is 2 because a third pass was no faster. The cost is warm-up going from ~15 s to
+  ~40 s, all of it hidden behind the wake-service's waiting page, since `warm` only flips after.
+  `_state["stats"]` is reset afterwards so `/api/stats` doesn't count warm-up tiles.
 - `DetectionQueue.pop_batch` waits up to `BATCH_FILL_WAIT_S` (0.25 s) for a fuller batch: a padded
   batch of 2 costs the same as 16, and the first pop of a site used to grab 1-2 tiles.
 - Two workers again (`WORKER_POOL_SIZE` default 2), so one batch's prep and fusion overlap the
