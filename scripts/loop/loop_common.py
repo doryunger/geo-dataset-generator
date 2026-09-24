@@ -28,6 +28,11 @@ def sites_path(class_name: str) -> Path:
     return loop_dir(class_name) / "sites.json"
 
 
+def held_out_ids(class_name: str) -> set[str]:
+    p = loop_dir(class_name) / "benchmark.json"
+    return {h["osm_id"] for h in json.loads(p.read_text(encoding="utf-8")).get("held_out", [])} if p.exists() else set()
+
+
 def load_sites(class_name: str) -> list[dict]:
     p = sites_path(class_name)
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []

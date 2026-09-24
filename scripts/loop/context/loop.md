@@ -33,7 +33,8 @@ number. The class is finished when coverage on a *fresh* site stops improving.
 
 1. Pick a site: `python scripts/loop/sites.py --class <cls> --list` (on Windows prefix
    `PYTHONIOENCODING=utf-8` -- site names carry accents the cp1252 console cannot print and the
-   listing dies mid-way otherwise). Prefer sites with
+   listing dies mid-way otherwise). Sites marked `HELD-OUT` are off limits -- `scan.py` refuses
+   them; they are `benchmark.json`'s `held_out` list and exist only to be measured. Prefer sites with
    `sampled=0` and `sharpness_vs_train` near 1.0; scan a few unscored candidates first, then
    `--score`. Sharpness is a coarse gate (Mapbox coverage is soft across much of south-east
    Europe and the model does not transfer to it); obliqueness has to be judged by eye from the
@@ -98,6 +99,10 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    and the new data waits for the next round. Prefer training the candidate as a fine-tune of
    the incumbent (`train_obb.py --base-model models/<cls>_obb_vN.pt --epochs 20 --lr0 0.0002`)
    over a fresh run from `yolo11n-obb.pt`; see the log below for why.
+   **The site-level number that counts is held-out recall**: `INFERENCE_DEVICE=cuda python
+   scripts/eval_sites.py --class <cls> --held-out --cache <file>` runs the app's own site path over
+   refineries that have never been labelled. `positives` in `benchmark.json` are all training sites
+   (every one holds 10-32 column samples), so their verdict measures memory, not generalisation.
 9. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
 10. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
    negatives by provenance with enabled counts; `--enable/--disable <group> [--limit N]`

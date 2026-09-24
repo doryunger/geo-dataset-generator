@@ -78,6 +78,8 @@ def main():
     parser.add_argument("--conf", type=float, default=0.25)
     args = parser.parse_args()
     site = L.find_site(args.class_name, args.site)
+    if site["osm_id"] in L.held_out_ids(args.class_name):
+        raise SystemExit(f"{site['name']} is a held-out refinery in benchmark.json; it is measured, never labelled")
     print(f"{site['name']}: {site['area_km2']} km2")
     cands = scan(args.class_name, site, args.model, args.conf)
     print(f"{len(cands)} candidates at conf>={args.conf}; bands:", {b: sum(1 for c in cands if c["conf"] >= b) for b in (0.25, 0.4, 0.5, 0.7)})

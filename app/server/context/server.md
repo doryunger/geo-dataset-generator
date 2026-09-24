@@ -247,8 +247,9 @@ are systematically missed (6% of training data is that size); everything under 1
 
 Same two edits as fan-unit (`models/distillation-column_obb_v46.pt`, GSD 0.125, gated; node +
 `requires` edge). The graph itself changed around it, each on a measurement from
-`scripts/eval_sites.py` (offline: the server's own `_run_detection_batch` + `classifier`
-over whole sites, per-tile detection cache; `--site NAME` evaluates any site from the loop's
+`scripts/eval_sites.py` (the server's own site path -- `sites.site_tiles`, the parallel
+halo prefetch, the detection queue, `classifier` -- over whole sites since 2026-09-24, before
+that a sequential `_run_detection_batch` loop; per-tile detection cache; `--site NAME` evaluates any site from the loop's
 `sites.json` rather than the benchmark list, which is how candidates for the demo panel get
 checked before being added): `min_types_present` 2 -> **4** (2-of-5 called
 nearly every factory, port and power station a refinery -- chimney at 0.3 and fan-unit at 0.5
@@ -676,9 +677,9 @@ identical, so the app agrees with the offline number here.
 `site_tiles` takes **every** tile in the site's bounding box, not only the ones the OSM polygon touches (changed 2026-09-23): a storage tank a few
 metres outside the boundary was otherwise never looked at and turned up only when free roaming
 happened to cover its tile, which reads as the detector missing obvious objects. It costs 1.44x
-the tiles across the ten demo sites (592 -> 853) and Esso's tank count went 259 -> 307. Note this
-now differs from `scripts/eval_sites.py`, which still uses the polygon-intersects rule, so
-benchmark numbers and app numbers are not tile-for-tile comparable; `component_summary` is what the graph widget
+the tiles across the ten demo sites (592 -> 853) and Esso's tank count went 259 -> 307. `scripts/eval_sites.py`
+uses this same function since 2026-09-24 (it had kept the polygon-intersects rule until then, so
+older benchmark numbers are not tile-for-tile comparable with the app); `component_summary` is what the graph widget
 colours from (count at/above the graph floor, `min_count`, satisfied); `detection_features` turns
 cached per-tile detections (tile-local pixel corners) into lon/lat polygons so the frontend can draw
 them as a GeoJSON layer at any zoom.

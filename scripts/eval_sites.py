@@ -19,62 +19,35 @@ for line in (REPO_ROOT / ".env").read_text().splitlines():
 import common  # noqa: E402
 import classifier  # noqa: E402
 import site_graph  # noqa: E402
+import sites as app_sites  # noqa: E402
 import tile_server  # noqa: E402
+import ws_server  # noqa: E402
 import loop_common as L  # noqa: E402
-from shapely.geometry import shape  # noqa: E402
 
 Z = tile_server.DETECT_ZOOM
 
 
 def site_tiles(site: dict) -> list[tuple[int, int, int]]:
-    geom = shape(site["geometry"])
-    w, s, e, n = geom.bounds
-    x0, y0 = common.lonlat_to_tile(w, n, Z)
-    x1, y1 = common.lonlat_to_tile(e, s, Z)
-    out = []
-    for x in range(x0, x1 + 1):
-        for y in range(y0, y1 + 1):
-            b = common.tile_bounds(Z, x, y)
-            from shapely.geometry import box
-            if geom.intersects(box(b["west"], b["south"], b["east"], b["north"])):
-                out.append((Z, x, y))
-    return out
+    return app_sites.site_tiles(site)
 
 
-def detect(tiles: list[tuple[int, int, int]], batch: int, cache: dict) -> dict:
-    by_tile = {}
-    todo = []
-    for t in tiles:
-        key = common.tile_id(*t)
-        if key in cache:
-            if cache[key]:
-                by_tile[t] = cache[key]
-        else:
-            todo.append(t)
-    tiles = todo
-    for i in range(0, len(tiles), batch):
-        jobs = []
-        for z, x, y in tiles[i:i + batch]:
-            jobs.append(tile_server.Job(
-                tile_id=common.tile_id(z, x, y), z=z, x=x, y=y,
-                image_bytes=common.fetch_tile(z, x, y).read_bytes(), request=None,
-                has_interactive_request=False, fetch_ms=0.0, enqueued_at=0.0, future=None,
-            ))
-        for job, (_, dets) in zip(jobs, tile_server._run_detection_batch(jobs)):
-            cache[job.tile_id] = dets
-            if dets:
-                by_tile[(job.z, job.x, job.y)] = dets
-    return by_tile
+async def detect(tiles: list[tuple[int, int, int]], cache: dict) -> dict:
+    todo = [t for t in tiles if common.tile_id(*t) not in cache]
+    if todo:
+        tile_server.forget(todo)
+        await ws_server._prefetch_with_ring(todo)
+        results = await asyncio.gather(
+            *(tile_server.get_or_process_detections(z, x, y, force_all_models=True) for z, x, y in todo)
+        )
+        for t, dets in zip(todo, results):
+            cache[common.tile_id(*t)] = dets or []
+    return {t: cache[common.tile_id(*t)] for t in tiles if cache[common.tile_id(*t)]}
 
 
-def verdict(by_tile: dict, graph: dict) -> dict:
+def verdict(by_tile: dict, tiles: list[tuple[int, int, int]], graph: dict) -> dict:
     if not by_tile:
         return {"identified": False, "matched": [], "sites": 0}
-    lats = []
-    for (z, x, y) in by_tile:
-        b = common.tile_bounds(z, x, y)
-        lats.append((b["north"] + b["south"]) / 2)
-    results = classifier.classify(by_tile, Z, sum(lats) / len(lats), graph)
+    results = classifier.classify(by_tile, Z, ws_server._ref_lat(set(tiles)), graph)
     matched = sorted({t for r in results for t in r["matched_types"]})
     return {"identified": bool(results), "matched": matched, "sites": len(results)}
 
@@ -90,8 +63,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--class", dest="class_name", required=True, help="loop class whose benchmark.json names the sites")
     parser.add_argument("--without", default=None, help="component to remove for the comparison column")
-    parser.add_argument("--batch", type=int, default=6)
     parser.add_argument("--only", default=None, help="substring filter on site names")
+    parser.add_argument("--held-out", action="store_true", help="evaluate only benchmark.json's held_out refineries, which are never labelled")
     parser.add_argument("--site", action="append", default=[], metavar="NAME", help="evaluate this site from the loop's sites.json instead of the benchmark list (repeatable); reported as kind 'probe'")
     parser.add_argument("--cache", type=Path, default=None, help="JSON file of per-tile detections; reused when present so graph changes re-classify without re-detecting")
     parser.add_argument("--max-distance-m", type=float, default=None, help="override every site's default_max_distance_m and merge_distance_m")
@@ -122,40 +95,52 @@ def main():
                 cfg_node["merge_distance_m"] = args.max_distance_m
     cache = json.loads(args.cache.read_text()) if args.cache and args.cache.exists() else {}
     cfg = json.loads((L.loop_dir(args.class_name) / "benchmark.json").read_text(encoding="utf-8"))
-    names = [("refinery", p["site"]) for p in cfg["positives"]] + [("look-alike", n) for n in cfg["negatives"]]
+    by_id = {s["osm_id"]: s for s in L.load_sites(args.class_name)}
+    held_out = [("held-out", by_id[h["osm_id"]]) for h in cfg.get("held_out", [])]
+    named = [("refinery", p["site"]) for p in cfg["positives"]] + [("look-alike", n) for n in cfg["negatives"]]
     if args.site:
-        names = [("probe", n) for n in args.site]
+        named = [("probe", n) for n in args.site]
+    targets = [(k, L.find_site(args.class_name, n)) for k, n in named]
+    if args.held_out:
+        targets = held_out
+    elif not args.site:
+        targets = targets + held_out
     if args.only:
-        names = [(k, n) for k, n in names if args.only.lower() in n.lower()]
+        targets = [(k, s) for k, s in targets if args.only.lower() in s["name"].lower()]
 
-    async def load():
-        if all(common.tile_id(*t) in cache for _, n in names for t in site_tiles(L.find_site(args.class_name, n))):
-            run()
-            return
-        async with tile_server.lifespan():
-            run()
+    async def run():
+        if not all(common.tile_id(*t) in cache for _, s in targets for t in site_tiles(s)):
+            async with tile_server.lifespan():
+                while not tile_server._state.get("warm"):
+                    await asyncio.sleep(0.5)
+                await report()
+        else:
+            await report()
 
-    def run():
+    async def report():
         print(f"{'kind':<10}{'site':<32}{'tiles':>6}  {'verdict':<11}{'matched types':<58}" + (f"{'without ' + args.without:<12}" if args.without else ""))
-        for kind, name in names:
-            site = L.find_site(args.class_name, name)
+        tally: dict[str, list[int]] = {}
+        for kind, site in targets:
             tiles = site_tiles(site)
-            by_tile = detect(tiles, args.batch, cache)
+            by_tile = await detect(tiles, cache)
             if args.cache:
                 args.cache.write_text(json.dumps(cache))
-            v = verdict(by_tile, graph)
+            v = verdict(by_tile, tiles, graph)
+            hit = tally.setdefault(kind, [0, 0])
+            hit[0] += v["identified"]
+            hit[1] += 1
             best = {}
             for dets in by_tile.values():
                 for d in dets:
                     best[d["class_name"]] = max(best.get(d["class_name"], 0.0), d["confidence"])
             row = f"{kind:<10}{site['name'][:31]:<32}{len(tiles):>6}  {('REFINERY' if v['identified'] else '-'):<11}{', '.join(v['matched']):<58}"
             if args.without:
-                w = verdict(by_tile, without(graph, args.without))
+                w = verdict(by_tile, tiles, without(graph, args.without))
                 row += f"{('REFINERY' if w['identified'] else '-'):<12}"
             print(row + "  max: " + ", ".join(f"{k}={c:.2f}" for k, c in sorted(best.items())), flush=True)
+        print("identified: " + ", ".join(f"{k} {n}/{total}" for k, (n, total) in tally.items()))
 
-    asyncio.run(load())
-
+    asyncio.run(run())
 
 if __name__ == "__main__":
     main()
