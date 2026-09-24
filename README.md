@@ -1,6 +1,6 @@
 # geo-dataset-generator
 
-Tooling for finding a kind of *site* in satellite imagery. A site is not detected as a whole.
+Tooling for finding a type of site in satellite imagery. A site is not detected as a whole.
 Instead, the repo detects the objects the site is made of and checks how they sit together. It
 has two parts:
 
@@ -8,12 +8,9 @@ has two parts:
    site type is a rule over them, and the rule can be tuned without retraining.
 2. **A fast loop for training new object classes.** It is for when a site needs objects that no
    existing model detects. The model proposes, a person judges, and a new model version is kept
-   only if it scores better on a fixed benchmark.
+   only if it does better on the sites seen so far.
 
-Oil refineries are the worked example. The demo map in [`app/`](app/) applies both parts to
-them. This is a proof of concept for the approach and its tooling, not a production detector.
-
-## Why oil refineries
+## Oil refineries use case
 
 A refinery is made of parts that are easy to recognise from above. Storage tanks, fin-fan
 cooler banks (fan units) and distillation columns appear together at almost every refinery:
@@ -25,7 +22,7 @@ graph can express that:
 
 ![Oil refinery as a graph of storage tank, fan unit and distillation column](assets/oil_refinery_graph.png)
 
-A public aerial model (DOTAv1) already detects storage tanks (solid box). No public model
+A public aerial model already detects storage tanks (solid box). No public model
 detects fan units or distillation columns (dashed boxes), so we trained those ourselves. Part 1
 covers the graph, and Part 2 covers how the missing classes were trained.
 
@@ -53,77 +50,36 @@ data:
 - **Tuning is offline.** Detections are cached per tile once. The whole benchmark can then be
   re-scored under new thresholds in seconds, with no retraining.
 
-**Result.** With the same detectors, the first rule called almost every industrial site a
-refinery. Changing only the graph, plus one round of look-alike negatives, brought that to
-**16 of 18 refineries found and 0 of 39 look-alikes flagged** (power stations, ports, tank
-farms, steelworks and chemical plants) on a 57-site benchmark. Design history:
-[docs/semantic-graph.md](docs/semantic-graph.md). Threshold decisions:
-[app/server/context/server.md](app/server/context/server.md).
-
 ## Part 2: training the missing classes
 
-Labelling a new class by hand from scratch is slow. In this loop the model does most of the
-labelling and a person reviews its work, which takes about ten minutes per round:
+Instead of labelling a large dataset up front, each class is grown site by site on real
+locations, in short iterations:
 
-```
-seed ~20-40 hand-drawn samples -> train v1
-  └─ each round, one unseen refinery site:
-       scan      model proposes boxes over the whole site (low threshold, on purpose)
-       sweep     reviewer draws what the model missed        -> measures coverage
-       triage    reviewer marks each proposal yes / no       -> yes = sample, no = hard negative
-       apply     judgements become training data
-       train     a candidate model on the grown dataset
-       gate      candidate replaces the incumbent only if it wins on the benchmark
-```
+1. **Find sites** from open-data indicators such as OpenStreetMap tags: refineries to learn
+   from, and look-alikes (ports, power stations, factories) to test against.
+2. **Scan** a new site with the current model, starting from a small hand-drawn seed.
+3. **Give feedback** by marking positive samples (hits and misses) and negative samples
+   (mistakes).
+4. **Retrain**, and keep the new model only if it does better on the sites seen so far.
 
-The **gate** keeps the loop honest. A new version replaces the current one only if it scores
-better on two recorded measures: coverage on a site it has never seen, and whether its
-confident detections land on refineries rather than look-alikes. Hard negatives are added in
-proportion to positives, because too many of them collapsed a small model
-([loop.md](scripts/loop/context/loop.md)).
+All samples are also exported as a STAC catalog (GeoParquet) to `classes/<class>/stac/`, so
+standard geospatial tools can query them. Remove the image crops before sharing it outside the
+team, since the imagery is licensed.
 
-**Result.** `distillation-column` started from 22 hand-drawn samples and reached 476 after 21
-rounds. Most of the new samples were model proposals that a reviewer accepted. In round 6, on a
-site the model had never seen (Scholven), it found 29 of the 32 columns, with 79 % precision at
-confidence ≥ 0.5. `fan-unit` was built the same way and has 382 samples.
-
-**Samples as a STAC catalog.** Every sample and hard negative is also exported as
-[stac-geoparquet](https://github.com/stac-utils/stac-geoparquet) to
-`classes/<class>/stac/`, by [`scripts/stac_export.py`](scripts/stac_export.py). Each record is a
-STAC item holding the outline, the class label and a georeferenced image crop. The catalog is
-rebuilt every time a package is generated, so it always matches the training data. DuckDB or
-GeoPandas can query it directly, for example "all labelled columns in this area". The images
-come from Mapbox, so remove them before sharing the catalog outside the team.
-
-Full process: [docs/training-a-new-class.md](docs/training-a-new-class.md). Round-by-round log:
-[scripts/loop/context/loop.md](scripts/loop/context/loop.md).
+Full process: [docs/training-a-new-class.md](docs/training-a-new-class.md).
 
 ## The demo app
 
-Live at **<https://refinery.stamsite.cc/>**. The first load can take a few minutes.
-
-- **Site panel** (top left) lists seven refineries and seven look-alikes. Picking a site fits
-  the map to it and runs every zoom-17 tile through all three detectors live on the GPU. A
-  large refinery takes about 15 s, and nothing is precomputed.
-- **Boxes on the map** are detections from the custom and pretrained classes. A dashed box
-  passed its confidence floor but does not count toward the rule (for example, a lone fan).
-- **Graph widget** (bottom) shows each component node turning yellow when it fires and green
-  when its requirement is met. The *oil refinery* node turns green only when the whole rule
-  holds.
-- **Verdict**: each site turns green ("oil refinery") or red ("not a refinery"). Look-alikes
-  light up some components but never the refinery node, and that difference is the point of
-  the demo.
-
-A guided tour starts after the first site. You can also pan freely: at zoom ≥ 16, whatever is
-in view gets classified live.
+Live at **<https://refinery.stamsite.cc/>**. The first load can take a few minutes. Pick a
+refinery or a look-alike site and all three detectors and the graph run on it live, within
+seconds. A guided tour explains the interface after the first site.
 
 ## Next: near-real-time monitoring
 
-A site goes from raw tiles to a verdict in about 15 s. The pipeline could therefore check new
-imagery of watched sites as soon as it arrives, and flag changes such as a unit appearing, tanks
-being added, or a site starting or stopping to match its rule.
+Nothing here is specific to refineries. Any site type that can be described by its visible
+components works the same way: a graph rule for the site, and the loop for any component no
+existing model detects.
 
-In that setup, the delay would come from how often new imagery is captured, not from processing
-time. The demo's Mapbox basemap is undated and rarely refreshed. A live setup would need a
-high-resolution source with frequent revisits and known capture times. The detectors, the graph
-and the training loop would stay the same.
+A whole site goes from imagery to a verdict in seconds. Connected to a stream of new imagery,
+the pipeline could return a result for every incoming capture within seconds of its arrival.
+That makes near-real-time monitoring of many sites, of many types, practical.
