@@ -251,8 +251,8 @@ production graph (column >= 0.65, count 3), 0/39 look-alikes. Sweep from a cache
 0.4 column floor (`--floor` now lowers the detection-time floor too): distance has no effect;
 count 2 -> 9/24; **floor 0.5 + count 2 -> 13/24 at 0/39**, Dow Portugal and Exxonmobil still
 rejected; floor 0.4 + count 2 -> 14/24 but Dow and Chane terminal go red. 0.5 was chosen looking
-at the held-out set, so 13/24 is slightly optimistic. The 10 still missed have no column above
-0.4 at all.
+at the held-out set, so 13/24 is slightly optimistic. Of the 10 still missed at 0.4 + count 2, three have no column at all (Sisak, Vega, Harwich),
+St1 (0.85) and Nynas have columns but no fan-unit, the rest have at most one column.
 
 **Promoted to production (2026-09-23).** `distillation-column` data moved out of `experiments/`
 into `classes/` and `loop/`; further rounds run without `WORKSPACE`.
