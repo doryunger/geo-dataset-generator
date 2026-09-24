@@ -533,8 +533,8 @@ id collision, nothing deleted), so it is safe on a machine with unpublished loca
 `pull_classes.py` runs that merge for every class in S3 -- the way to bring a fresh machine up
 to date without knowing class names.
 
-`app_assets.py push|pull` syncs the demo app's runtime assets with S3: the files listed in
-`app/server/config.json`'s `models` (key `models/<filename>`) and `app/data/sites.json` (key
-`app/sites.json`). Neither is in git. `pull` skips models already present (the deployed
-container keeps them in a volume) but always refreshes `sites.json`, which is small and edited
-by hand, so a restart picks up a new site list.
+`app_assets.py push|pull` syncs the demo app's model files with S3: those listed in
+`app/server/config.json`'s `models` (key `models/<filename>`), which are not in git. `pull` skips
+models already present (the deployed container keeps them in a volume). `app/data/sites.json`
+used to go through S3 as well (key `app/sites.json`); since 2026-09-24 it is tracked in git and
+copied into the app image instead.

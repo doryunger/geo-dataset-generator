@@ -43,7 +43,8 @@ logs/
 # Editors/OS
 .DS_Store
 
-app/data/
+app/data/*
+!app/data/sites.json
 
 DEPLOY_EC2.md
 iptsd_calib_*.conf

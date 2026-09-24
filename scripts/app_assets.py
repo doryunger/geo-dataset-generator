@@ -7,16 +7,15 @@ import common
 import s3_sync
 
 CONFIG_PATH = common.ROOT / "app" / "server" / "config.json"
-SITES_PATH = common.ROOT / "app" / "data" / "sites.json"
 
 
-def assets() -> list[tuple[Path, str, bool]]:
+def assets() -> list[tuple[Path, str]]:
     models = [common.ROOT / key for key in json.loads(CONFIG_PATH.read_text())["models"]]
-    return [(path, f"models/{path.name}", False) for path in models] + [(SITES_PATH, "app/sites.json", True)]
+    return [(path, f"models/{path.name}") for path in models]
 
 
 def push() -> None:
-    for path, key, _ in assets():
+    for path, key in assets():
         if not path.exists():
             sys.exit(f"{path} is missing locally -- nothing to upload")
         s3_sync.upload_file(path, key)
@@ -24,8 +23,8 @@ def push() -> None:
 
 
 def pull() -> None:
-    for path, key, refresh in assets():
-        if path.exists() and not refresh:
+    for path, key in assets():
+        if path.exists():
             print(f"{path.relative_to(common.ROOT)}: present")
             continue
         s3_sync.download_file(key, path)
@@ -33,7 +32,7 @@ def pull() -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sync the demo app's runtime assets (models, sites) with S3.")
+    parser = argparse.ArgumentParser(description="Sync the demo app's model files with S3.")
     parser.add_argument("action", choices=["push", "pull"])
     args = parser.parse_args()
     common.setup_logging()

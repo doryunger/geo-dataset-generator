@@ -17,6 +17,7 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu126 \
 
 COPY scripts/common.py scripts/s3_sync.py scripts/app_assets.py scripts/
 COPY app/server app/server
+COPY app/data/sites.json app/data/sites.json
 
 ENV INFERENCE_DEVICE=cuda
 

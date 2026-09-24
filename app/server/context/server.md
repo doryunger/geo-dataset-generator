@@ -641,6 +641,18 @@ the order in the panel, so it is maintained by hand rather than sorted.
 It went 5+5 -> 7+7 on 2026-09-23: Raffinerie Heide (56 tiles), Zeeland Refinery (63), Smurfit Kappa
 Parenco (35), Dow Portugal (16) and Exxonmobil Chemical Holland (15) in; Mogden Sewage Works and
 INEOS Nitriles each added and swapped straight back out, and Container Terminal Tollerort dropped.
+**Refineries swapped for unseen ones on 2026-09-24.** All seven refineries of the day before were
+training sites -- 41% of column samples and 51% of fan-unit samples lay inside them -- so a green
+verdict there showed memory, not generalisation. 24 refineries with no sample or hard negative
+within ~1 km were run through the app's own site path (`process_site`'s prefetch + queue + graph,
+not `eval_sites.py`, whose one-at-a-time tile fetch took ~25 min for the same set): 6 came back
+REFINERY -- Slovnaft Bratislava (9 columns), San Roque (7), Petronor Bilbao (7), Port-Jerome (4),
+Sines (4), Plock (22, but 540 tiles, so it is last). They replaced every refinery except Esso
+Belgium, which the user kept. 13 of the other 18 had no column at all; Burgas (4 columns, 5 fans)
+still failed on distance, A Coruna and Schwechat stopped at 2 of 3 columns. Slovnaft is first
+because guided mode opens `sites[0]`. `sites.json` is tracked in git from this date and baked
+into the app image, so `deploy.sh`'s `git pull` is all a new site list needs.
+
 The rule the user set for the removals: spend the confuser budget on sites that share refinery
 hardware, since a rejected container port proves nothing a rejected chemical plant does not prove
 better. INEOS Nitriles passed the verdict check but failed on sight -- its imagery is a mostly
@@ -1157,7 +1169,8 @@ avoids taking down the other app's server by matching a name or cmdline pattern 
 `deploy/` runs this app on a GPU host with Docker Compose: `app` (this server, CUDA
 torch from the cu126 wheel index on `python:3.12-slim`, the NVIDIA runtime supplies the driver)
 and `web` (the Vite build served by nginx, which proxies `/api/` and upgrades `/ws/`). The image
-carries only `scripts/common.py`, `s3_sync.py` and `app_assets.py` from the training side --
+carries only `scripts/common.py`, `s3_sync.py` and `app_assets.py` from the training side, plus
+`app/data/sites.json` (in git; models come from S3 at start) --
 `app/requirements.txt` is the server's own dependency list and the root `requirements.txt`
 includes it. Tile imagery (`tiles/`) is a volume, a pure cache of Mapbox tiles; detection
 results are still never persisted, so a site is always run live.
