@@ -617,25 +617,41 @@ def _warmup_sizes(gsd_m: float | None) -> list[int]:
 
 
 WARM_BATCH_TILE = (DETECT_ZOOM, 67115, 43729)
+WARM_MAX_PASSES = 3
+WARM_STEADY_RATIO = 0.85
 
 
-def _warm_batch() -> None:
-    z, x, y = WARM_BATCH_TILE
+def _warm_batch() -> float | None:
+    z, x0, y0 = WARM_BATCH_TILE
     t0 = time.perf_counter()
-    try:
-        image_bytes = common.fetch_tile(z, x, y).read_bytes()
-    except Exception:
-        logger.warning("Warm-up batch skipped: tile %s unavailable", common.tile_id(z, x, y))
-        return
-    jobs = [
-        Job(
+    jobs = []
+    for i in range(TILE_BATCH_SIZE):
+        x, y = x0 + i % 4, y0 + i // 4
+        try:
+            image_bytes = common.fetch_tile(z, x, y).read_bytes()
+        except Exception:
+            continue
+        jobs.append(Job(
             tile_id=f"warmup_{i}", z=z, x=x, y=y, image_bytes=image_bytes, request=None,
             has_interactive_request=False, fetch_ms=0.0, enqueued_at=0.0, future=None,
-        )
-        for i in range(TILE_BATCH_SIZE)
-    ]
+        ))
+    if not jobs:
+        logger.warning("Warm-up batch skipped: no tiles around %s available", common.tile_id(z, x0, y0))
+        return None
     _run_detection_batch(jobs)
-    logger.info("Warm-up batch of %d real tiles in %.1fs", TILE_BATCH_SIZE, time.perf_counter() - t0)
+    return time.perf_counter() - t0
+
+
+def _warm_until_steady() -> None:
+    previous = None
+    for attempt in range(1, WARM_MAX_PASSES + 1):
+        elapsed = _warm_batch()
+        if elapsed is None:
+            return
+        logger.info("Warm-up pass %d: %d real tiles in %.1fs", attempt, TILE_BATCH_SIZE, elapsed)
+        if previous is not None and elapsed > previous * WARM_STEADY_RATIO:
+            return
+        previous = elapsed
 
 
 def _warm_models(models: dict[str, YOLO]) -> None:
@@ -651,7 +667,7 @@ def _warm_models(models: dict[str, YOLO]) -> None:
                 "Warmed up %s at batch %d x %dpx in %.1fs", model_key, TILE_BATCH_SIZE, imgsz,
                 time.perf_counter() - t_warm,
             )
-    _warm_batch()
+    _warm_until_steady()
     _state["warm"] = True
     logger.info("Warm-up finished in %.1fs", time.perf_counter() - t0)
 
