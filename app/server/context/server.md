@@ -1201,3 +1201,11 @@ logs who *woke* the instance. This log shows what the instance did while it was 
   peer is always a proxy.
 - `/api/stats` isn't counted: the wake-service's readiness check and the Docker healthcheck poll it,
   so counting it would make an idle instance look busy.
+- **S3 copy per app run, not real time.** Each run's lines (from its `app_start` on) go to
+  `s3://$S3_BUCKET_NAME/logs/ec2/<app_start time>.jsonl` during lifespan shutdown, after
+  `app_stop`. There are deliberately no periodic uploads during the run. They would only guard
+  against a lost shutdown, and a cheaper guard covers that: at startup, `app_started` first
+  re-uploads the previous run (everything from the last `app_start` line in the file) before
+  writing its own. A crash or a hard stop is picked up at the next boot, and a clean stop just
+  overwrites the same key with identical content. The S3 client uses short timeouts, so the upload
+  fits inside Docker's 10 s stop grace period.

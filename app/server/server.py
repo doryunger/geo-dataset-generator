@@ -12,12 +12,12 @@ from fastapi import FastAPI, Request
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     started_at = time.time()
-    usage_log.app_started()
+    await asyncio.to_thread(usage_log.app_started)
     async with tile_server.lifespan():
         heartbeat = asyncio.create_task(usage_log.heartbeat_loop(tile_server.get_stats_snapshot))
         yield
         heartbeat.cancel()
-        usage_log.app_stopping(started_at)
+        await asyncio.to_thread(usage_log.app_stopping, started_at)
 
 
 app = FastAPI(lifespan=lifespan)

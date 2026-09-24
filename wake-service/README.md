@@ -54,3 +54,6 @@ time, total time awake, and per-visitor request counts.
 ```
 ssh -i "$LIGHTSAIL_KEY" ubuntu@"$LIGHTSAIL_HOST" "tail -n 20 ~/wake-service/logs/wake-events.jsonl"
 ```
+
+Each closed session is also uploaded to `s3://$S3_BUCKET_NAME/logs/wake-service/<session_id>.jsonl`
+(set `S3_BUCKET_NAME` in `.env`); EC2's per-run usage logs land next to it under `logs/ec2/`.

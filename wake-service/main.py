@@ -23,8 +23,11 @@ READY_STATUS_TTL_S = 5
 WAKE_LOG_PATH = os.environ.get("WAKE_LOG_PATH", "/app/logs/wake-events.jsonl")
 MAX_TRACKED_VISITORS = 200
 MAX_TRACKED_PATHS = 100
+S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
+S3_LOG_PREFIX = "logs/wake-service"
 
 ec2 = boto3.client("ec2", region_name=AWS_REGION)
+s3 = boto3.client("s3", region_name=AWS_REGION)
 
 _state = {
     "last_activity": time.time(), "cached_ip": None, "warm": False, "last_start_call": 0.0,
@@ -45,6 +48,8 @@ def _log_event(event: str, **fields):
     record = {"event": event, "at": _iso(time.time()), "instance_id": EC2_INSTANCE_ID, **fields}
     line = json.dumps(record, default=str)
     print(line, flush=True)
+    if _session is not None:
+        _session["events"].append(line)
     try:
         os.makedirs(os.path.dirname(WAKE_LOG_PATH), exist_ok=True)
         with open(WAKE_LOG_PATH, "a") as f:
@@ -77,7 +82,7 @@ def _open_session(kind: str, trigger: dict | None):
     _session = {
         "id": time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now)), "kind": kind, "opened_at": now,
         "trigger": trigger, "ready_at": None, "last_request_at": None,
-        "requests": 0, "websockets": 0, "visitors": {}, "paths": {},
+        "requests": 0, "websockets": 0, "visitors": {}, "paths": {}, "events": [],
     }
     _log_event("wake" if kind == "wake" else "session_adopted", session_id=_session["id"], trigger=trigger)
 
@@ -102,6 +107,19 @@ def _close_session(reason: str):
         paths=dict(sorted(s["paths"].items(), key=lambda kv: -kv[1])),
     )
     _session = None
+    if S3_BUCKET_NAME:
+        asyncio.get_running_loop().run_in_executor(
+            None, _upload_session, s["id"], ("\n".join(s["events"]) + "\n").encode(),
+        )
+
+
+def _upload_session(session_id: str, data: bytes):
+    key = f"{S3_LOG_PREFIX}/{session_id}.jsonl"
+    try:
+        s3.put_object(Bucket=S3_BUCKET_NAME, Key=key, Body=data, ContentType="application/x-ndjson")
+        print(f"session log uploaded to s3://{S3_BUCKET_NAME}/{key}", flush=True)
+    except Exception as e:
+        print(f"session log upload failed: {e}", flush=True)
 
 
 def _mark_ready():

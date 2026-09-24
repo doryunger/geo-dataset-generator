@@ -122,3 +122,10 @@ so the request that triggered the start is recorded as the session's `trigger`. 
   visitor's waking-page poll.
 - Visitors and path buckets are capped (200 / 100) so a crawler can't grow a session without
   bound. Paths are bucketed to their first two segments (`/api/tile`) so the `stop` line stays small.
+- **S3 copy, per session, on close.** Each session's own event lines (`wake`/`session_adopted`,
+  `ready`, `stop`) are buffered in memory. When the session closes, they're uploaded to
+  `s3://$S3_BUCKET_NAME/logs/wake-service/<session_id>.jsonl`, in a thread so the idle loop
+  doesn't wait on S3. This isn't real time on purpose: the need is a per-session record, not live
+  tailing. It uses the same IAM user as the EC2 side (`geo-dataset-genrator-s3`), which already
+  has PutObject on the bucket. If `S3_BUCKET_NAME` is unset, uploads are skipped and the local
+  JSONL stays the only copy.

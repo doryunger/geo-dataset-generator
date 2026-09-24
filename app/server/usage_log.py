@@ -8,6 +8,9 @@ import subprocess
 import time
 from pathlib import Path
 
+import boto3
+from botocore.config import Config
+
 LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
 USAGE_LOG_PATH = LOGS_DIR / "usage.jsonl"
 HEARTBEAT_INTERVAL_S = float(os.environ.get("USAGE_HEARTBEAT_S", "60"))
@@ -17,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 _window: dict = {"requests": 0, "visitors": {}}
 _open_ws: dict[int, dict] = {}
+_run: dict = {"offset": 0, "started_at": None}
+S3_PREFIX = "logs/ec2"
 
 
 def _iso(ts: float) -> str:
@@ -136,9 +141,57 @@ async def heartbeat_loop(stats_snapshot) -> None:
         prev = snap
 
 
+def _upload_run(data: bytes, started_at: str) -> None:
+    bucket = os.environ.get("S3_BUCKET_NAME")
+    if not bucket or not data:
+        return
+    key = f"{S3_PREFIX}/{started_at.replace(':', '-')}.jsonl"
+    try:
+        boto3.client(
+            "s3", region_name=os.environ.get("AWS_REGION"),
+            config=Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2}),
+        ).put_object(Bucket=bucket, Key=key, Body=data, ContentType="application/x-ndjson")
+        logger.info("usage log uploaded to s3://%s/%s", bucket, key)
+    except Exception:
+        logger.exception("usage log upload to S3 failed")
+
+
+def _upload_previous_run() -> None:
+    try:
+        data = USAGE_LOG_PATH.read_bytes()
+    except OSError:
+        return
+    start = data.rfind(b'{"event": "app_start"')
+    if start < 0:
+        return
+    previous = data[start:]
+    try:
+        started_at = json.loads(previous.split(b"\n", 1)[0])["at"]
+    except (ValueError, KeyError):
+        return
+    _upload_run(previous, started_at)
+
+
 def app_started() -> None:
+    _upload_previous_run()
+    try:
+        _run["offset"] = USAGE_LOG_PATH.stat().st_size
+    except OSError:
+        _run["offset"] = 0
+    _run["started_at"] = _iso(time.time())
     log_event("app_start", host_boot_at=_host_boot_at(), device=os.environ.get("INFERENCE_DEVICE"))
 
 
 def app_stopping(started_at: float) -> None:
     log_event("app_stop", uptime_s=round(time.time() - started_at), open_websockets=len(_open_ws))
+    try:
+        with open(USAGE_LOG_PATH, "rb") as f:
+            f.seek(_run["offset"])
+            data = f.read()
+    except OSError:
+        return
+    try:
+        started_at_iso = json.loads(data.split(b"\n", 1)[0])["at"]
+    except (ValueError, KeyError):
+        started_at_iso = _run["started_at"]
+    _upload_run(data, started_at_iso)
