@@ -12,7 +12,7 @@ import common  # noqa: E402
 WINDOW_M = 120.0
 PAD_M = 60.0
 FETCH_ZOOM = 18
-DEDUPE_M = 8.0
+DUPLICATE_IOU = 0.5
 MATCH_M = 8.0
 CROP_PX = 300
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -26,6 +26,10 @@ def loop_dir(class_name: str) -> Path:
 
 def sites_path(class_name: str) -> Path:
     return loop_dir(class_name) / "sites.json"
+
+
+def iou(a, b) -> float:
+    return a.intersection(b).area / a.union(b).area if a.intersects(b) else 0.0
 
 
 def held_out_ids(class_name: str) -> set[str]:
@@ -43,7 +47,8 @@ def save_sites(class_name: str, sites: list[dict]) -> None:
 
 
 def find_site(class_name: str, name_substr: str) -> dict:
-    hits = [s for s in load_sites(class_name) if name_substr.lower() in s["name"].lower()]
+    sites = load_sites(class_name)
+    hits = [s for s in sites if s.get("osm_id") == name_substr] or [s for s in sites if name_substr.lower() in s["name"].lower()]
     if not hits:
         raise SystemExit(f"no site matching {name_substr!r} in {sites_path(class_name)}")
     if len(hits) > 1:

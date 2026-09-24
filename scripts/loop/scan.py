@@ -18,7 +18,7 @@ def scan(class_name: str, site: dict, version: str, conf: float, quiet: bool = F
     label_polys = [Polygon(r["polygon"]) for r in common.load_samples(class_name)]
     windows = L.site_windows(site)
     site_slug = L.slug(site["name"])
-    cands, seen, t0 = [], [], time.time()
+    cands, kept, t0 = [], [], time.time()
 
     for i, w in enumerate(windows, 1):
         im = L.window_image(class_name, site, w)
@@ -30,13 +30,12 @@ def scan(class_name: str, site: dict, version: str, conf: float, quiet: bool = F
             pts = [(float(q[0]), float(q[1])) for q in quad]
             geo = [list(L.to_geo(w, x, y, W, H)) for x, y in pts]
             gp = Polygon(geo)
-            if gp.area <= 0 or any(gp.intersects(lp) and gp.intersection(lp).area / gp.union(lp).area >= 0.2 for lp in label_polys):
+            if gp.area <= 0 or any(L.iou(gp, k) >= L.DUPLICATE_IOU for k in kept):
                 continue
+            kept.append(gp)
+            labelled = any(L.iou(gp, lp) >= 0.2 for lp in label_polys)
             cx, cy = sum(p[0] for p in pts) / 4, sum(p[1] for p in pts) / 4
             lon, lat = L.to_geo(w, cx, cy, W, H)
-            if any(L.dist_m((lon, lat), s) < L.DEDUPE_M for s in seen):
-                continue
-            seen.append((lon, lat))
             half = L.CROP_PX / 2
             left = max(0, min(int(round(cx - half)), W - L.CROP_PX))
             top = max(0, min(int(round(cy - half)), H - L.CROP_PX))
@@ -49,7 +48,7 @@ def scan(class_name: str, site: dict, version: str, conf: float, quiet: bool = F
             sides = [math.dist(pts[k], pts[(k + 1) % 4]) for k in range(4)]
             cands.append({
                 "id": f"{site_slug}_{len(cands):04d}", "source_sample": site["name"], "window": w["n"],
-                "conf": round(float(c), 3), "lon": round(lon, 7), "lat": round(lat, 7),
+                "conf": round(float(c), 3), "lon": round(lon, 7), "lat": round(lat, 7), "labelled": labelled,
                 "size_m": round(max(sides) * common.TARGET_GSD_M, 1),
                 "polygon": [[round(x, 7), round(y, 7)] for x, y in geo] + [[round(geo[0][0], 7), round(geo[0][1], 7)]],
                 "img": base64.b64encode(buf.getvalue()).decode(),

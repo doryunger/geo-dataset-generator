@@ -47,16 +47,17 @@ def _restrict_to_sweep(class_name: str, site: dict, cands: list[dict], sweep_rev
         inside = any(w["west"] <= c["lon"] <= w["east"] and w["south"] <= c["lat"] <= w["north"] for w in swept)
         if inside == outside:
             continue
-        if any(p.contains(Point(c["lon"], c["lat"])) or L.dist_m((c["lon"], c["lat"]), (p.centroid.x, p.centroid.y)) < L.MATCH_M for p in polys):
+        box = Polygon(c["polygon"])
+        if any(p.contains(Point(c["lon"], c["lat"])) or L.iou(box, p) >= 0.2 for p in polys):
             continue
         out.append(c)
     return out
 
 
 def build_triage(class_name: str, site: dict, version: str, min_conf: float, label: str, swept_by: Path | None = None, outside: bool = False, extra_sites: list[dict] | None = None, page_slug: str | None = None) -> tuple:
-    cands = [c for c in _candidates(class_name, site, version) if c["conf"] >= min_conf]
+    cands = [c for c in _candidates(class_name, site, version) if c["conf"] >= min_conf and not c.get("labelled")]
     for other in extra_sites or []:
-        cands += [c for c in _candidates(class_name, other, version) if c["conf"] >= min_conf]
+        cands += [c for c in _candidates(class_name, other, version) if c["conf"] >= min_conf and not c.get("labelled")]
     if swept_by:
         cands = _restrict_to_sweep(class_name, site, cands, swept_by, outside)
     if extra_sites:
@@ -95,20 +96,24 @@ def build_sweep(class_name: str, site: dict, version: str, n_windows: int, show_
         im = images[w["n"]].copy()
         W, H = im.size
         d = ImageDraw.Draw(im)
-        shown = []
+        shown, labelled = [], 0
         for c in dets:
             if not (w["west"] <= c["lon"] <= w["east"] and w["south"] <= c["lat"] <= w["north"]):
                 continue
+            colour = (80, 150, 255) if c.get("labelled") else (64, 220, 110)
             pts = [L.to_px(w, x, y, W, H) for x, y in c["polygon"]]
-            d.line(pts, fill=(64, 220, 110), width=3)
-            d.text((pts[0][0] + 3, pts[0][1] + 3), f"{c['conf']:.2f}", fill=(64, 220, 110))
-            shown.append({"lon": c["lon"], "lat": c["lat"], "conf": c["conf"]})
+            d.line(pts, fill=colour, width=3)
+            d.text((pts[0][0] + 3, pts[0][1] + 3), f"{c['conf']:.2f}", fill=colour)
+            if c.get("labelled"):
+                labelled += 1
+            else:
+                shown.append({"lon": c["lon"], "lat": c["lat"], "conf": c["conf"]})
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=68, optimize=True)
         out.append({
             "id": f"{site_slug}_w{w['n']}", "n": w["n"], "area": site["name"], "cluster": 1, "grid": f"{k}/{len(chosen)}",
             "west": w["west"], "south": w["south"], "east": w["east"], "north": w["north"], "lat": w["lat"], "lon": w["lon"],
-            "w": W, "h": H, "labels": 0, "detections": len(shown), "dets": shown,
+            "w": W, "h": H, "labels": labelled, "detections": len(shown), "dets": shown,
             "img": base64.b64encode(buf.getvalue()).decode(),
         })
     meta_path = L.loop_dir(class_name) / "sweeps" / f"{site_slug}_{version}.json"
@@ -118,7 +123,7 @@ def build_sweep(class_name: str, site: dict, version: str, n_windows: int, show_
         "TITLE": f"{site['name']} {label} sweep",
         "EYEBROW": f"{class_name} &middot; model {version} &middot; {site['name']} &middot; {len(out)} densest windows &middot; proposals shown at &ge; {show_conf:.2f}",
         "HEADING": f"Find the {label}s the model missed",
-        "LEDE": f"The model's proposals are in <b>green</b> with their confidence, including weak ones; they get judged in a separate yes/no pass, so <b>leave them alone here</b>. <b>Draw a polygon around each real {label} that has no green outline</b>: click its corners, then click the first point again or press Enter to close. Click inside a finished polygon to remove it. Windows with nothing missing: just go to the next.",
+        "LEDE": f"The model's proposals are in <b>green</b> with their confidence, including weak ones; they get judged in a separate yes/no pass, so <b>leave them alone here</b>. Proposals in <b>blue</b> sit on an object that is already labelled; leave those too. <b>Draw a polygon around each real {label} that has no green outline</b>: click its corners, then click the first point again or press Enter to close. Click inside a finished polygon to remove it. Windows with nothing missing: just go to the next.",
         "OBJECT": label, "OBJECTS": f"{label}s",
         "DOC": f"reviews/{class_name}-sweep-{site_slug[:20]}-{version}", "LS": f"{class_name}-sweep-{site_slug[:20]}",
         "META": f'kind: "sweep", class: "{class_name}", site: "{site_slug}", model: "{version}", threshold: {show_conf}',
