@@ -630,10 +630,10 @@ only grow" rule this module exists to implement.
 
 ## sites.py
 
-Helpers for the site panel plus `GET /api/sites`: the fourteen hand-picked demo sites from
-`sites.json` (seven refineries and seven look-alikes: two chemical plants, crude oil tank farm,
-paper mill, lignite power station, steelworks, tyre plant; polygons come from the loop's
-`sites.json`), each with its z17 tile count. Seven a side, deliberately even. The look-alikes are
+Helpers for the site panel plus `GET /api/sites`: the twelve hand-picked demo sites from
+`sites.json` (six refineries and six look-alikes: two chemical plants, crude oil tank farm,
+paper mill, lignite power station, steelworks; polygons come from the loop's
+`sites.json`), each with its z17 tile count. Six a side, deliberately even. The look-alikes are
 ordered most-refinery-like first, in that order, so going down the column is a walk from "shares
 the actual hardware" to "shares nothing but being big and industrial". The order in the file is
 the order in the panel, so it is maintained by hand rather than sorted.
@@ -652,6 +652,11 @@ Belgium, which the user kept. 13 of the other 18 had no column at all; Burgas (4
 still failed on distance, A Coruna and Schwechat stopped at 2 of 3 columns. Slovnaft is first
 because guided mode opens `sites[0]`. `sites.json` is tracked in git from this date and baked
 into the app image, so `deploy.sh`'s `git pull` is all a new site list needs.
+
+**Trimmed to 6+6 on 2026-09-24 (user: "7 is too much").** Dropped Plock (540 tiles, already
+flagged above as the outlier -- next largest refinery is Port-Jerome at 208) and Continental AG
+(last in the look-alike order, i.e. the least refinery-like confuser, so the one whose rejection
+proves the least).
 
 The rule the user set for the removals: spend the confuser budget on sites that share refinery
 hardware, since a rejected container port proves nothing a rejected chemical plant does not prove
