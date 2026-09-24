@@ -50,8 +50,8 @@ const STEPS: Step[] = [
   },
   {
     title: 'Site verdict',
-    body: 'The site the classifier identified: which component types matched, the share of required '
-      + 'types covered, and how many detected components make it up.',
+    body: 'Why the site was or wasn\'t called a refinery: which component types matched, the share of '
+      + 'required types covered, and for a rejected site, which requirement fell short.',
     target: { kind: 'dom', id: 'site-details' },
   },
   {

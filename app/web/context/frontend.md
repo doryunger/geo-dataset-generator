@@ -322,6 +322,18 @@ The MapLibre map component. Constructs the map once (mount effect), then reacts 
 (`store.ts`) in two further effects that own layer creation and painting -- see "Architecture"
 below for why the data flow is split this way.
 
+### Rejected-site verdict box (added 2026-09-24)
+
+When a guided site finishes with no identified site, the top-right verdict box still appears, as
+"no refinery identified" with the reason: coverage, the types that were met, and for each unmet
+type its count against `min_count` at its confidence floor. It is built from `graph.components`,
+the site-wide `component_summary`, because the backend sends no per-cluster scores for rejected
+clusters. That makes it an approximation: identification needs all the types inside one proximity
+cluster (`classifier._component_clusters_for_site`), so every type can pass site-wide while no
+single cluster does. The box then says the types were found but weren't close enough to form one
+site, instead of listing a shortfall. Added so look-alikes show the reasoning behind a rejection
+as well as the red list entry.
+
 ### Zoom/viewport constants
 
 - `MIN_VISIBLE_ZOOM = 12` -- the three *site* layers (`site-fill`, `site-outline`, `site-label`)
@@ -620,7 +632,8 @@ Opt-in walkthrough, mounted only when `VITE_TOUR=1` (set by `restart.*` by defau
 the URL. Starts once, when the first guided site reaches `sitePhase === 'done'` *and* its results
 are painted (`readyGeneration === paintedGeneration`), plus a short delay so the map has settled --
 before that the site-verdict box and outline don't exist yet to point at. Steps whose target is
-missing (e.g. no verdict box because a look-alike was first) are dropped at start.
+missing (e.g. no site outline because a look-alike was first) are dropped at start. The verdict
+box itself now exists for rejected sites too (see Map.tsx), so that step always runs.
 
 Custom rather than Shepherd.js: Shepherd is AGPL-licensed since v12, and its steps anchor to DOM
 elements, while two of the steps here are regions of the map canvas (the site polygon and a

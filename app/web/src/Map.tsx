@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
-  EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection, type SiteFeatureProperties,
+  type ComponentSummary, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection,
+  type SiteFeatureProperties,
 } from './api'
 import { classColorExpression } from './classColors'
 import { mapHandle } from './mapHandle'
@@ -25,6 +26,11 @@ const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 2, MIN_DE
 
 function formatSiteName(site: string): string {
   return site.replace(/_/g, ' ')
+}
+
+function shortfall(c: ComponentSummary): string {
+  const unit = c.counts_groups ? 'groups' : 'found'
+  return `${c.component}: ${c.count}/${c.min_count} ${unit} ≥${c.min_confidence.toFixed(2)}`
 }
 
 const INITIAL_CENTER: [number, number] = [0, 20]
@@ -99,6 +105,7 @@ export default function Map() {
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const siteProgress = useAppSelector((s: RootState) => s.map.siteProgress)
   const mode = useAppSelector((s: RootState) => s.map.mode)
+  const graph = useAppSelector((s: RootState) => s.map.graph)
   const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const siteBusy = sitePhase === 'landing' || sitePhase === 'processing'
   const progressRatio = siteProgress.total > 0 ? siteProgress.done / siteProgress.total : 0
@@ -398,6 +405,36 @@ export default function Map() {
               <div style={{ opacity: 0.8 }}>{f.properties.matched_types.join(', ')}</div>
             </div>
           ))}
+        </div>
+      )}
+      {mode === 'guided' && sitePhase === 'done' && sites.features.length === 0 && graph && (
+        <div
+          data-tour="site-details"
+          style={{
+            position: 'absolute', top: 12, right: 56, zIndex: 1,
+            background: 'rgba(20,20,20,0.82)', color: '#fff', fontSize: 12,
+            fontFamily: 'ui-monospace, monospace', borderRadius: 8, padding: '10px 14px',
+            minWidth: 200, lineHeight: 1.6,
+          }}
+        >
+          <div style={{ fontWeight: 'bold' }}>no refinery identified</div>
+          <div>
+            coverage: {(graph.components.length > 0
+              ? (graph.components.filter((c) => c.satisfied).length / graph.components.length) * 100
+              : 0).toFixed(0)}%
+          </div>
+          {graph.components.some((c) => c.satisfied) && (
+            <div style={{ opacity: 0.8 }}>
+              {graph.components.filter((c) => c.satisfied).map((c) => c.component).join(', ')}
+            </div>
+          )}
+          {graph.components.length > 0 && graph.components.every((c) => c.satisfied) ? (
+            <div style={{ opacity: 0.8 }}>all types found, but not close enough to form one site</div>
+          ) : (
+            graph.components.filter((c) => !c.satisfied).map((c) => (
+              <div key={c.component} style={{ opacity: 0.8 }}>missing {shortfall(c)}</div>
+            ))
+          )}
         </div>
       )}
     </div>
