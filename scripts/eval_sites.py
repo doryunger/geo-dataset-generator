@@ -68,7 +68,7 @@ def main():
     parser.add_argument("--site", action="append", default=[], metavar="NAME", help="evaluate this site from the loop's sites.json instead of the benchmark list (repeatable); reported as kind 'probe'")
     parser.add_argument("--cache", type=Path, default=None, help="JSON file of per-tile detections; reused when present so graph changes re-classify without re-detecting")
     parser.add_argument("--max-distance-m", type=float, default=None, help="override every site's default_max_distance_m and merge_distance_m")
-    parser.add_argument("--floor", action="append", default=[], metavar="COMPONENT=CONF", help="override a required component's min_confidence (repeatable); the cache must have been built with a floor at or below it")
+    parser.add_argument("--floor", action="append", default=[], metavar="COMPONENT=CONF", help="override a required component's min_confidence (repeatable), also when detecting; a cache built at a higher floor is missing the detections in between")
     parser.add_argument("--min-types", type=int, default=None, help="override min_types_present")
     parser.add_argument("--count", action="append", default=[], metavar="COMPONENT=N", help="override a required component's min_count (repeatable)")
     args = parser.parse_args()
@@ -79,6 +79,7 @@ def main():
         for e in graph["edges"]:
             if e.get("to") == comp:
                 e["min_confidence"] = float(conf)
+        tile_server._COMPONENT_MIN_CONFIDENCE[comp] = min(tile_server._COMPONENT_MIN_CONFIDENCE.get(comp, 1.0), float(conf))
     for spec in args.count:
         comp, _, n = spec.partition("=")
         for e in graph["edges"]:

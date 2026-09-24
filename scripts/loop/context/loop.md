@@ -244,6 +244,16 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Held-out refineries (2026-09-24).** Every `positives` site in `benchmark.json` turned out to be
+a training site, so the site test's 18/18 was memory. 24 refineries with no sample or hard
+negative within ~1 km were frozen as `held_out`. v46 through the app's own site path: 6/24 at the
+production graph (column >= 0.65, count 3), 0/39 look-alikes. Sweep from a cache detected at a
+0.4 column floor (`--floor` now lowers the detection-time floor too): distance has no effect;
+count 2 -> 9/24; **floor 0.5 + count 2 -> 13/24 at 0/39**, Dow Portugal and Exxonmobil still
+rejected; floor 0.4 + count 2 -> 14/24 but Dow and Chane terminal go red. 0.5 was chosen looking
+at the held-out set, so 13/24 is slightly optimistic. The 10 still missed have no column above
+0.4 at all.
+
 **Promoted to production (2026-09-23).** `distillation-column` data moved out of `experiments/`
 into `classes/` and `loop/`; further rounds run without `WORKSPACE`.
 Paths quoted below as `experiments/...` from before this date are now at the repo root.
