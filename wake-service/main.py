@@ -17,11 +17,16 @@ IDLE_STOP_MINUTES = float(os.environ.get("IDLE_STOP_MINUTES", "20"))
 WARM_CHECK_TIMEOUT_S = float(os.environ.get("WARM_CHECK_TIMEOUT_S", "4"))
 IDLE_CHECK_INTERVAL_S = 60
 START_DEBOUNCE_S = 20
+READY_STATUS_TTL_S = 5
 
 ec2 = boto3.client("ec2", region_name=AWS_REGION)
 
-_state = {"last_activity": time.time(), "cached_ip": None, "warm": False, "last_start_call": 0.0}
+_state = {
+    "last_activity": time.time(), "cached_ip": None, "warm": False, "last_start_call": 0.0,
+    "ready_status": None, "ready_status_at": 0.0, "client": None,
+}
 _describe_lock = asyncio.Lock()
+_status_lock = asyncio.Lock()
 
 
 def _describe_sync():
@@ -83,6 +88,29 @@ async def current_status() -> dict:
     }
 
 
+def _fresh_ready_status() -> dict | None:
+    status = _state["ready_status"]
+    if status and time.monotonic() - _state["ready_status_at"] < READY_STATUS_TTL_S:
+        return status
+    return None
+
+
+async def proxy_status() -> dict:
+    status = _fresh_ready_status()
+    if status:
+        return status
+    async with _status_lock:
+        status = _fresh_ready_status()
+        if status:
+            return status
+        status = await current_status()
+        if status["stage"] == "ready":
+            _state["ready_status"], _state["ready_status_at"] = status, time.monotonic()
+        else:
+            _state["ready_status"] = None
+        return status
+
+
 async def idle_stop_loop():
     while True:
         await asyncio.sleep(IDLE_CHECK_INTERVAL_S)
@@ -97,14 +125,19 @@ async def idle_stop_loop():
             await asyncio.to_thread(ec2.stop_instances, InstanceIds=[EC2_INSTANCE_ID])
             _state["cached_ip"] = None
             _state["warm"] = False
+            _state["ready_status"] = None
             _state["last_activity"] = time.time()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _state["client"] = httpx.AsyncClient(
+        timeout=60, limits=httpx.Limits(max_connections=100, max_keepalive_connections=32),
+    )
     task = asyncio.create_task(idle_stop_loop())
     yield
     task.cancel()
+    await _state["client"].aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -199,7 +232,7 @@ async def _proxy_http(request: Request, path: str) -> Response:
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
 
-    client = httpx.AsyncClient(timeout=60)
+    client = _state["client"]
     req = client.build_request(
         request.method, url, headers=headers, params=request.query_params, content=body,
     )
@@ -209,7 +242,6 @@ async def _proxy_http(request: Request, path: str) -> Response:
         async for chunk in upstream.aiter_raw():
             yield chunk
         await upstream.aclose()
-        await client.aclose()
 
     return StreamingResponse(
         body_stream(), status_code=upstream.status_code,
@@ -220,7 +252,7 @@ async def _proxy_http(request: Request, path: str) -> Response:
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
 async def proxy_http(request: Request, path: str):
     _state["last_activity"] = time.time()
-    status = await current_status()
+    status = await proxy_status()
 
     if status["stage"] != "ready":
         accepts_html = "text/html" in request.headers.get("accept", "")
@@ -234,7 +266,7 @@ async def proxy_http(request: Request, path: str):
 @app.websocket("/{path:path}")
 async def proxy_ws(websocket: WebSocket, path: str):
     _state["last_activity"] = time.time()
-    status = await current_status()
+    status = await proxy_status()
     if status["stage"] != "ready":
         await websocket.close(code=1013, reason="Instance not ready yet")
         return

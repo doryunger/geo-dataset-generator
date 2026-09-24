@@ -83,3 +83,17 @@ restart, and `idle_seconds` in the response was climbing the whole time despite 
 Fixed by touching `last_activity` in `wake_status()` too -- safe to do unconditionally, since the
 waking page stops polling this endpoint the moment `stage` reaches `"ready"` (it reloads instead),
 so this can't be abused to keep a genuinely-idle-but-still-open tab alive forever after that point.
+
+**Real bug #4 (2026-09-24): map stayed white during a fly-to, then all tiles appeared at once.**
+Every proxied request called `current_status()`, which does an EC2 `DescribeInstances` behind the
+global `_describe_lock` -- so every basemap tile paid one AWS round trip, *one at a time*. A
+fly-to fires dozens of `/api/tile` requests at once; they queued behind each other on the lock
+and the map painted nothing until the queue drained. Invisible locally, where the frontend talks
+to the backend directly. Simulated with a 200 ms fake `DescribeInstances` and 40 concurrent tile
+requests: 8.8 s before, 0.14 s after. Fix: `proxy_status()` reuses a `ready` status for
+`READY_STATUS_TTL_S` (5 s), with a second lock and re-check so an expired cache triggers one
+describe, not a burst. Only `ready` is cached -- any other stage is re-checked every request so
+the waking flow is unchanged -- and `idle_stop_loop` clears it when it stops the instance.
+`/_wake/status` still calls `current_status()` directly (the waking page needs the live stage).
+Also switched `_proxy_http` from a new `httpx.AsyncClient` per request (a fresh TCP connection to
+EC2 per tile) to one pooled keep-alive client created in `lifespan`.
