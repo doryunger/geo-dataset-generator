@@ -25,6 +25,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 import loop_common as L
+import common
 
 
 def _candidates(class_name: str, site: dict, version: str) -> list[dict]:
@@ -68,11 +69,13 @@ def build_triage(class_name: str, site: dict, version: str, min_conf: float, lab
         "TITLE": f"{(page_slug or site['name'])} {label} triage",
         "EYEBROW": f"{class_name} &middot; {site['name']} &middot; model {version} &middot; conf &ge; {min_conf:.2f}",
         "HEADING": "What did the model find here?",
-        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{(' -- only those outside the windows you swept' if outside else ' -- only those inside the windows you swept, and not on a polygon you drew') if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative.",
+        "LEDE": f"Every crop is a {version} detection at this site with no matching label, highest confidence first{(' -- only those outside the windows you swept' if outside else ' -- only those inside the windows you swept, and not on a polygon you drew') if swept_by else ''}. Mark whether it is a real {label}. Yes becomes a sample; no is stored as a hard negative but left out of training; the third button also trains on it, and the pool line shows what that does to the balance.",
         "YES": label.capitalize(), "NO": f"Not a {label}", "YES_SHORT": label, "NO_SHORT": "not",
         "DOC": f"reviews/{class_name}-triage-{site_slug[:20]}-{version}{suffix}", "LS": f"{class_name}-triage-{site_slug[:20]}-{version}{suffix}",
         "META": f'kind: "triage", class: "{class_name}", site: "{site_slug}", model: "{version}", threshold: {min_conf}',
         "FILENAME": f"{class_name}-triage-{site_slug}-{version}.json",
+        "POOL_ON": str(sum(1 for r in common.load_hard_negatives(class_name) if r.get("enabled", True))),
+        "POSITIVES": str(sum(1 for r in common.load_samples(class_name) if r.get("enabled", True))),
     }, cands)
     return html, len(cands)
 
