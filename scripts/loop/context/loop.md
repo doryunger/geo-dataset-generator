@@ -30,6 +30,16 @@ uses one refinery site from the OSM layer and produces samples, hard negatives a
 number. The class is finished when coverage on a *fresh* site stops improving.
 
 **One round, in order:**
+**The round's end, for each class separately (2026-09-25).** Every site is reviewed for both
+`distillation-column` and `fan-unit`. Propose with the class's newest version. After the sweep and
+triage, score newest and the class's best on that site with `coverage.py --models <best>,<newest>`
+(the site's drawn misses + triage yeses are its complete ground truth for the swept windows, and
+neither version has trained on it yet). Adopt the newest as best only if it finds more at no more
+false positives and holds the held-out / look-alike / demo checks. Then apply the review and train
+the next version of each class with `--epochs 60 --patience 0 --keep last` (one seed; more only when
+a result is borderline) and evaluate it through the app path. Fan-unit had been frozen at v33 while
+its samples went 382 -> 688; that is the gap this rule closes.
+
 
 1. Pick a site: `python scripts/loop/sites.py --class <cls> --list` (on Windows prefix
    `PYTHONIOENCODING=utf-8` -- site names carry accents the cp1252 console cannot print and the
