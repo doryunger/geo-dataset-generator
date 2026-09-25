@@ -192,7 +192,7 @@
       <span>hard neg <b id="t-neg">0</b></span>
       <span>unsure <b id="t-skip">0</b></span>
     </div>
-    <div class="pool">Hard-negative pool: __POOL_ON__ enabled + <b id="p-new">0</b> from this page = <b id="p-total">__POOL_ON__</b> against <b id="p-pos">__POSITIVES__</b> positives (ratio <b id="p-ratio">—</b>)</div>
+    <div class="pool" __TRAINING_ONLY__>Hard-negative pool: __POOL_ON__ enabled + <b id="p-new">0</b> from this page = <b id="p-total">__POOL_ON__</b> against <b id="p-pos">__POSITIVES__</b> positives (ratio <b id="p-ratio">—</b>)</div>
   </header>
 
   <section class="card" id="info">
@@ -207,7 +207,7 @@
   <div class="actions" id="actions">
     <button class="btn-yes" id="b-yes" type="button">__YES__<kbd>F</kbd></button>
     <button class="btn-no" id="b-no" type="button">__NO__<kbd>N</kbd></button>
-    <button class="btn-neg" id="b-neg" type="button">__NO__ &middot; train on it as a hard negative<kbd>H</kbd></button>
+    <button class="btn-neg" id="b-neg" type="button" __TRAINING_ONLY__>__NO__ &middot; train on it as a hard negative<kbd>H</kbd></button>
   </div>
   <div class="minor-row">
     <button class="minor" id="b-back" type="button">Back<kbd>&larr;</kbd></button>

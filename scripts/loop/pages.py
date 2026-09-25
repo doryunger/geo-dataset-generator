@@ -76,6 +76,7 @@ def build_triage(class_name: str, site: dict, version: str, min_conf: float, lab
         "FILENAME": f"{class_name}-triage-{site_slug}-{version}.json",
         "POOL_ON": str(sum(1 for r in common.load_hard_negatives(class_name) if r.get("enabled", True))),
         "POSITIVES": str(sum(1 for r in common.load_samples(class_name) if r.get("enabled", True))),
+        "TRAINING_ONLY": "",
     }, cands)
     return html, len(cands)
 
