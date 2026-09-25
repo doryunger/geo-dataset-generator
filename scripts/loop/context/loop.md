@@ -74,6 +74,15 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    Coverage of vN on the site = yeses / (yeses + polygons); precision = yeses /
    (yeses + noes). This split (misses by drawing, hits by judging) is what reviewers naturally
    do and is far cheaper than polygoning everything.
+   Nothing the model detects is hidden (2026-09-24): the scan drops only true duplicates from
+   overlapping windows (IoU >= 0.5); proposals on already-labelled objects are shown in **blue**
+   on the sweep and left out of the triage. Before this an 8 m dedupe hid neighbouring fans in a
+   bank and labelled objects vanished, so the reviewer redrew fans the model had found. The
+   triage has three verdicts: yes (sample), no (stored as a hard negative, left out of training)
+   and **no + train on it** (key H, an enabled hard negative). The page shows the enabled
+   hard-negative pool against the positive count as you go -- the 2026-09-25 A/B (v48 with the
+   191 look-alike negatives on: 12/24 held-out, 0/39 look-alikes; v49 with them off: 6/24 and
+   2/39) says negatives help, so the point is to add them deliberately, not to avoid them.
    On a site much bigger than the swept 60 windows (Normandie: 308 windows, 112 proposals of
    which 29 inside the sweep), also build `--swept-by <sweep json> --outside-sweep`: the
    proposals in the unswept windows, as a separate page and JSON (`-outside`). `apply.py` ingests
