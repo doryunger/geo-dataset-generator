@@ -840,9 +840,15 @@ The full 57-site benchmark was not re-run for this (no cached detections on disk
 
 The graph now separates them, at the user's request:
 
-- **Between different components** -- the site (parent) node's `default_max_distance_m` (200 m),
+- **Between different components** -- the site (parent) node's `default_max_distance_m` (300 m),
   applied by `classifier._component_clusters_for_site` to decide what belongs to one candidate
-  site. Per-pair overrides are possible via `proximity` edges; none are declared.
+  site. Per-pair overrides are possible via `proximity` edges; since 2026-09-24 the three pairs
+  involving `distillation-column` (with tanks, fans and itself) are declared at 450 m, the site
+  default staying 300 m for every other pair. Litvinov, a sprawling complex never trained on, had
+  tanks, fans and 8 columns >= 0.65 but its columns sat more than 300 m from the rest of the site;
+  with the override it is identified, and nothing else in the benchmark moved. Side effect:
+  `max_relevant_distance_m`, the free-roam relevance radius in `ws_server`, follows the largest
+  edge and is now 450 m.
 - **Between members of one class** -- the component node's own `group_within_m`. `fan-unit` has
   20 m; the others have none (any spacing). `classifier.same_class_groups` groups a class's
   detections so every member is within that distance of another member, and `min_count` is then
