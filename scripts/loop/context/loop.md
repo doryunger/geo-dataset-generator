@@ -253,6 +253,17 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Seeds, fixed epochs and v55 (2026-09-25).** Livorno, Litvinov and Sarpom (sharp, never
+trained on) took columns 476 -> 533 samples. Trained fresh with early stopping, three seeds on the
+identical dataset kept epochs 17/5/4 and found 12/2/15 of the 24 held-out refineries -- the
+34-image validation split picks "best" nearly at random and early stopping ends lucky-early runs.
+With `--epochs 60 --patience 0 --keep last` the same three seeds gave 11/10/9 held-out, 16/18
+trained refineries each, 0/0/1 of 39 look-alikes, and all 14 demo sites correct. `v55` (seed 0)
+replaced `v46` (6/24) in `oil_refinery`. Also measured under the old setup: dropping the 191
+look-alike negatives averaged 5.7 held-out vs 9.7 with them (3 seeds each) and turned
+look-alikes red twice, so they stay. Judge every new candidate over 2-3 seeds with the fixed
+setup; one run is not a result.
+
 **Held-out refineries (2026-09-24).** Every `positives` site in `benchmark.json` turned out to be
 a training site, so the site test's 18/18 was memory. 24 refineries with no sample or hard
 negative within ~1 km were frozen as `held_out`. v46 through the app's own site path: 6/24 at the

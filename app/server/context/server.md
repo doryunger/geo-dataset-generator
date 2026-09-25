@@ -245,7 +245,8 @@ are systematically missed (6% of training data is that size); everything under 1
 
 ### Wiring `distillation-column` in, and what the graph became (2026-09-22)
 
-Same two edits as fan-unit (`models/distillation-column_obb_v46.pt`, GSD 0.125, gated; node +
+Same two edits as fan-unit (`models/distillation-column_obb_v46.pt`, replaced by `v55` on 2026-09-25 -- see
+`scripts/loop/context/loop.md` "Held-out refineries"; GSD 0.125, gated; node +
 `requires` edge). The graph itself changed around it, each on a measurement from
 `scripts/eval_sites.py` (the server's own site path -- `sites.site_tiles`, the parallel
 halo prefetch, the detection queue, `classifier` -- over whole sites since 2026-09-24, before
