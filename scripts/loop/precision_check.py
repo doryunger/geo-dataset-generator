@@ -41,7 +41,7 @@ def _global_box(z: int, x: int, y: int, corners: list) -> Polygon:
 def check_sites(class_name: str, n_sites: int) -> list[dict]:
     cfg = json.loads((L.loop_dir(class_name) / "benchmark.json").read_text(encoding="utf-8"))
     by_id = {s["osm_id"]: s for s in L.load_sites(class_name)}
-    ids = sorted(h["osm_id"] for h in cfg.get("held_out", []))
+    ids = sorted(cfg.get("held_out_eval") or [h["osm_id"] for h in cfg.get("held_out", [])])
     return [by_id[i] for i in random.Random(0).sample(ids, min(n_sites, len(ids)))]
 
 

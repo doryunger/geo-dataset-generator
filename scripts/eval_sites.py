@@ -97,7 +97,8 @@ def main():
     cache = json.loads(args.cache.read_text()) if args.cache and args.cache.exists() else {}
     cfg = json.loads((L.loop_dir(args.class_name) / "benchmark.json").read_text(encoding="utf-8"))
     by_id = {s["osm_id"]: s for s in L.load_sites(args.class_name)}
-    held_out = [("held-out", by_id[h["osm_id"]]) for h in cfg.get("held_out", [])]
+    evaluated = set(cfg.get("held_out_eval") or [h["osm_id"] for h in cfg.get("held_out", [])])
+    held_out = [("held-out", by_id[h["osm_id"]]) for h in cfg.get("held_out", []) if h["osm_id"] in evaluated]
     named = [("refinery", p["site"]) for p in cfg["positives"]] + [("look-alike", n) for n in cfg["negatives"]]
     if args.site:
         named = [("probe", n) for n in args.site]
