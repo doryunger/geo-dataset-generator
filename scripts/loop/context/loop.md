@@ -263,6 +263,26 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 
 ## Round log and current state
 
+**Train/app resolution mismatch (2026-09-26).** Training crops (`sample_fetch_zoom` 18) and loop
+scans (`FETCH_ZOOM` 18) come from z18 @2x tiles, about 0.19 m/px of real detail. The app detects
+on `DETECT_ZOOM` 17, about 0.38 m/px. Both are resampled to 0.125 m/px, so objects are the same
+pixel size, but the app's image has half the detail. On 40 random training samples rendered
+both ways, columns v61 at >= 0.65 found 35/40 at z18 and 17/40 at z17 (misses below 0.25: 1 vs
+16), and fan-unit v33 found 30/40 vs 20/40. So samples and loop coverage improve the model at
+z18, and the app only partly benefits. This is the likely reason site-level results stopped
+moving. `extra_fetch_zooms` in a class's `subclass_graph.json` adds a render of every sample and
+hard negative at each listed zoom, as `<id>_z17` in the same split. Columns now have `[17]`.
+`v62` is the first model trained on it (60 epochs, keep last, seed 0, package built locally
+without an S3 upload; 1370 positive + 868 negative images). On the same 40-sample test v62 finds
+35/40 at z18 and 36/40 at z17 (mean confidence 0.80 / 0.81), so the gap is gone with nothing lost
+at z18. Those are training samples, so this shows the model now handles z17, not better
+generalisation. Through the app path (`site_detections_app_v62.json`, 8 min for the whole
+benchmark), the site verdicts match v61 exactly: 16/18 refineries, 0/39 look-alikes, 11/14
+held-out. The site test is saturated. Confident column boxes changed as follows (v61 -> v62):
+training refineries 291 -> 420 at >= 0.65 and 170 -> 313 at >= 0.78; held-out 208 -> 191 and
+75 -> 100; look-alikes 34 -> 25 and 11 -> 6. So v62 is more confident on refineries and fires
+less on non-refineries. One seed only.
+
 **Seeds, fixed epochs and v55 (2026-09-25).** Livorno, Litvinov and Sarpom (sharp, never
 trained on) took columns 476 -> 533 samples. Trained fresh with early stopping, three seeds on the
 identical dataset kept epochs 17/5/4 and found 12/2/15 of the 24 held-out refineries -- the
