@@ -288,7 +288,14 @@ benchmark), the site verdicts match v61 exactly: 16/18 refineries, 0/39 look-ali
 held-out. The site test is saturated. Confident column boxes changed as follows (v61 -> v62):
 training refineries 291 -> 420 at >= 0.65 and 170 -> 313 at >= 0.78; held-out 208 -> 191 and
 75 -> 100; look-alikes 34 -> 25 and 11 -> 6. So v62 is more confident on refineries and fires
-less on non-refineries. One seed only.
+less on non-refineries. One seed only. v62 replaced v55 in `oil_refinery`.
+Fan-unit got the same `[17]`. `fan-unit` `v35` (688 samples, 95 negatives, 60 epochs, keep last,
+seed 0): on the 40-sample test it finds 37/40 at both z18 and z17. The served v33 found 30 / 20,
+and v34 39 / 30. Through the app path with v62 + v35: 18/18 refineries (Gunvor and Rheinland
+Nord, which failed with v33 despite strong columns, now pass), 0/39 look-alikes, 11/14 held-out.
+Fan-unit boxes >= 0.65 went 529 -> 2084 on training refineries and 155 -> 407 on look-alikes
+(factory rooftop fans are real), and 621 -> 704 >= 0.7 on held-out. v35 replaced v33 in
+`oil_refinery`, and both models were pushed to S3 with `app_assets.py push`.
 
 **Seeds, fixed epochs and v55 (2026-09-25).** Livorno, Litvinov and Sarpom (sharp, never
 trained on) took columns 476 -> 533 samples. Trained fresh with early stopping, three seeds on the

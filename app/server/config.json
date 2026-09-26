@@ -3,15 +3,15 @@
   "canonical_model": "models/yolo11n-obb.pt",
   "models": [
     "models/yolo11n-obb.pt",
-    "models/fan-unit_obb_v33.pt",
+    "models/fan-unit_obb_v35.pt",
     "models/distillation-column_obb_v62.pt"
   ],
   "model_gsd_m": {
-    "models/fan-unit_obb_v33.pt": 0.125,
+    "models/fan-unit_obb_v35.pt": 0.125,
     "models/distillation-column_obb_v62.pt": 0.125
   },
   "gated_models": [
-    "models/fan-unit_obb_v33.pt",
+    "models/fan-unit_obb_v35.pt",
     "models/distillation-column_obb_v62.pt"
   ],
   "inference_backend": "openvino",
