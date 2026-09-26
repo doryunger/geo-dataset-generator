@@ -102,12 +102,13 @@ def main():
         sites = score(args.class_name)
         print(f"scored {sum(1 for s in sites if 'sharpness_vs_train' in s)} scanned site(s)")
     if args.list or not (args.geojson or args.score):
+        held_out = L.held_out_ids(args.class_name)
         for s in recount_sampled(args.class_name):
             if args.layer and s.get("layer", DEFAULT_LAYER) != args.layer:
                 continue
             sharp = s.get("sharpness_vs_train")
             scans = ",".join(sc["model"] for sc in s.get("scans", []))
-            print(f"{s['area_km2']:>6.2f} km2  sharp={sharp if sharp is not None else '  -  '}  sampled={s['sampled']:<3} scans=[{scans}]  {s['name']}")
+            print(f"{s['area_km2']:>6.2f} km2  sharp={sharp if sharp is not None else '  -  '}  sampled={s['sampled']:<3} scans=[{scans}]  {'HELD-OUT  ' if s['osm_id'] in held_out else ''}{s['name']}")
 
 
 if __name__ == "__main__":

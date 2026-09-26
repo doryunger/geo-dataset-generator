@@ -12,7 +12,8 @@ import common  # noqa: E402
 WINDOW_M = 120.0
 PAD_M = 60.0
 FETCH_ZOOM = 18
-DEDUPE_M = 8.0
+DETECT_FETCH_ZOOM = 17
+DUPLICATE_IOU = 0.5
 MATCH_M = 8.0
 CROP_PX = 300
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -28,6 +29,15 @@ def sites_path(class_name: str) -> Path:
     return loop_dir(class_name) / "sites.json"
 
 
+def iou(a, b) -> float:
+    return a.intersection(b).area / a.union(b).area if a.intersects(b) else 0.0
+
+
+def held_out_ids(class_name: str) -> set[str]:
+    p = loop_dir(class_name) / "benchmark.json"
+    return {h["osm_id"] for h in json.loads(p.read_text(encoding="utf-8")).get("held_out", [])} if p.exists() else set()
+
+
 def load_sites(class_name: str) -> list[dict]:
     p = sites_path(class_name)
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
@@ -38,7 +48,8 @@ def save_sites(class_name: str, sites: list[dict]) -> None:
 
 
 def find_site(class_name: str, name_substr: str) -> dict:
-    hits = [s for s in load_sites(class_name) if name_substr.lower() in s["name"].lower()]
+    sites = load_sites(class_name)
+    hits = [s for s in sites if s.get("osm_id") == name_substr] or [s for s in sites if name_substr.lower() in s["name"].lower()]
     if not hits:
         raise SystemExit(f"no site matching {name_substr!r} in {sites_path(class_name)}")
     if len(hits) > 1:
@@ -84,15 +95,16 @@ def site_windows(site: dict) -> list[dict]:
     return out
 
 
-def window_image(class_name: str, site: dict, w: dict):
+def window_image(class_name: str, site: dict, w: dict, zoom: int = FETCH_ZOOM):
     from PIL import Image
 
+    suffix = "" if zoom == FETCH_ZOOM else f"_z{zoom}"
     path = common.fetch_and_crop_bbox(
-        FETCH_ZOOM, w["west"], w["south"], w["east"], w["north"], common.DEFAULT_TILESET, common.DEFAULT_FORMAT,
-        loop_dir(class_name) / "scans" / slug(site["name"]) / f"w{w['n']}.jpg",
+        zoom, w["west"], w["south"], w["east"], w["north"], common.DEFAULT_TILESET, common.DEFAULT_FORMAT,
+        loop_dir(class_name) / "scans" / slug(site["name"]) / f"w{w['n']}{suffix}.jpg",
     )
     with Image.open(path) as raw:
-        return common.resample_to_target_gsd(raw.convert("RGB"), common.meters_per_pixel(FETCH_ZOOM, w["lat"]))
+        return common.resample_to_target_gsd(raw.convert("RGB"), common.meters_per_pixel(zoom, w["lat"]))
 
 
 def to_geo(w: dict, x_px: float, y_px: float, W: int, H: int) -> tuple[float, float]:

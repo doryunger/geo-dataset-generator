@@ -30,10 +30,21 @@ uses one refinery site from the OSM layer and produces samples, hard negatives a
 number. The class is finished when coverage on a *fresh* site stops improving.
 
 **One round, in order:**
+**The round's end, for each class separately (2026-09-25).** Every site is reviewed for both
+`distillation-column` and `fan-unit`. Propose with the class's newest version. After the sweep and
+triage, score newest and the class's best on that site with `coverage.py --models <best>,<newest>`
+(the site's drawn misses + triage yeses are its complete ground truth for the swept windows, and
+neither version has trained on it yet). Adopt the newest as best only if it finds more at no more
+false positives and holds the held-out / look-alike / demo checks. Then apply the review and train
+the next version of each class with `--epochs 60 --patience 0 --keep last` (one seed; more only when
+a result is borderline) and evaluate it through the app path. Fan-unit had been frozen at v33 while
+its samples went 382 -> 688; that is the gap this rule closes.
+
 
 1. Pick a site: `python scripts/loop/sites.py --class <cls> --list` (on Windows prefix
    `PYTHONIOENCODING=utf-8` -- site names carry accents the cp1252 console cannot print and the
-   listing dies mid-way otherwise). Prefer sites with
+   listing dies mid-way otherwise). Sites marked `HELD-OUT` are off limits -- `scan.py` refuses
+   them; they are `benchmark.json`'s `held_out` list and exist only to be measured. Prefer sites with
    `sampled=0` and `sharpness_vs_train` near 1.0; scan a few unscored candidates first, then
    `--score`. Sharpness is a coarse gate (Mapbox coverage is soft across much of south-east
    Europe and the model does not transfer to it); obliqueness has to be judged by eye from the
@@ -73,6 +84,15 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    Coverage of vN on the site = yeses / (yeses + polygons); precision = yeses /
    (yeses + noes). This split (misses by drawing, hits by judging) is what reviewers naturally
    do and is far cheaper than polygoning everything.
+   Nothing the model detects is hidden (2026-09-24): the scan drops only true duplicates from
+   overlapping windows (IoU >= 0.5); proposals on already-labelled objects are shown in **blue**
+   on the sweep and left out of the triage. Before this an 8 m dedupe hid neighbouring fans in a
+   bank and labelled objects vanished, so the reviewer redrew fans the model had found. The
+   triage has three verdicts: yes (sample), no (stored as a hard negative, left out of training)
+   and **no + train on it** (key H, an enabled hard negative). The page shows the enabled
+   hard-negative pool against the positive count as you go -- the 2026-09-25 A/B (v48 with the
+   191 look-alike negatives on: 12/24 held-out, 0/39 look-alikes; v49 with them off: 6/24 and
+   2/39) says negatives help, so the point is to add them deliberately, not to avoid them.
    On a site much bigger than the swept 60 windows (Normandie: 308 windows, 112 proposals of
    which 29 inside the sweep), also build `--swept-by <sweep json> --outside-sweep`: the
    proposals in the unswept windows, as a separate page and JSON (`-outside`). `apply.py` ingests
@@ -98,6 +118,10 @@ number. The class is finished when coverage on a *fresh* site stops improving.
    and the new data waits for the next round. Prefer training the candidate as a fine-tune of
    the incumbent (`train_obb.py --base-model models/<cls>_obb_vN.pt --epochs 20 --lr0 0.0002`)
    over a fresh run from `yolo11n-obb.pt`; see the log below for why.
+   **The site-level number that counts is held-out recall**: `INFERENCE_DEVICE=cuda python
+   scripts/eval_sites.py --class <cls> --held-out --cache <file>` runs the app's own site path over
+   refineries that have never been labelled. `positives` in `benchmark.json` are all training sites
+   (every one holds 10-32 column samples), so their verdict measures memory, not generalisation.
 9. Next site. Re-run `coverage.py --models vN,vN+1` on every earlier sweep to see the trend.
 10. Control: `python scripts/loop/groups.py --class <cls>` lists every group of samples and
    negatives by provenance with enabled counts; `--enable/--disable <group> [--limit N]`
@@ -192,10 +216,17 @@ coarse gate, not a guarantee: La Rábida scored 0.92 and was still near-nadir.
 **Slugs are ASCII.** Site names with accents produced a page that could not save to the
 artifact store (document ids reject non-ASCII); `loop_common.slug` strips them.
 
-**Same 120 m / 60 m / z18 geometry everywhere.** `site_windows` is the one place the grid is
+**Same 120 m / 60 m geometry everywhere.** `site_windows` is the one place the grid is
 computed, so a sweep's window ids, a scan's candidates and a later coverage run line up exactly
 across model versions. Changing `WINDOW_M` or `PAD_M` invalidates comparability with earlier
 sweeps of the same site.
+
+**The model sees z17, the reviewer sees z18 (2026-09-26).** `scan.py`, `coverage.py` and
+`benchmark.py` run the model on `DETECT_FETCH_ZOOM` (17) windows, cached as `w<n>_z17.jpg`,
+because that is what the app detects on. Sweep pages and triage thumbnails still show the z18
+window (`w<n>.jpg`), because a reviewer cannot judge or draw columns on z17. Detections are
+stored in geo coordinates, so the two line up. Coverage and benchmark numbers from before this
+date were measured at z18 and are not comparable with later ones.
 
 ## Sites flagged blurry by the reviewer (candidates for a later ablation)
 
@@ -238,6 +269,54 @@ confidence); `v17` = those plus the top 25 of BP Rotterdam's 77 in-place rejecti
 (`loop-triage-rejected:bp_raffinaderij_rotterdam:v16`), 111 positive images to 48 negative crops.
 
 ## Round log and current state
+
+**Train/app resolution mismatch (2026-09-26).** Training crops (`sample_fetch_zoom` 18) and loop
+scans (`FETCH_ZOOM` 18) come from z18 @2x tiles, about 0.19 m/px of real detail. The app detects
+on `DETECT_ZOOM` 17, about 0.38 m/px. Both are resampled to 0.125 m/px, so objects are the same
+pixel size, but the app's image has half the detail. On 40 random training samples rendered
+both ways, columns v61 at >= 0.65 found 35/40 at z18 and 17/40 at z17 (misses below 0.25: 1 vs
+16), and fan-unit v33 found 30/40 vs 20/40. So samples and loop coverage improve the model at
+z18, and the app only partly benefits. This is the likely reason site-level results stopped
+moving. `extra_fetch_zooms` in a class's `subclass_graph.json` adds a render of every sample and
+hard negative at each listed zoom, as `<id>_z17` in the same split. Columns now have `[17]`.
+`v62` is the first model trained on it (60 epochs, keep last, seed 0, package built locally
+without an S3 upload; 1370 positive + 868 negative images). On the same 40-sample test v62 finds
+35/40 at z18 and 36/40 at z17 (mean confidence 0.80 / 0.81), so the gap is gone with nothing lost
+at z18. Those are training samples, so this shows the model now handles z17, not better
+generalisation. Through the app path (`site_detections_app_v62.json`, 8 min for the whole
+benchmark), the site verdicts match v61 exactly: 16/18 refineries, 0/39 look-alikes, 11/14
+held-out. The site test is saturated. Confident column boxes changed as follows (v61 -> v62):
+training refineries 291 -> 420 at >= 0.65 and 170 -> 313 at >= 0.78; held-out 208 -> 191 and
+75 -> 100; look-alikes 34 -> 25 and 11 -> 6. So v62 is more confident on refineries and fires
+less on non-refineries. One seed only. v62 replaced v55 in `oil_refinery`.
+Fan-unit got the same `[17]`. `fan-unit` `v35` (688 samples, 95 negatives, 60 epochs, keep last,
+seed 0): on the 40-sample test it finds 37/40 at both z18 and z17. The served v33 found 30 / 20,
+and v34 39 / 30. Through the app path with v62 + v35: 18/18 refineries (Gunvor and Rheinland
+Nord, which failed with v33 despite strong columns, now pass), 0/39 look-alikes, 11/14 held-out.
+Fan-unit boxes >= 0.65 went 529 -> 2084 on training refineries and 155 -> 407 on look-alikes
+(factory rooftop fans are real), and 621 -> 704 >= 0.7 on held-out. v35 replaced v33 in
+`oil_refinery`, and both models were pushed to S3 with `app_assets.py push`.
+
+**Seeds, fixed epochs and v55 (2026-09-25).** Livorno, Litvinov and Sarpom (sharp, never
+trained on) took columns 476 -> 533 samples. Trained fresh with early stopping, three seeds on the
+identical dataset kept epochs 17/5/4 and found 12/2/15 of the 24 held-out refineries -- the
+34-image validation split picks "best" nearly at random and early stopping ends lucky-early runs.
+With `--epochs 60 --patience 0 --keep last` the same three seeds gave 11/10/9 held-out, 16/18
+trained refineries each, 0/0/1 of 39 look-alikes, and all 14 demo sites correct. `v55` (seed 0)
+replaced `v46` (6/24) in `oil_refinery`. Also measured under the old setup: dropping the 191
+look-alike negatives averaged 5.7 held-out vs 9.7 with them (3 seeds each) and turned
+look-alikes red twice, so they stay. Judge every new candidate over 2-3 seeds with the fixed
+setup; one run is not a result.
+
+**Held-out refineries (2026-09-24).** Every `positives` site in `benchmark.json` turned out to be
+a training site, so the site test's 18/18 was memory. 24 refineries with no sample or hard
+negative within ~1 km were frozen as `held_out`. v46 through the app's own site path: 6/24 at the
+production graph (column >= 0.65, count 3), 0/39 look-alikes. Sweep from a cache detected at a
+0.4 column floor (`--floor` now lowers the detection-time floor too): distance has no effect;
+count 2 -> 9/24; **floor 0.5 + count 2 -> 13/24 at 0/39**, Dow Portugal and Exxonmobil still
+rejected; floor 0.4 + count 2 -> 14/24 but Dow and Chane terminal go red. 0.5 was chosen looking
+at the held-out set, so 13/24 is slightly optimistic. Of the 10 still missed at 0.4 + count 2, three have no column at all (Sisak, Vega, Harwich),
+St1 (0.85) and Nynas have columns but no fan-unit, the rest have at most one column.
 
 **Promoted to production (2026-09-23).** `distillation-column` data moved out of `experiments/`
 into `classes/` and `loop/`; further rounds run without `WORKSPACE`.

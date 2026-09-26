@@ -39,6 +39,33 @@
       "to": "distillation-column",
       "min_confidence": 0.65,
       "min_count": 3
+    },
+    {
+      "relation": "proximity",
+      "site": "oil_refinery",
+      "from": "distillation-column",
+      "to": "storage tank",
+      "min_distance_m": 0,
+      "max_distance_m": 450,
+      "boost": 0.1
+    },
+    {
+      "relation": "proximity",
+      "site": "oil_refinery",
+      "from": "distillation-column",
+      "to": "fan-unit",
+      "min_distance_m": 0,
+      "max_distance_m": 450,
+      "boost": 0.1
+    },
+    {
+      "relation": "proximity",
+      "site": "oil_refinery",
+      "from": "distillation-column",
+      "to": "distillation-column",
+      "min_distance_m": 0,
+      "max_distance_m": 450,
+      "boost": 0.1
     }
   ]
 }

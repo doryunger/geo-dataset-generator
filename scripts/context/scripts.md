@@ -464,6 +464,23 @@ both fine-tuned from `v18` at the auto rate on +47 samples, each lost 5-10 of v1
 confident hits at Scholven, multiplied Godorf's false positives and let a factory site cross
 0.7 -- at the auto rate a fine-tune moves the model as far as training from scratch does.
 
+**`--seed`** (2026-09-25) is passed to ultralytics, which otherwise always trains with seed 0 --
+so re-running the same dataset reproduces the same model bit for bit (`distillation-column` v50,
+meant as a repeat of v48, came back identical down to the best epoch). A different seed changes
+the head's initial weights, batch order and augmentation draws; it is the only way to see
+run-to-run spread. The seed is recorded in `<model>_metrics.json`.
+
+**`--keep last`** (2026-09-25) copies the final epoch's weights instead of ultralytics' `best.pt`.
+`best.pt` is chosen by fitness on the validation split, which for `distillation-column` is 34
+images holding 17 columns -- small enough that "best" is mostly chance. Three seeds on the same
+dataset kept epochs 17, 5 and 4 and gave 12, 2 and 15 of 24 held-out refineries; early stopping
+(`patience`) keys off the same score, so an early lucky peak also ends the run early. Pair it
+with `--patience 0` and a fixed `--epochs`.
+
+**`data_yaml_override` / `--data-dir`** points training at a dataset other than the class's own
+`dataset_obb/` -- a combined parent+sub-class dataset (`obb.generate_combined_obb_dataset`), or
+a copied package for an A/B run. The class name still names the output model and metrics files.
+
 **Folds are built from whole sites, not random sample ids (2026-09-14).** `make_folds` bin-packs
 `obb.cluster_sites` output largest-site-first into the emptiest fold, so no site is ever split
 across folds. The previous `random.shuffle` + stride-slice put objects that sit inside each other's

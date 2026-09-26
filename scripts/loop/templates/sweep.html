@@ -65,6 +65,7 @@
   .legend span { display: inline-flex; align-items: center; gap: 7px; }
   .sw { width: 22px; height: 14px; border-radius: 3px; border: 3px solid; flex: none; }
   .sw.known { border-color: #40dc6e; }
+  .sw.labelled { border-color: #5096ff; }
   .sw.miss { border-color: var(--marker); border-radius: 50%; width: 16px; height: 16px; }
 
   .rail { display: flex; gap: 1px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--line); }
@@ -135,6 +136,7 @@
     <p class="lede">__LEDE__</p>
     <div class="legend">
       <span><i class="sw known"></i>model proposal (with confidence)</span>
+      <span><i class="sw labelled"></i>proposal on an already-labelled __OBJECT__</span>
       <span><i class="sw miss"></i>your polygon: a real __OBJECT__</span>
     </div>
     <div class="rail" id="rail"></div>
