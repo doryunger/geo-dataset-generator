@@ -21,8 +21,9 @@ def scan(class_name: str, site: dict, version: str, conf: float, quiet: bool = F
     cands, kept, t0 = [], [], time.time()
 
     for i, w in enumerate(windows, 1):
-        im = L.window_image(class_name, site, w)
+        im = L.window_image(class_name, site, w, L.DETECT_FETCH_ZOOM)
         W, H = im.size
+        view = None
         r = model.predict(im, conf=conf, imgsz=max(32, math.ceil(max(W, H) / 32) * 32), verbose=False)[0]
         if r.obb is None or len(r.obb) == 0:
             continue
@@ -36,12 +37,17 @@ def scan(class_name: str, site: dict, version: str, conf: float, quiet: bool = F
             labelled = any(L.iou(gp, lp) >= 0.2 for lp in label_polys)
             cx, cy = sum(p[0] for p in pts) / 4, sum(p[1] for p in pts) / 4
             lon, lat = L.to_geo(w, cx, cy, W, H)
+            if view is None:
+                view = L.window_image(class_name, site, w)
+            VW, VH = view.size
+            vpts = [(x * VW / W, y * VH / H) for x, y in pts]
+            vcx, vcy = cx * VW / W, cy * VH / H
             half = L.CROP_PX / 2
-            left = max(0, min(int(round(cx - half)), W - L.CROP_PX))
-            top = max(0, min(int(round(cy - half)), H - L.CROP_PX))
-            tile = im.crop((left, top, left + L.CROP_PX, top + L.CROP_PX)).copy()
+            left = max(0, min(int(round(vcx - half)), VW - L.CROP_PX))
+            top = max(0, min(int(round(vcy - half)), VH - L.CROP_PX))
+            tile = view.crop((left, top, left + L.CROP_PX, top + L.CROP_PX)).copy()
             d = ImageDraw.Draw(tile)
-            sh = [(x - left, y - top) for x, y in pts]
+            sh = [(x - left, y - top) for x, y in vpts]
             d.line(sh + [sh[0]], fill=(255, 214, 64), width=3)
             buf = io.BytesIO()
             tile.save(buf, format="JPEG", quality=72, optimize=True)

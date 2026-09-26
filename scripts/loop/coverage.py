@@ -48,7 +48,7 @@ def main():
         model = YOLO(str(common.MODELS_DIR / f"{common.class_slug(args.class_name)}_obb_{version}.pt"))
         dets = []
         for w in swept:
-            im = L.window_image(args.class_name, site, w)
+            im = L.window_image(args.class_name, site, w, L.DETECT_FETCH_ZOOM)
             W, H = im.size
             r = model.predict(im, conf=0.10, imgsz=max(32, math.ceil(max(W, H) / 32) * 32), verbose=False)[0]
             if r.obb is None:

@@ -12,6 +12,7 @@ import common  # noqa: E402
 WINDOW_M = 120.0
 PAD_M = 60.0
 FETCH_ZOOM = 18
+DETECT_FETCH_ZOOM = 17
 DUPLICATE_IOU = 0.5
 MATCH_M = 8.0
 CROP_PX = 300
@@ -94,15 +95,16 @@ def site_windows(site: dict) -> list[dict]:
     return out
 
 
-def window_image(class_name: str, site: dict, w: dict):
+def window_image(class_name: str, site: dict, w: dict, zoom: int = FETCH_ZOOM):
     from PIL import Image
 
+    suffix = "" if zoom == FETCH_ZOOM else f"_z{zoom}"
     path = common.fetch_and_crop_bbox(
-        FETCH_ZOOM, w["west"], w["south"], w["east"], w["north"], common.DEFAULT_TILESET, common.DEFAULT_FORMAT,
-        loop_dir(class_name) / "scans" / slug(site["name"]) / f"w{w['n']}.jpg",
+        zoom, w["west"], w["south"], w["east"], w["north"], common.DEFAULT_TILESET, common.DEFAULT_FORMAT,
+        loop_dir(class_name) / "scans" / slug(site["name"]) / f"w{w['n']}{suffix}.jpg",
     )
     with Image.open(path) as raw:
-        return common.resample_to_target_gsd(raw.convert("RGB"), common.meters_per_pixel(FETCH_ZOOM, w["lat"]))
+        return common.resample_to_target_gsd(raw.convert("RGB"), common.meters_per_pixel(zoom, w["lat"]))
 
 
 def to_geo(w: dict, x_px: float, y_px: float, W: int, H: int) -> tuple[float, float]:

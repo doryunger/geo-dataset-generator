@@ -216,10 +216,17 @@ coarse gate, not a guarantee: La Rábida scored 0.92 and was still near-nadir.
 **Slugs are ASCII.** Site names with accents produced a page that could not save to the
 artifact store (document ids reject non-ASCII); `loop_common.slug` strips them.
 
-**Same 120 m / 60 m / z18 geometry everywhere.** `site_windows` is the one place the grid is
+**Same 120 m / 60 m geometry everywhere.** `site_windows` is the one place the grid is
 computed, so a sweep's window ids, a scan's candidates and a later coverage run line up exactly
 across model versions. Changing `WINDOW_M` or `PAD_M` invalidates comparability with earlier
 sweeps of the same site.
+
+**The model sees z17, the reviewer sees z18 (2026-09-26).** `scan.py`, `coverage.py` and
+`benchmark.py` run the model on `DETECT_FETCH_ZOOM` (17) windows, cached as `w<n>_z17.jpg`,
+because that is what the app detects on. Sweep pages and triage thumbnails still show the z18
+window (`w<n>.jpg`), because a reviewer cannot judge or draw columns on z17. Detections are
+stored in geo coordinates, so the two line up. Coverage and benchmark numbers from before this
+date were measured at z18 and are not comparable with later ones.
 
 ## Sites flagged blurry by the reviewer (candidates for a later ablation)
 
