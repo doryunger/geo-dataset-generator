@@ -297,6 +297,22 @@ Fan-unit boxes >= 0.65 went 529 -> 2084 on training refineries and 155 -> 407 on
 (factory rooftop fans are real), and 621 -> 704 >= 0.7 on held-out. v35 replaced v33 in
 `oil_refinery`, and both models were pushed to S3 with `app_assets.py push`.
 
+**Fan-unit on trees (2026-09-26).** In the app, v35 fired at 0.8+ on tree canopy (Petronor tile
+17/64400/47996: v35 0.88/0.85/0.72, v33 nothing). Fan-unit boxes >= 0.78 on look-alikes went
+85 -> 255. The z17 copies taught the model that soft, round, textured blobs are fans, and the 95
+fan-unit negatives had almost no canopy in them. The fix is hard negatives. v35 scanned the 18
+benchmark refineries (column-loop sites, no fan-unit samples) at >= 0.7: 369 boxes, reviewed
+as 202 real fans (new samples), 159 not fans (enabled negatives), 8 unsure. Fan-unit is now 890
+samples and 254 enabled negatives. `v36` is training on that. A 195-box page of the look-alike
+sites is not reviewed yet. The scan and pages ran from `main`'s loop code by mistake, so the
+boxes were detected at z18 and the page had no H key. The "no" verdicts were converted to
+"neg" before `apply.py`. v36 through the app path (column v62): no fan-unit boxes on the Petronor tree tiles.
+Fan-unit boxes >= 0.7 / >= 0.8 by version (v33 / v35 / v36): look-alikes 155/64, 407/205, 93/58;
+held-out 621/308, 704/574, 620/539; training refineries 529/285, 2084/1406, 424/374. Site
+verdicts: 17/18 refineries, 0/39 look-alikes, 11/14 held-out. Rheinland Nord fails again despite
+fan-unit 0.91, column 0.91 and tank 0.95; that is a site-rule question, not a detector one. v36
+replaced v35 in `oil_refinery` and was pushed to S3.
+
 **Seeds, fixed epochs and v55 (2026-09-25).** Livorno, Litvinov and Sarpom (sharp, never
 trained on) took columns 476 -> 533 samples. Trained fresh with early stopping, three seeds on the
 identical dataset kept epochs 17/5/4 and found 12/2/15 of the 24 held-out refineries -- the
