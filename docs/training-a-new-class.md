@@ -93,9 +93,10 @@ The reviewer's share is steps 3 and 5: roughly ten minutes for 60 windows and 30
 
 ## 4. The gate: `benchmark.py`
 
-`benchmark.json` lists two things: **positives** — every swept site with its sweep and triage
-files, so ground truth grows by one site per round — and **negatives** — sites of the kind the
-class must *not* fire on. For each model version it prints, per positive site, hits and false
+`benchmark.json` lists three things: **positives** — every swept site with its sweep and triage
+files, so ground truth grows by one site per round — **negatives** — sites of the kind the
+class must *not* fire on — and **held_out** — refineries that are never labelled, the only
+honest measure of whether the model finds refineries it has not seen. For each model version it prints, per positive site, hits and false
 positives at ≥ 0.5 and the count at ≥ 0.7; per negative site, the count at ≥ 0.5 and ≥ 0.7 and
 the maximum confidence.
 
@@ -123,13 +124,14 @@ Negative layers, in the order they are being added:
    — `industrial=oil` also tags refineries and crackers. `sites.py --geojson <file> --layer
    <name>` merges without touching the refinery list; scan once, add to `benchmark.json`.
 3. **The site classifier itself** — in place: `scripts/eval_sites.py` runs the server's
-   own detection and classification over every benchmark site and prints the verdict per site.
-   This is the final word: when it and the object gate disagree, the site test wins (it did for
-   `v46`, which scored lower on clean object detections but took the site test from 12/18 to
-   18/18 refineries at 0/31 look-alikes). Detections are cached per tile, so graph parameters
-   (`--floor`, `--count`, `--min-types`, `--max-distance-m`) are swept in seconds; only a new
-   model needs a fresh ~45-minute detect. Always finish with a batch of look-alikes the model
-   has never seen — the ones whose rejections it trained on are memorised, not generalised.
+   own site path (prefetch, detection queue, graph) over every benchmark site and prints the
+   verdict per site and a tally per group. This is the final word: when it and the object gate
+   disagree, the site test wins. **Read the `held-out` tally, not the `refinery` one**: every
+   positive is a site the model trained on, so `v46`'s 18/18 there (2026-09-22) was memory; on 24
+   never-labelled refineries it found 6 (2026-09-24). The same goes for look-alikes whose
+   rejections it trained on. Detections are cached per tile, so graph parameters (`--floor`,
+   `--count`, `--min-types`, `--max-distance-m`) are swept in seconds; only a new model needs a
+   fresh detect. `--held-out` runs just the held-out group.
 
 ## 4b. The look-alike round
 

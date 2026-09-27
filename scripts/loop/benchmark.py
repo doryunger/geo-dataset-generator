@@ -23,7 +23,7 @@ from apply import _sweep_polygons, _triage_items
 def _detect(model, class_name, site, windows):
     dets = []
     for w in windows:
-        im = L.window_image(class_name, site, w)
+        im = L.window_image(class_name, site, w, L.DETECT_FETCH_ZOOM)
         W, H = im.size
         r = model.predict(im, conf=0.10, imgsz=max(32, math.ceil(max(W, H) / 32) * 32), verbose=False)[0]
         if r.obb is None:

@@ -99,6 +99,7 @@
   .seg.yes { background: var(--accent); }
   .seg.no { background: var(--reject); }
   .seg.skip { background: var(--marker); }
+  .seg.neg { background: var(--reject); }
   .seg.at { background: var(--ink); }
 
   .tally {
@@ -137,6 +138,10 @@
   button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   .btn-yes { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
   .btn-no { background: var(--reject-soft); border-color: var(--reject); color: var(--reject); }
+  .btn-neg { background: var(--reject); border-color: var(--reject); color: var(--surface); }
+  .btn-neg kbd { font-family: var(--mono); font-size: 11px; opacity: .75; margin-left: 6px; }
+  .pool { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pool b { color: var(--ink); font-weight: 600; }
   .btn-yes kbd, .btn-no kbd, .minor kbd { font-family: var(--mono); font-size: 11px; opacity: .75; margin-left: 6px; }
   .minor-row { display: flex; gap: 10px; }
   .minor { flex: 1; font-size: 13px; font-weight: 500; padding: 9px; color: var(--muted); }
@@ -184,8 +189,10 @@
       <span><b id="t-done">0</b>/<span id="t-all">0</span> reviewed</span>
       <span>__YES_SHORT__ <b id="t-yes">0</b></span>
       <span>__NO_SHORT__ <b id="t-no">0</b></span>
+      <span>hard neg <b id="t-neg">0</b></span>
       <span>unsure <b id="t-skip">0</b></span>
     </div>
+    <div class="pool" __TRAINING_ONLY__>Hard-negative pool: __POOL_ON__ enabled + <b id="p-new">0</b> from this page = <b id="p-total">__POOL_ON__</b> against <b id="p-pos">__POSITIVES__</b> positives (ratio <b id="p-ratio">—</b>)</div>
   </header>
 
   <section class="card" id="info">
@@ -200,6 +207,7 @@
   <div class="actions" id="actions">
     <button class="btn-yes" id="b-yes" type="button">__YES__<kbd>F</kbd></button>
     <button class="btn-no" id="b-no" type="button">__NO__<kbd>N</kbd></button>
+    <button class="btn-neg" id="b-neg" type="button" __TRAINING_ONLY__>__NO__ &middot; train on it as a hard negative<kbd>H</kbd></button>
   </div>
   <div class="minor-row">
     <button class="minor" id="b-back" type="button">Back<kbd>&larr;</kbd></button>
@@ -211,6 +219,7 @@
     <div class="stat-row">
       <div class="stat"><b id="d-yes">0</b><span>__YES_SHORT__</span></div>
       <div class="stat"><b id="d-no">0</b><span>__NO_SHORT__</span></div>
+      <div class="stat"><b id="d-neg">0</b><span>hard neg</span></div>
       <div class="stat"><b id="d-skip">0</b><span>unsure</span></div>
     </div>
     <p id="d-note">Decisions are saved. You can reopen this page to revise any of them.</p>
@@ -230,6 +239,7 @@
 (function () {
   "use strict";
   var CANDS = JSON.parse(document.getElementById("candidate-data").textContent);
+  var POOL_ON = __POOL_ON__, POSITIVES = __POSITIVES__;
   var DOC = "__DOC__";
   var LS = "__LS__";
 
@@ -278,7 +288,7 @@
   }
 
   function counts() {
-    var c = { yes: 0, no: 0, skip: 0 };
+    var c = { yes: 0, no: 0, neg: 0, skip: 0 };
     Object.keys(decisions).forEach(function (k) { if (c[decisions[k]] !== undefined) c[decisions[k]]++; });
     return c;
   }
@@ -290,12 +300,17 @@
 
   function render() {
     var c = counts();
-    var total = c.yes + c.no + c.skip;
+    var total = c.yes + c.no + c.neg + c.skip;
     $("t-done").textContent = total;
     $("t-all").textContent = CANDS.length;
     $("t-yes").textContent = c.yes;
     $("t-no").textContent = c.no;
     $("t-skip").textContent = c.skip;
+    $("t-neg").textContent = c.neg;
+    $("p-new").textContent = c.neg;
+    $("p-total").textContent = POOL_ON + c.neg;
+    $("p-pos").textContent = POSITIVES + c.yes;
+    $("p-ratio").textContent = ((POOL_ON + c.neg) / Math.max(1, POSITIVES + c.yes)).toFixed(2);
 
     segs.forEach(function (s, i) {
       var d = decisions[CANDS[i].id];
@@ -312,6 +327,7 @@
       $("d-yes").textContent = c.yes;
       $("d-no").textContent = c.no;
       $("d-skip").textContent = c.skip;
+      $("d-neg").textContent = c.neg;
       return;
     }
 
@@ -340,6 +356,7 @@
 
   $("b-yes").addEventListener("click", function () { decide("yes"); });
   $("b-no").addEventListener("click", function () { decide("no"); });
+  $("b-neg").addEventListener("click", function () { decide("neg"); });
   $("b-skip").addEventListener("click", function () { decide("skip"); });
   $("b-back").addEventListener("click", back);
   $("b-again").addEventListener("click", function () { idx = 0; render(); });
@@ -365,6 +382,7 @@
     var k = e.key.toLowerCase();
     if (k === "f" || k === "y" || k === "k" || k === "arrowright") { e.preventDefault(); decide("yes"); }
     else if (k === "n" || k === "x" || k === "d") { e.preventDefault(); decide("no"); }
+    else if (k === "h") { e.preventDefault(); decide("neg"); }
     else if (k === "s") { e.preventDefault(); decide("skip"); }
     else if (k === "arrowleft" || k === "u") { e.preventDefault(); back(); }
   });

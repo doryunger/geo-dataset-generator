@@ -63,7 +63,9 @@ def _triage_items(class_name: str, review: dict) -> tuple[list, list, list]:
         c = by_id.get(unicodedata.normalize("NFC", cid))
         if c is None:
             continue
-        {"yes": yes, "no": no}.get(verdict, skip).append(c)
+        if verdict == "neg":
+            c = {**c, "train_as_negative": True}
+        {"yes": yes, "no": no, "neg": no}.get(verdict, skip).append(c)
     return yes, no, skip
 
 
@@ -103,7 +105,7 @@ def main():
         return
 
     yes, no, skip = _triage_items(args.class_name, review)
-    print(f"triage of {review.get('site')} ({review.get('model')}): {len(yes)} yes, {len(no)} no, {len(skip)} unsure")
+    print(f"triage of {review.get('site')} ({review.get('model')}): {len(yes)} yes, {len(no)} no ({sum(1 for c in no if c.get('train_as_negative'))} as enabled hard negatives), {len(skip)} unsure")
     if yes:
         print("  precision by band:", {b: f"{sum(1 for c in yes if c['conf'] >= b)}/{sum(1 for c in yes + no if c['conf'] >= b)}" for b in (0.25, 0.4, 0.5, 0.7)})
     if args.dry_run:
@@ -115,10 +117,10 @@ def main():
         lats = [p[1] for p in c["polygon"]]
         common.add_hard_negative(args.class_name, {
             "id": f"tri_{c['id']}", "west": min(lons), "south": min(lats), "east": max(lons), "north": max(lats),
-            "polygon": c["polygon"], "added_at": time.time(), "enabled": False,
+            "polygon": c["polygon"], "added_at": time.time(), "enabled": bool(c.get("train_as_negative")),
             "origin": {**origin_base, "source": "loop-triage-rejected", "conf": c["conf"]},
         })
-    print(f"samples now {len(common.load_samples(args.class_name))}; hard negatives {len(common.load_hard_negatives(args.class_name))} (new ones disabled)")
+    print(f"samples now {len(common.load_samples(args.class_name))}; hard negatives {len(common.load_hard_negatives(args.class_name))}, {sum(1 for r in common.load_hard_negatives(args.class_name) if r.get('enabled', True))} enabled")
 
 
 if __name__ == "__main__":

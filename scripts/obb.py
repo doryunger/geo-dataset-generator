@@ -349,6 +349,7 @@ def _generate_pieces_for_class(
     normalize_sample_crop = node_cfg.get("normalize_sample_crop", DEFAULT_NORMALIZE_SAMPLE_CROP)
     uniform_bucket = node_cfg.get("uniform_crop_bucket", DEFAULT_UNIFORM_CROP_BUCKET)
     sample_fetch_zoom = node_cfg.get("sample_fetch_zoom", SAMPLE_FETCH_ZOOM)
+    extra_zooms = node_cfg.get("extra_fetch_zooms", [])
     val_ids = resolve_val_ids(samples, val_ids, class_name)
 
     counts = {"train": 0, "val": 0, "boxes": 0, "neighbor_boxes": 0}
@@ -362,32 +363,34 @@ def _generate_pieces_for_class(
         logger.info(f"[{class_name}] obb: sample {i + 1}/{len(samples)} ({row['id']}), split={split}")
         if on_progress:
             on_progress(i + 1, len(samples), row["id"])
-        west, south, east, north = row["west"], row["south"], row["east"], row["north"]
-        fetch_zoom = row["zoom"]
-        target_gsd_m = common.TARGET_GSD_M
-        if normalize_sample_crop:
-            img, west, south, east, north, fetch_zoom, target_gsd_m = _normalized_sample_crop(
-                row, uniform_bucket, sample_fetch_zoom,
-            )
-        else:
-            img = Image.open(src)
-        native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
-        img = common.resample_to_target_gsd(img, native_gsd_m, target_gsd_m)
-        w, h = img.size
-        normalized_ring = common.polygon_to_normalized(row["polygon"], west, south, east, north)
-        rects = polygon_to_obb_corners([(x * w, y * h) for x, y in normalized_ring])
+        for zoom in [sample_fetch_zoom] + (extra_zooms if normalize_sample_crop else []):
+            suffix = "" if zoom == sample_fetch_zoom else f"_z{zoom}"
+            west, south, east, north = row["west"], row["south"], row["east"], row["north"]
+            fetch_zoom = row["zoom"]
+            target_gsd_m = common.TARGET_GSD_M
+            if normalize_sample_crop:
+                img, west, south, east, north, fetch_zoom, target_gsd_m = _normalized_sample_crop(
+                    row, uniform_bucket, zoom,
+                )
+            else:
+                img = Image.open(src)
+            native_gsd_m = common.meters_per_pixel(fetch_zoom, (south + north) / 2)
+            img = common.resample_to_target_gsd(img, native_gsd_m, target_gsd_m)
+            w, h = img.size
+            normalized_ring = common.polygon_to_normalized(row["polygon"], west, south, east, north)
+            rects = polygon_to_obb_corners([(x * w, y * h) for x, y in normalized_ring])
 
-        own_lines = _window_label_lines(rects, 0, 0, w, h)
-        if not own_lines:
-            logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
-            continue
-        neighbor_rects = _neighbor_pixel_rects(samples, row["id"], west, south, east, north, w, h)
-        neighbor_lines = _window_label_lines(neighbor_rects, 0, 0, w, h)
-        img.convert("RGB").save(output_dir / "images" / split / f"{row['id']}{src.suffix}")
-        (output_dir / "labels" / split / f"{row['id']}.txt").write_text("\n".join(own_lines + neighbor_lines) + "\n")
-        counts[split] += 1
-        counts["boxes"] += len(own_lines) + len(neighbor_lines)
-        counts["neighbor_boxes"] += len(neighbor_lines)
+            own_lines = _window_label_lines(rects, 0, 0, w, h)
+            if not own_lines:
+                logger.warning(f"[{class_name}] obb: sample {row['id']} rect fell entirely outside its own image, skipping")
+                break
+            neighbor_rects = _neighbor_pixel_rects(samples, row["id"], west, south, east, north, w, h)
+            neighbor_lines = _window_label_lines(neighbor_rects, 0, 0, w, h)
+            img.convert("RGB").save(output_dir / "images" / split / f"{row['id']}{suffix}{src.suffix}")
+            (output_dir / "labels" / split / f"{row['id']}{suffix}.txt").write_text("\n".join(own_lines + neighbor_lines) + "\n")
+            counts[split] += 1
+            counts["boxes"] += len(own_lines) + len(neighbor_lines)
+            counts["neighbor_boxes"] += len(neighbor_lines)
     return counts
 
 
@@ -439,13 +442,15 @@ def generate_obb_package(
             if "polygon" not in row:
                 row = {**row, "polygon": _rect_polygon(row)}
             hn_split = _hard_negative_split(row, samples, resolved_val_ids)
-            n, kept = _hard_negative_crop(
-                output_dir, f"hardneg_{row['id']}", row, normalize_sample_crop, hn_split, sample_fetch_zoom,
-                samples=samples,
-            )
-            key = "negatives" if hn_split == "train" else "val_negatives"
-            counts[key] = counts.get(key, 0) + n
-            counts["positives_in_negatives"] = counts.get("positives_in_negatives", 0) + kept
+            for zoom in [sample_fetch_zoom] + (node_cfg.get("extra_fetch_zooms", []) if normalize_sample_crop else []):
+                suffix = "" if zoom == sample_fetch_zoom else f"_z{zoom}"
+                n, kept = _hard_negative_crop(
+                    output_dir, f"hardneg_{row['id']}{suffix}", row, normalize_sample_crop, hn_split, zoom,
+                    samples=samples,
+                )
+                key = "negatives" if hn_split == "train" else "val_negatives"
+                counts[key] = counts.get(key, 0) + n
+                counts["positives_in_negatives"] = counts.get("positives_in_negatives", 0) + kept
 
     ensure_obb_data_yaml(class_name)
     (output_dir / "groups.json").write_text(json.dumps(data_groups(class_name), indent=1))
