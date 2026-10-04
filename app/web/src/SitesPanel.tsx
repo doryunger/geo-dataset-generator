@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type CSSProperties } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { fetchSites, fetchStats, type Site } from './api'
 import {
   backendWarmed, modeChanged, type RootState, siteSelected, useAppDispatch, useAppSelector,
@@ -82,7 +82,7 @@ export default function SitesPanel() {
   const mode = useAppSelector((s: RootState) => s.map.mode)
   const backendWarm = useAppSelector((s: RootState) => s.connection.backendWarm)
   const [sites, setSites] = useState<Site[]>([])
-  const [introDone, setIntroDone] = useState(false)
+  const introDone = useRef(false)
 
   useEffect(() => {
     fetchSites().then(setSites).catch(() => setSites([]))
@@ -108,10 +108,10 @@ export default function SitesPanel() {
   }, [dispatch, backendWarm])
 
   useEffect(() => {
-    if (introDone || !backendWarm || sites.length === 0 || mode !== 'guided') return
-    setIntroDone(true)
+    if (introDone.current || !backendWarm || sites.length === 0 || mode !== 'guided') return
+    introDone.current = true
     dispatch(siteSelected({ site: sites[0] }))
-  }, [dispatch, introDone, backendWarm, sites, mode])
+  }, [dispatch, backendWarm, sites, mode])
 
   const free = mode === 'free'
   const busy = !backendWarm || sitePhase === 'landing' || sitePhase === 'processing'

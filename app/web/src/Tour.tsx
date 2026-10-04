@@ -211,9 +211,12 @@ export default function Tour() {
 
   useEffect(() => {
     if (flying) return
-    measure()
+    const frame = requestAnimationFrame(measure)
     window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('resize', measure)
+    }
   }, [measure, flying])
 
   useLayoutEffect(() => {

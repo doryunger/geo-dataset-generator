@@ -396,7 +396,8 @@ def _collect(p: dict, model_key: str, r) -> tuple[list[dict], dict[str, int]]:
     halo_dropped = 0
     for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
         class_name = r.names[int(cls_id)]
-        corners = [(pt[0] * src["scale_back_x"] - p["halo_px"], pt[1] * src["scale_back_y"] - p["halo_px"]) for pt in xy]
+        halo = p["halo_px"]
+        corners = [(pt[0] * src["scale_back_x"] - halo, pt[1] * src["scale_back_y"] - halo) for pt in xy]
         cx = sum(pt[0] for pt in corners) / 4
         cy = sum(pt[1] for pt in corners) / 4
         if not (0 <= cx < p["native_w"] and 0 <= cy < p["native_h"]):

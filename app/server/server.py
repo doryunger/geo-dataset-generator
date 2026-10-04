@@ -26,7 +26,8 @@ app = FastAPI(lifespan=lifespan)
 @app.middleware("http")
 async def count_requests(request: Request, call_next):
     if request.url.path != "/api/stats":
-        usage_log.record_request(usage_log.client_info(request.headers, request.client.host if request.client else None))
+        host = request.client.host if request.client else None
+        usage_log.record_request(usage_log.client_info(request.headers, host))
     return await call_next(request)
 
 
