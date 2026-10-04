@@ -18,7 +18,7 @@ for line in (REPO_ROOT / ".env").read_text().splitlines():
 
 import common  # noqa: E402
 import classifier  # noqa: E402
-import site_graph  # noqa: E402
+import scene_graph  # noqa: E402
 import sites as app_sites  # noqa: E402
 import tile_server  # noqa: E402
 import ws_server  # noqa: E402
@@ -73,7 +73,7 @@ def main():
     parser.add_argument("--count", action="append", default=[], metavar="COMPONENT=N", help="override a required component's min_count (repeatable)")
     args = parser.parse_args()
 
-    graph = site_graph.load_graph()
+    graph = scene_graph.load_graph()
     for spec in args.floor:
         comp, _, conf = spec.partition("=")
         for e in graph["edges"]:
@@ -87,11 +87,11 @@ def main():
                 e["min_count"] = int(n)
     if args.min_types is not None:
         for cfg_node in graph["nodes"].values():
-            if cfg_node["kind"] == "site":
+            if cfg_node["kind"] == "scene":
                 cfg_node["min_types_present"] = args.min_types
     if args.max_distance_m is not None:
         for cfg_node in graph["nodes"].values():
-            if cfg_node["kind"] == "site":
+            if cfg_node["kind"] == "scene":
                 cfg_node["default_max_distance_m"] = args.max_distance_m
                 cfg_node["merge_distance_m"] = args.max_distance_m
     cache = json.loads(args.cache.read_text()) if args.cache and args.cache.exists() else {}

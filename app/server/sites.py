@@ -12,7 +12,7 @@ import classifier  # noqa: E402
 import common  # noqa: E402
 import fuser  # noqa: E402
 import geometry  # noqa: E402
-import site_graph  # noqa: E402
+import scene_graph  # noqa: E402
 import tile_server  # noqa: E402
 
 SITES_PATH = REPO_ROOT / "app" / "data" / "sites.json"
@@ -40,7 +40,7 @@ def component_summary(detections: list[dict], graph: dict, ref_lat: float) -> li
         edge = edges.get(component, {})
         floor = edge.get("min_confidence", 0.0)
         min_count = edge.get("min_count", 1)
-        group_within_m = site_graph.group_within_m(graph, component)
+        group_within_m = scene_graph.group_within_m(graph, component)
         matching = [d for d in detections if fuser.same_concept(d["class_name"], component)]
         passing = [d for d in matching if d["confidence"] >= floor]
         groups = classifier.counted_groups(passing, graph, component, tile_server.DETECT_ZOOM, ref_lat)

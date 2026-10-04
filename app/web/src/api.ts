@@ -18,9 +18,9 @@ export async function fetchStats(): Promise<Stats> {
   return res.json()
 }
 
-export interface SiteFeatureProperties {
+export interface SceneFeatureProperties {
   id: string
-  site: string
+  scene: string
   matched_types: string[]
   type_coverage_ratio: number
   component_count: number
@@ -28,16 +28,16 @@ export interface SiteFeatureProperties {
   label_lat: number
 }
 
-export interface SiteFeatureCollection {
+export interface SceneFeatureCollection {
   type: 'FeatureCollection'
   features: {
     type: 'Feature'
     geometry: { type: 'Polygon'; coordinates: number[][][] }
-    properties: SiteFeatureProperties
+    properties: SceneFeatureProperties
   }[]
 }
 
-export const EMPTY_FEATURE_COLLECTION: SiteFeatureCollection = { type: 'FeatureCollection', features: [] }
+export const EMPTY_FEATURE_COLLECTION: SceneFeatureCollection = { type: 'FeatureCollection', features: [] }
 
 export interface Site {
   id: string
@@ -73,7 +73,7 @@ export const EMPTY_DETECTIONS: DetectionFeatureCollection = { type: 'FeatureColl
 
 export interface ResultMessage {
   type: 'extent' | 'extent_tile' | 'site_start' | 'site_tile' | 'site_done'
-  sites?: SiteFeatureCollection
+  scenes?: SceneFeatureCollection
   detections?: DetectionFeatureCollection
   components?: ComponentSummary[]
   site?: string

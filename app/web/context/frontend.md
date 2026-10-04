@@ -72,7 +72,7 @@ individual objects. Without the word the three numbers read as comparable and th
 The semantic-graph widget: parent node "oil refinery", four child nodes with their running count
 (`n / min_count` where the graph sets one). Child colour: grey = none at/above its floor, yellow =
 some but fewer than `min_count`, green = count reached. The parent is green only when the server's
-classifier actually identified a site (`sites.features.length > 0`), which is the 300 m rule --
+classifier actually identified a scene (`scenes.features.length > 0`), which is the 300 m rule --
 four green children with a grey parent is possible and correct. A caption saying so used to sit
 under the nodes; it was removed on 2026-09-23 (and had gone stale at "200 m" by then). Reads
 `s.map.graph`, which `resultReceived` sets from every server message, so it shows the site's
@@ -108,11 +108,11 @@ anything on its own. **Guided tour**: the site list drives everything and *no* e
 ever sent -- the extent-request effect and the gesture-cancel effect both return early. What the
 landing run produced stays on screen, untouched, until the next site is picked. **Free browsing**:
 there is no selected site, the list is disabled, and panning/zooming at zoom >= 16 requests tiles
-for the viewport as before. `modeChanged` clears selection, phase, graph, sites and detections on
+for the viewport as before. `modeChanged` clears selection, phase, graph, scenes and detections on
 either transition, and because `mode` is in the extent effect's deps, switching to free browsing
 immediately requests the current view rather than waiting for a pan.
 
-In free browsing, dropping below zoom 16 dispatches `roamCleared`, which empties graph, sites and
+In free browsing, dropping below zoom 16 dispatches `roamCleared`, which empties graph, scenes and
 detections. Without it the last thing detected stayed on the graph while the map showed open
 farmland, so the widget read as a verdict on whatever was in view. The extent effect also no longer
 re-runs when `mode` changes -- it reads the mode through `modeRef` and depends only on the viewport
@@ -130,7 +130,7 @@ clearing (a stale debounced `moveend` from the previous camera move could otherw
 the instant it finished, seen when clicking through sites quickly) went away with the clearing
 itself.
 
-`siteSelected` clears graph/sites/detections, sets `sitePhase: 'landing'` and a `flyTo` bbox.
+`siteSelected` clears graph/scenes/detections, sets `sitePhase: 'landing'` and a `flyTo` bbox.
 `Map.tsx` fits the bounds (padding 40, maxZoom 17 -- whole site in view, whatever zoom that is).
 On arrival it sends `{site}` over the socket and moves to `processing`; every `site_tile` message
 updates progress, detections and graph; `site_done` moves to `done`. While landing or processing
@@ -139,10 +139,10 @@ the word "processing" and a progress bar sits on top. The extent effect is gated
 processing in free browsing too, not only by mode -- an extent message mid-run would prune the
 site's queued jobs server-side (see the server doc).
 The site read-out in the top right (name, coverage, component count, matched types) renders from
-`store.sites`, and it is gated on guided tour: free browsing hides it even though roaming still
-produces `sites` from extent results, because a verdict box that re-derives itself as you pan was
+`store.scenes`, and it is gated on guided tour: free browsing hides it even though roaming still
+produces `scenes` from extent results, because a verdict box that re-derives itself as you pan was
 what made roaming feel like the site's answer was changing under you. It also clears the moment a
-new site is clicked, since `siteSelected` empties `sites` before the flight starts rather than
+new site is clicked, since `siteSelected` empties `scenes` before the flight starts rather than
 after the new results arrive.
 
 `resultReceived` ignores `site_*` messages whose `site` isn't the currently selected one, so a
@@ -150,7 +150,7 @@ late message from a cancelled run can't paint over a new selection. It also igno
 messages entirely while a site is selected -- now belt-and-braces, since guided tour no longer
 sends any, but it still catches an extent result already in flight when a site is picked.
 `site_tile` messages are
-deltas: their `detections` are appended to the store's collection, `sites` is only present when
+deltas: their `detections` are appended to the store's collection, `scenes` is only present when
 the server ran the classifier this second (else the previous polygons and `identified` stand), and
 `extent` messages replace everything as before. `extent_tile` messages (free roam) replace just
 that tile's features by the `tile` property, so roaming paints detections as each tile finishes
@@ -215,7 +215,7 @@ Detections are a GeoJSON source (`detection-outline` line layer at every zoom, `
 symbols from zoom 16) fed from each result's `detections` collection, replacing the raster
 `/api/detections` overlay that only existed at z17 -- a whole site sits at z14-15 and the boxes
 have to be visible there as tiles finish. The only polygon drawn is the classifier's hull of the
-detections (`site-boundaries`); the site's own OSM polygon is deliberately not drawn (see the
+detections (`scene-boundaries`); the site's own OSM polygon is deliberately not drawn (see the
 server doc).
 
 Repaints are coalesced to one every `REPAINT_INTERVAL_MS` (350 ms): a site sends a message per
@@ -249,7 +249,7 @@ the store; this slice is deliberately just the pieces that actually gate a rende
 - `zoom` -- the map's live zoom (updated on every MapLibre `'zoom'` event, no debounce). Only
   consumed for the "zoom in to detect" banner; unrelated to `viewport` below.
 - `mapLoaded` -- true once MapLibre's own `'load'` event has fired. Gates creation of the
-  `site-boundaries`/`site-labels` sources+layers, which can't be added before that.
+  `scene-boundaries`/`scene-labels` sources+layers, which can't be added before that.
 - `viewport` -- the map's *settled* view (debounced moveend, or immediately on `'load'`): zoom +
   lon/lat bounds, plain serializable fields, not a MapLibre `LngLatBounds` instance. `Map.tsx`'s
   request effect watches this and sends the full-viewport extent report whenever it changes --
@@ -293,7 +293,7 @@ newer generation as painted too, even though only the older one's data was actua
 Dispatched from `Map.tsx`'s mount-effect cleanup. React StrictMode's dev-mode mount->unmount->remount
 cycle would otherwise leave `mapLoaded` already `true` in the store from the *first* mount, so the
 layer-creation effect (keyed on `mapLoaded` flipping false->true) would never re-fire for the
-second, surviving map instance, and its `site-boundaries`/`site-labels` sources+layers would never
+second, surviving map instance, and its `scene-boundaries`/`scene-labels` sources+layers would never
 get created. Returns `initialState` directly (rather than resetting fields one by one) so it stays
 correct automatically if `MapState` ever grows a field.
 
@@ -324,25 +324,25 @@ below for why the data flow is split this way.
 
 ### Rejected-site verdict box (added 2026-09-24)
 
-When a guided site finishes with no identified site, the top-right verdict box still appears, as
+When a guided site finishes with no identified scene, the top-right verdict box still appears, as
 "no refinery identified" with the reason: coverage, the types that were met, and for each unmet
 type its count against `min_count` at its confidence floor. It is built from `graph.components`,
 the site-wide `component_summary`, because the backend sends no per-cluster scores for rejected
 clusters. That makes it an approximation: identification needs all the types inside one proximity
-cluster (`classifier._component_clusters_for_site`), so every type can pass site-wide while no
+cluster (`classifier._component_clusters_for_scene`), so every type can pass site-wide while no
 single cluster does. The box then says the types were found but weren't close enough to form one
 site, instead of listing a shortfall. Added so look-alikes show the reasoning behind a rejection
 as well as the red list entry.
 
 ### Zoom/viewport constants
 
-- `MIN_VISIBLE_ZOOM = 12` -- the three *site* layers (`site-fill`, `site-outline`, `site-label`)
-  carry this as their own `minzoom`, so the identified-site overlay doesn't render below it -- a
+- `MIN_VISIBLE_ZOOM = 12` -- the three *scene* layers (`scene-fill`, `scene-outline`, `scene-label`)
+  carry this as their own `minzoom`, so the identified-scene overlay doesn't render below it -- a
   purely visual floor (MapLibre's per-layer `minzoom`, not a source-level or network-level gate).
-  Deliberately scoped to just the site layers, not `basemap`/`detections` too (an earlier version of
-  this applied it to all five layers, which was wrong -- the ask was specifically to hide the site
+  Deliberately scoped to just the scene layers, not `basemap`/`detections` too (an earlier version of
+  this applied it to all five layers, which was wrong -- the ask was specifically to hide the scene
   overlay at low zoom, not the whole map). Independent of `MIN_DETECT_ZOOM` below: this one is about
-  when the site overlay looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is about
+  when the scene overlay looks too zoomed-out to be useful to look at; `MIN_DETECT_ZOOM` is about
   when it's worth spending backend queue/worker time at all.
 - `MIN_DETECT_ZOOM = 16` -- the floor below which nothing here does anything at all, not even
   reporting a live view. Deliberately below the server's `DETECT_ZOOM` (`tile_server.py`, currently
@@ -375,10 +375,10 @@ as well as the red list entry.
 
 ### `maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')`
 
-**Real bug found and fixed 2026-09-23**: every GeoJSON-backed layer (`detections`, `site-fill`/
-`site-outline`) was silently invisible in production -- the raster `basemap` rendered fine and the
+**Real bug found and fixed 2026-09-23**: every GeoJSON-backed layer (`detections`, `scene-fill`/
+`scene-outline`) was silently invisible in production -- the raster `basemap` rendered fine and the
 graph panel's counts updated correctly (they come straight from the websocket payload, no MapLibre
-involved), but no detection outlines or site boundaries ever appeared on the map. Every
+involved), but no detection outlines or scene boundaries ever appeared on the map. Every
 `setData()` call carried the right, growing feature count, the layer order was correct, yet
 `map.querySourceFeatures('detections')` stayed at 0 and `sourcedata` fired for `detections` exactly
 once (the initial empty source) and never again. Any GeoJSON source routes through MapLibre's web
@@ -443,13 +443,13 @@ action that changes state another effect is watching.
    changes, provided its zoom clears `MIN_DETECT_ZOOM`. This is "when to ask the server for data"
    moved out of an imperative moveend handler and into the same reducer +
    `useSelector`-driven-effect shape as everything else.
-4. **Layer-creation effect** (`[isMapLoaded]`) -- adds the `site-boundaries`/`site-labels`
+4. **Layer-creation effect** (`[isMapLoaded]`) -- adds the `scene-boundaries`/`scene-labels`
    sources+layers once `isMapLoaded` flips true (mirrors what used to happen inline inside the mount
    effect's own `'load'` handler). No cleanup needed: `map.remove()` in the mount effect's cleanup
    already tears down every source/layer along with the whole map instance.
-5. **Paint effect** (`[isMapLoaded, readyGeneration, paintedGeneration, sites]`) -- the single place
+5. **Paint effect** (`[isMapLoaded, readyGeneration, paintedGeneration, scenes]`) -- the single place
    in the codebase that decides "there's newer data than what's on screen, go apply it." Re-runs
-   whenever `readyGeneration`, `paintedGeneration`, or `sites` changes; once painted, dispatches
+   whenever `readyGeneration`, `paintedGeneration`, or `scenes` changes; once painted, dispatches
    `layersPainted(readyGeneration)`, which sets `paintedGeneration = readyGeneration` and makes this
    effect a no-op again until the next genuinely new result arrives. This one dispatch-then-settle
    re-run (readyGeneration bump -> paint -> paintedGeneration catches up -> effect re-checks and
@@ -473,7 +473,7 @@ every detection box silently disappear.
 React StrictMode's dev-mode mount->unmount->remount cycle would otherwise leave `mapLoaded` already
 `true` in the store from the *first* mount, so the layer-creation effect (keyed on `mapLoaded`
 flipping false->true) would never re-fire for the second, surviving map instance, and its
-site-boundaries/labels sources+layers would never get created.
+scene-boundaries/labels sources+layers would never get created.
 
 ### Removed: two-stage (trimmed-then-full) load
 
@@ -485,7 +485,7 @@ waves didn't produce a visible time saving, so the extra moving parts (a second 
 area-vs-linear trim math) weren't earning their cost. It also briefly caused a real bug on the way
 out: an intermediate version that sent only the peripheral diff (instead of resending everything)
 routed the center tiles through `ws_server.py`'s `historical_tiles`/`_prune_far_tiles()` path, which
-prunes by real-world distance from *that message's* `current_tiles` -- built for "drop a site the
+prunes by real-world distance from *that message's* `current_tiles` -- built for "drop a scene the
 user panned away from minutes ago," not "tiles from the same view's earlier wave" -- so deep-center
 tiles farther than `MAX_RELEVANT_DISTANCE_M` from the thin peripheral ring got silently pruned and
 their detections vanished from the result. The request effect now just sends the full viewport in
@@ -548,24 +548,24 @@ something like this needs diagnosing:
   doesn't have a real overlay for this tile yet; meaningfully larger means the server has real
   content right now and something client-side is failing to display already-available bytes.
 - `window.map` -- direct console access to the live MapLibre instance (e.g.
-  `map.getSource('site-boundaries')._data`, `map.getZoom()`) without threading it through React
+  `map.getSource('scene-boundaries')._data`, `map.getZoom()`) without threading it through React
   state.
 
 ### `glyphs` (map style)
 
-Public, tokenless glyph server -- needed for the `site-label` symbol layer's text; without a
+Public, tokenless glyph server -- needed for the `scene-label` symbol layer's text; without a
 `glyphs` source MapLibre has no font data at all, so `text-field` silently never renders anything
 (confirmed by direct testing: the layer was configured correctly and the polygon drew fine, but no
 label text ever appeared until this was added).
 
 ### `labelsFrom()`
 
-One Point feature per site (at its label point) derived from the polygon FeatureCollection the
+One Point feature per scene (at its label point) derived from the polygon FeatureCollection the
 server sends -- a symbol layer needs its own point source, it can't place text from a Polygon
-source's vertices. Also where `formatSiteName()` is applied (underscore-to-space, e.g.
+source's vertices. Also where `formatSceneName()` is applied (underscore-to-space, e.g.
 `"oil_refinery"` -> `"oil refinery"`) for the map's own label text -- the info panel applies the same
-function separately at render time, since it reads `properties.site` directly off the raw `sites`
-FeatureCollection rather than through `labelsFrom()`. The underlying `site` value itself is never
+function separately at render time, since it reads `properties.scene` directly off the raw `scenes`
+FeatureCollection rather than through `labelsFrom()`. The underlying `scene` value itself is never
 reformatted in the Redux store or sent back to the server anywhere, since it's also used as an
 identifier (matched against `semantic_graph.json` node names) -- this is purely a display-time
 transform, applied at the two places text actually reaches the screen.
@@ -579,8 +579,8 @@ before the user has actually chosen to zoom in on anything.
 
 ### `ExtentSocket`
 
-Site-level results (identified-site boundaries) travel over a websocket, not a plain request -- see
-the server's `ws_server.py` docs for why: a site spans the whole live view, not one tile, and isn't
+Scene-level results (identified-scene boundaries) travel over a websocket, not a plain request -- see
+the server's `ws_server.py` docs for why: a scene spans the whole live view, not one tile, and isn't
 triggered by any single tile request the way `/api/tile` or `/api/detections` are (also see
 `docs/semantic-graph.md`'s "Classifier scope: live map view, not per tile"). Send the map's
 current live view via `send()`; `onResult` fires once per `send()` with a single, complete result --
@@ -592,14 +592,14 @@ Takes an `ExtentSocketHandlers` object (`onServerReady`, `onResult`) rather than
 `ws_server.py`'s `ws_extent()` sends a `{"type": "server_ready"}` message immediately after
 `accept()`, before any real extent traffic, so the client has an explicit signal for "the backend is
 genuinely up" distinct from "a classification result came back." `onmessage` branches on
-`data.type === 'server_ready'` versus everything else (a bare `SiteFeatureCollection`, which carries
+`data.type === 'server_ready'` versus everything else (a bare `SceneFeatureCollection`, which carries
 its own `type: 'FeatureCollection'` field as the implicit "not this" case). See socket.ts below for
 why this class is instantiated exactly once at module scope rather than per-`Map.tsx`-mount.
 
 `sessionId` is generated once per `ExtentSocket` instance -- now once per page load, since socket.ts
 creates exactly one for the page's whole lifetime -- reused across every reconnect this same
 instance does. Lets `ws_server.py`'s `_get_or_create_session` resume the same `known_tiles`/tracked
-sites after a brief network drop instead of starting over, while a genuinely new page load (a new
+scenes after a brief network drop instead of starting over, while a genuinely new page load (a new
 `ExtentSocket` instance) still gets a fresh id and so a fresh, empty session.
 
 ## socket.ts
@@ -631,12 +631,12 @@ need to surface a one-off failure to the user.
 Opt-in walkthrough, mounted only when `VITE_TOUR=1` (set by `restart.*` by default, cleared by `restart.* notour`) or `?tour` is in
 the URL. Starts once, when the first guided site reaches `sitePhase === 'done'` *and* its results
 are painted (`readyGeneration === paintedGeneration`), plus a short delay so the map has settled --
-before that the site-verdict box and outline don't exist yet to point at. Steps whose target is
-missing (e.g. no site outline because a look-alike was first) are dropped at start. The verdict
+before that the scene-verdict box and outline don't exist yet to point at. Steps whose target is
+missing (e.g. no scene outline because a look-alike was first) are dropped at start. The verdict
 box itself now exists for rejected sites too (see Map.tsx), so that step always runs.
 
 Custom rather than Shepherd.js: Shepherd is AGPL-licensed since v12, and its steps anchor to DOM
-elements, while two of the steps here are regions of the map canvas (the site polygon and a
+elements, while two of the steps here are regions of the map canvas (the scene polygon and a
 detection cluster), projected to screen rects with `map.project`. Panels are found by `data-tour`
 attributes; the map instance comes from `mapHandle.ts`, which `Map.tsx` fills in.
 

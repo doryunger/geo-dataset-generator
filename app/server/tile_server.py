@@ -26,7 +26,7 @@ import common  # noqa: E402
 import fuser  # noqa: E402
 import geometry  # noqa: E402
 import model_router  # noqa: E402
-import site_graph  # noqa: E402
+import scene_graph  # noqa: E402
 
 common.setup_logging()
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ MIN_DETECT_ZOOM: int = model_router.MIN_DETECT_ZOOM
 
 DETECT_ZOOM = 17
 
-_GRAPH: dict = site_graph.load_graph()
+_GRAPH: dict = scene_graph.load_graph()
 _COMPONENT_MIN_CONFIDENCE: dict[str, float] = {}
 for _edge in _GRAPH["edges"]:
     if _edge["relation"] == "requires":

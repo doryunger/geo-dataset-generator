@@ -1,7 +1,7 @@
 {
   "nodes": {
     "oil_refinery": {
-      "kind": "site",
+      "kind": "scene",
       "min_types_present": 3,
       "default_max_distance_m": 300,
       "default_min_distance_m": 0,

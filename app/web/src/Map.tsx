@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
-  type ComponentSummary, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SiteFeatureCollection,
-  type SiteFeatureProperties,
+  type ComponentSummary, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SceneFeatureCollection,
+  type SceneFeatureProperties,
 } from './api'
 import { classColorExpression } from './classColors'
 import { mapHandle } from './mapHandle'
@@ -24,8 +24,8 @@ maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
 
 const WIDE_WHEN_ZOOMED_OUT = ['interpolate', ['linear'], ['zoom'], 12, 2, MIN_DETECT_ZOOM, 1.2]
 
-function formatSiteName(site: string): string {
-  return site.replace(/_/g, ' ')
+function formatSceneName(scene: string): string {
+  return scene.replace(/_/g, ' ')
 }
 
 function shortfall(c: ComponentSummary): string {
@@ -72,17 +72,17 @@ interface LabelFeatureCollection {
   features: {
     type: 'Feature'
     geometry: { type: 'Point'; coordinates: [number, number] }
-    properties: SiteFeatureProperties
+    properties: SceneFeatureProperties
   }[]
 }
 
-function labelsFrom(fc: SiteFeatureCollection): LabelFeatureCollection {
+function labelsFrom(fc: SceneFeatureCollection): LabelFeatureCollection {
   return {
     type: 'FeatureCollection',
     features: fc.features.map((f) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [f.properties.label_lon, f.properties.label_lat] },
-      properties: { ...f.properties, site: formatSiteName(f.properties.site) },
+      properties: { ...f.properties, scene: formatSceneName(f.properties.scene) },
     })),
   }
 }
@@ -94,7 +94,7 @@ export default function Map() {
 
   const zoom = useAppSelector((s: RootState) => s.map.zoom)
   const isMapLoaded = useAppSelector((s: RootState) => s.map.mapLoaded)
-  const sites = useAppSelector((s: RootState) => s.map.sites)
+  const scenes = useAppSelector((s: RootState) => s.map.scenes)
   const readyGeneration = useAppSelector((s: RootState) => s.map.readyGeneration)
   const paintedGeneration = useAppSelector((s: RootState) => s.map.paintedGeneration)
   const viewport = useAppSelector((s: RootState) => s.map.viewport)
@@ -261,13 +261,13 @@ export default function Map() {
   useEffect(() => {
     const map = mapRef.current
     if (!isMapLoaded || !map) return
-    map.addSource('site-boundaries', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+    map.addSource('scene-boundaries', { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
     map.addLayer({
-      id: 'site-fill', type: 'fill', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
+      id: 'scene-fill', type: 'fill', source: 'scene-boundaries', minzoom: MIN_VISIBLE_ZOOM,
       paint: { 'fill-color': '#ffee00', 'fill-opacity': 0.15 },
     })
     map.addLayer({
-      id: 'site-outline', type: 'line', source: 'site-boundaries', minzoom: MIN_VISIBLE_ZOOM,
+      id: 'scene-outline', type: 'line', source: 'scene-boundaries', minzoom: MIN_VISIBLE_ZOOM,
       paint: { 'line-color': '#ff00aa', 'line-width': 4 },
     })
     map.addSource('detections', { type: 'geojson', data: EMPTY_DETECTIONS })
@@ -308,10 +308,10 @@ export default function Map() {
         'text-halo-width': 1.6,
       },
     })
-    map.addSource('site-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })
+    map.addSource('scene-labels', { type: 'geojson', data: labelsFrom(EMPTY_FEATURE_COLLECTION) })
     map.addLayer({
-      id: 'site-label', type: 'symbol', source: 'site-labels', minzoom: MIN_VISIBLE_ZOOM,
-      layout: { 'text-field': ['get', 'site'], 'text-size': 16, 'text-font': ['Open Sans Semibold'] },
+      id: 'scene-label', type: 'symbol', source: 'scene-labels', minzoom: MIN_VISIBLE_ZOOM,
+      layout: { 'text-field': ['get', 'scene'], 'text-size': 16, 'text-font': ['Open Sans Semibold'] },
       paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.5 },
     })
   }, [isMapLoaded])
@@ -321,10 +321,10 @@ export default function Map() {
     if (!map || !isMapLoaded || readyGeneration === paintedGeneration) return
 
     const paint = () => {
-      const boundariesSource = map.getSource('site-boundaries') as maplibregl.GeoJSONSource | undefined
-      const labelsSource = map.getSource('site-labels') as maplibregl.GeoJSONSource | undefined
-      boundariesSource?.setData(sites)
-      labelsSource?.setData(labelsFrom(sites))
+      const boundariesSource = map.getSource('scene-boundaries') as maplibregl.GeoJSONSource | undefined
+      const labelsSource = map.getSource('scene-labels') as maplibregl.GeoJSONSource | undefined
+      boundariesSource?.setData(scenes)
+      labelsSource?.setData(labelsFrom(scenes))
       const detectionsSource = map.getSource('detections') as maplibregl.GeoJSONSource | undefined
       detectionsSource?.setData(detections)
       lastPaintAtRef.current = performance.now()
@@ -338,7 +338,7 @@ export default function Map() {
     }
     const timer = setTimeout(paint, REPAINT_INTERVAL_MS - sinceLastPaint)
     return () => clearTimeout(timer)
-  }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, sites, detections])
+  }, [dispatch, isMapLoaded, readyGeneration, paintedGeneration, scenes, detections])
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -387,9 +387,9 @@ export default function Map() {
           Zoom in to zoom {MIN_DETECT_ZOOM}+ to run detection
         </div>
       )}
-      {mode === 'guided' && sites.features.length > 0 && (
+      {mode === 'guided' && scenes.features.length > 0 && (
         <div
-          data-tour="site-details"
+          data-tour="scene-details"
           style={{
             position: 'absolute', top: 12, right: 56, zIndex: 1,
             background: 'rgba(20,20,20,0.82)', color: '#fff', fontSize: 12,
@@ -397,9 +397,9 @@ export default function Map() {
             minWidth: 200, lineHeight: 1.6,
           }}
         >
-          {sites.features.map((f, i) => (
-            <div key={i} style={{ marginBottom: i < sites.features.length - 1 ? 8 : 0 }}>
-              <div style={{ fontWeight: 'bold' }}>{formatSiteName(f.properties.site)}</div>
+          {scenes.features.map((f, i) => (
+            <div key={i} style={{ marginBottom: i < scenes.features.length - 1 ? 8 : 0 }}>
+              <div style={{ fontWeight: 'bold' }}>{formatSceneName(f.properties.scene)}</div>
               <div>coverage: {(f.properties.type_coverage_ratio * 100).toFixed(0)}%</div>
               <div>components: {f.properties.component_count}</div>
               <div style={{ opacity: 0.8 }}>{f.properties.matched_types.join(', ')}</div>
@@ -407,9 +407,9 @@ export default function Map() {
           ))}
         </div>
       )}
-      {mode === 'guided' && sitePhase === 'done' && sites.features.length === 0 && graph && (
+      {mode === 'guided' && sitePhase === 'done' && scenes.features.length === 0 && graph && (
         <div
-          data-tour="site-details"
+          data-tour="scene-details"
           style={{
             position: 'absolute', top: 12, right: 56, zIndex: 1,
             background: 'rgba(20,20,20,0.82)', color: '#fff', fontSize: 12,

@@ -2,7 +2,7 @@ import { configureStore, createSlice, type PayloadAction } from '@reduxjs/toolki
 import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux'
 import {
   type ComponentSummary, type DetectionFeatureCollection, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION,
-  INITIAL_ZOOM, type ResultMessage, type Site, type SiteFeatureCollection,
+  INITIAL_ZOOM, type ResultMessage, type Site, type SceneFeatureCollection,
 } from './api'
 
 export interface Viewport {
@@ -33,7 +33,7 @@ interface MapState {
   mode: BrowseMode
   zoom: number
   mapLoaded: boolean
-  sites: SiteFeatureCollection
+  scenes: SceneFeatureCollection
   detections: DetectionFeatureCollection
   graph: Graph | null
   readyGeneration: number
@@ -51,7 +51,7 @@ const initialState: MapState = {
   mode: 'guided',
   zoom: INITIAL_ZOOM,
   mapLoaded: false,
-  sites: EMPTY_FEATURE_COLLECTION,
+  scenes: EMPTY_FEATURE_COLLECTION,
   detections: EMPTY_DETECTIONS,
   graph: null,
   readyGeneration: 0,
@@ -106,15 +106,15 @@ const mapSlice = createSlice({
       } else if (result.detections) {
         state.detections = result.detections
       }
-      if (result.sites) state.sites = result.sites
+      if (result.scenes) state.scenes = result.scenes
       state.graph = {
         components: result.components ?? state.graph?.components ?? [],
-        identified: result.sites ? result.sites.features.length > 0 : (state.graph?.identified ?? false),
+        identified: result.scenes ? result.scenes.features.length > 0 : (state.graph?.identified ?? false),
       }
       state.readyGeneration += 1
       if (result.type === 'site_done') {
         state.sitePhase = 'done'
-        if (result.site) state.siteVerdicts[result.site] = (result.sites?.features.length ?? 0) > 0
+        if (result.site) state.siteVerdicts[result.site] = (result.scenes?.features.length ?? 0) > 0
       }
     },
     layersPainted(state, action: PayloadAction<number>) {
@@ -126,7 +126,7 @@ const mapSlice = createSlice({
       state.sitePhase = 'landing'
       state.siteProgress = { done: 0, total: site.tiles }
       state.graph = null
-      state.sites = EMPTY_FEATURE_COLLECTION
+      state.scenes = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
       state.readyGeneration += 1
       state.flyTo = { bbox: site.bbox, durationMs, generation: (state.flyTo?.generation ?? 0) + 1 }
@@ -138,7 +138,7 @@ const mapSlice = createSlice({
     roamCleared(state) {
       if (state.graph === null && state.detections.features.length === 0) return
       state.graph = null
-      state.sites = EMPTY_FEATURE_COLLECTION
+      state.scenes = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
       state.readyGeneration += 1
     },
@@ -147,7 +147,7 @@ const mapSlice = createSlice({
       state.selectedSite = null
       state.sitePhase = null
       state.graph = null
-      state.sites = EMPTY_FEATURE_COLLECTION
+      state.scenes = EMPTY_FEATURE_COLLECTION
       state.detections = EMPTY_DETECTIONS
       state.siteProgress = { done: 0, total: 0 }
       state.readyGeneration += 1

@@ -8,7 +8,7 @@ export const extentSocket = new ExtentSocket({
   },
   onResult: (result) => {
     if (result.type !== 'extent_tile') {
-      console.log('[socket] onResult', { type: result.type, siteCount: result.sites?.features.length })
+      console.log('[socket] onResult', { type: result.type, sceneCount: result.scenes?.features.length })
     }
     store.dispatch(resultReceived(result))
   },

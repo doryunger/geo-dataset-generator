@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import type { DetectionFeatureCollection, SiteFeatureCollection } from './api'
+import type { DetectionFeatureCollection, SceneFeatureCollection } from './api'
 import { mapHandle } from './mapHandle'
 import { type RootState, useAppSelector } from './store'
 
@@ -14,7 +14,7 @@ const CARD_GAP = 16
 const EDGE = 12
 const ACCENT = '#ffd400'
 
-type Target = { kind: 'dom'; id: string } | { kind: 'site' } | { kind: 'detections' }
+type Target = { kind: 'dom'; id: string } | { kind: 'scene' } | { kind: 'detections' }
 
 interface Step {
   title: string
@@ -52,13 +52,13 @@ const STEPS: Step[] = [
     title: 'Site verdict',
     body: 'Why the site was or wasn\'t called a refinery: which component types matched, the share of '
       + 'required types covered, and for a rejected site, which requirement fell short.',
-    target: { kind: 'dom', id: 'site-details' },
+    target: { kind: 'dom', id: 'scene-details' },
   },
   {
     title: 'Identified refinery',
     body: 'The outline is an educated guess at the site\'s extent, based on where the child components '
       + 'were found and how close they are to each other.',
-    target: { kind: 'site' },
+    target: { kind: 'scene' },
     nextLabel: 'Zoom in',
   },
   {
@@ -70,7 +70,7 @@ const STEPS: Step[] = [
   },
 ]
 
-function polygonPoints(fc: SiteFeatureCollection | DetectionFeatureCollection): LngLat[] {
+function polygonPoints(fc: SceneFeatureCollection | DetectionFeatureCollection): LngLat[] {
   return fc.features.flatMap((f) => f.geometry.coordinates[0] as LngLat[])
 }
 
@@ -169,7 +169,7 @@ export default function Tour() {
   const sitePhase = useAppSelector((s: RootState) => s.map.sitePhase)
   const readyGeneration = useAppSelector((s: RootState) => s.map.readyGeneration)
   const paintedGeneration = useAppSelector((s: RootState) => s.map.paintedGeneration)
-  const sites = useAppSelector((s: RootState) => s.map.sites)
+  const scenes = useAppSelector((s: RootState) => s.map.scenes)
   const detections = useAppSelector((s: RootState) => s.map.detections)
   const selectedSite = useAppSelector((s: RootState) => s.map.selectedSite)
 
@@ -190,7 +190,7 @@ export default function Tour() {
     const timer = setTimeout(() => {
       const available = STEPS.filter((s) => {
         if (s.target.kind === 'dom') return domRect(s.target.id) !== null
-        if (s.target.kind === 'site') return sites.features.length > 0
+        if (s.target.kind === 'scene') return scenes.features.length > 0
         return detections.features.length > 0
       })
       setStarted(true)
@@ -198,16 +198,16 @@ export default function Tour() {
       setIndex(0)
     }, START_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [started, mode, sitePhase, readyGeneration, paintedGeneration, sites, detections])
+  }, [started, mode, sitePhase, readyGeneration, paintedGeneration, scenes, detections])
 
   const measure = useCallback(() => {
     if (!step) return setRect(null)
     const t = step.target
     const r = t.kind === 'dom' ? domRect(t.id)
-      : t.kind === 'site' ? screenRect(polygonPoints(sites))
+      : t.kind === 'scene' ? screenRect(polygonPoints(scenes))
       : screenRect(clusterRef.current)
     setRect(r ? padded(r) : null)
-  }, [step, sites])
+  }, [step, scenes])
 
   useEffect(() => {
     if (flying) return

@@ -44,24 +44,24 @@ class _UnionFind:
             self._parent[ra] = rb
 
 
-class SiteTracker:
+class SceneTracker:
     def __init__(self):
-        self._sites: dict[str, dict] = {}
+        self._scenes: dict[str, dict] = {}
         self._counters: dict[str, int] = {}
 
-    def _new_id(self, site: str) -> str:
-        self._counters[site] = self._counters.get(site, 0) + 1
-        return f"{site}_{self._counters[site]}"
+    def _new_id(self, scene: str) -> str:
+        self._counters[scene] = self._counters.get(scene, 0) + 1
+        return f"{scene}_{self._counters[scene]}"
 
     def reconcile(self, fresh_results: list[dict], graph: dict, z: int, ref_lat: float) -> list[dict]:
-        by_site: dict[str, list[dict]] = {}
-        for sid, tracked in self._sites.items():
-            by_site.setdefault(tracked["site"], []).append({"id": sid, "detections": tracked["detections"]})
+        by_scene: dict[str, list[dict]] = {}
+        for sid, tracked in self._scenes.items():
+            by_scene.setdefault(tracked["scene"], []).append({"id": sid, "detections": tracked["detections"]})
         for r in fresh_results:
-            by_site.setdefault(r["site"], []).append({"id": None, "detections": r["detections"]})
+            by_scene.setdefault(r["scene"], []).append({"id": None, "detections": r["detections"]})
 
-        for site, entries in by_site.items():
-            merge_dist = graph["nodes"][site].get("merge_distance_m", 0.0)
+        for scene, entries in by_scene.items():
+            merge_dist = graph["nodes"][scene].get("merge_distance_m", 0.0)
             hulls = [_hull(e["detections"]) for e in entries]
 
             uf = _UnionFind(len(entries))
@@ -73,7 +73,7 @@ class SiteTracker:
                     verdict = distance_m <= merge_dist
                     logger.info(
                         "proximity check %s: %s vs %s distance=%.1fm threshold(merge_distance_m)=%.1fm -> %s",
-                        site, entries[i]["id"] or "fresh", entries[j]["id"] or "fresh",
+                        scene, entries[i]["id"] or "fresh", entries[j]["id"] or "fresh",
                         distance_m, merge_dist, "merge" if verdict else "no merge",
                     )
                     if verdict:
@@ -83,10 +83,10 @@ class SiteTracker:
             for i in range(len(entries)):
                 groups.setdefault(uf.find(i), []).append(i)
 
-            merged_sites: dict[str, dict] = {}
+            merged_scenes: dict[str, dict] = {}
             for idxs in groups.values():
                 existing_ids = sorted(entries[i]["id"] for i in idxs if entries[i]["id"] is not None)
-                site_id = existing_ids[0] if existing_ids else self._new_id(site)
+                scene_id = existing_ids[0] if existing_ids else self._new_id(scene)
 
                 combined = []
                 seen = set()
@@ -96,14 +96,14 @@ class SiteTracker:
                         if key not in seen:
                             combined.append(d)
                             seen.add(key)
-                merged_sites[site_id] = {"site": site, "detections": combined}
-            for sid in list(self._sites):
-                if self._sites[sid]["site"] == site:
-                    del self._sites[sid]
-            self._sites.update(merged_sites)
+                merged_scenes[scene_id] = {"scene": scene, "detections": combined}
+            for sid in list(self._scenes):
+                if self._scenes[sid]["scene"] == scene:
+                    del self._scenes[sid]
+            self._scenes.update(merged_scenes)
 
         out = []
-        for sid, tracked in self._sites.items():
-            scored = classifier.score(tracked["detections"], tracked["site"], graph, z, ref_lat)
-            out.append({"id": sid, **scored, "site": tracked["site"], "detections": tracked["detections"]})
+        for sid, tracked in self._scenes.items():
+            scored = classifier.score(tracked["detections"], tracked["scene"], graph, z, ref_lat)
+            out.append({"id": sid, **scored, "scene": tracked["scene"], "detections": tracked["detections"]})
         return out

@@ -19,22 +19,22 @@ import classifier  # noqa: E402
 import model_router  # noqa: E402
 import common  # noqa: E402
 import geometry  # noqa: E402
-import site_graph  # noqa: E402
-import site_tracker  # noqa: E402
+import scene_graph  # noqa: E402
+import scene_tracker  # noqa: E402
 import sites  # noqa: E402
 import tile_server  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-GRAPH: dict = site_graph.load_graph()
-MAX_RELEVANT_DISTANCE_M = site_graph.max_relevant_distance_m(GRAPH)
+GRAPH: dict = scene_graph.load_graph()
+MAX_RELEVANT_DISTANCE_M = scene_graph.max_relevant_distance_m(GRAPH)
 DEFAULT_REF_LAT = 50.0
 
 
 @dataclass
 class _Session:
     known_tiles: set[tuple[int, int, int]] = field(default_factory=set)
-    tracker: site_tracker.SiteTracker = field(default_factory=site_tracker.SiteTracker)
+    tracker: scene_tracker.SceneTracker = field(default_factory=scene_tracker.SceneTracker)
     last_active: float = field(default_factory=time.monotonic)
 
 
@@ -128,7 +128,7 @@ def _ref_lat_from_detections(detections: list[dict], z: int) -> float:
     return sum(lats) / len(lats)
 
 
-def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker) -> dict:
+def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: scene_tracker.SceneTracker) -> dict:
     fresh_matches = []
     ref_lat = _ref_lat(detections_by_tile) if detections_by_tile else DEFAULT_REF_LAT
     if detections_by_tile:
@@ -137,15 +137,15 @@ def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict
     tracked = tracker.reconcile(fresh_matches, GRAPH, tile_server.DETECT_ZOOM, ref_lat)
     features = []
     for r in tracked:
-        site_ref_lat = _ref_lat_from_detections(r["detections"], tile_server.DETECT_ZOOM)
-        ring, label = classifier.polygon_for(r["detections"], tile_server.DETECT_ZOOM, site_ref_lat)
+        scene_ref_lat = _ref_lat_from_detections(r["detections"], tile_server.DETECT_ZOOM)
+        ring, label = classifier.polygon_for(r["detections"], tile_server.DETECT_ZOOM, scene_ref_lat)
         features.append({
             "type": "Feature",
             "id": r["id"],
             "geometry": {"type": "Polygon", "coordinates": [[[lon, lat] for lon, lat in ring]]},
             "properties": {
                 "id": r["id"],
-                "site": r["site"],
+                "scene": r["scene"],
                 "matched_types": r["matched_types"],
                 "type_coverage_ratio": r["type_coverage_ratio"],
                 "component_count": len(r["detections"]),
@@ -157,13 +157,13 @@ def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict
 
 
 def _result_payload(
-    kind: str, detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: site_tracker.SiteTracker, **extra,
+    kind: str, detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: scene_tracker.SceneTracker, **extra,
 ) -> dict:
     all_detections = [d for dets in detections_by_tile.values() for d in dets]
     ref_lat = _ref_lat(detections_by_tile) if detections_by_tile else DEFAULT_REF_LAT
     return {
         "type": kind,
-        "sites": _feature_collection(detections_by_tile, tracker),
+        "scenes": _feature_collection(detections_by_tile, tracker),
         "detections": {
             "type": "FeatureCollection",
             "features": sites.detection_features(
@@ -175,7 +175,7 @@ def _result_payload(
     }
 
 
-def _any_site_identified(detections_by_tile: dict[tuple[int, int, int], list[dict]]) -> bool:
+def _any_scene_identified(detections_by_tile: dict[tuple[int, int, int], list[dict]]) -> bool:
     ref_lat = _ref_lat(detections_by_tile)
     return bool(classifier.classify(detections_by_tile, tile_server.DETECT_ZOOM, ref_lat, GRAPH))
 
@@ -188,7 +188,7 @@ def _center_out_order(keys: set[tuple[int, int, int]]) -> list[tuple[int, int, i
 
 async def classify_extent(
     current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
-    tracker: site_tracker.SiteTracker, websocket: "WebSocket | None" = None,
+    tracker: scene_tracker.SceneTracker, websocket: "WebSocket | None" = None,
 ) -> dict:
     current_keys = _center_out_order(current_tiles) if current_tiles else []
     t0 = time.monotonic()
@@ -215,11 +215,11 @@ async def classify_extent(
                     "type": "extent_tile", "tile": common.tile_id(*key),
                     "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets})},
                 })
-            identified = identified or (model_router.EARLY_EXIT and _any_site_identified(detections_by_tile))
+            identified = identified or (model_router.EARLY_EXIT and _any_scene_identified(detections_by_tile))
         if identified:
             await tile_server.prune_pending()
             logger.info(
-                "classify_extent: site identified after %d/%d tile(s) in %.0fms -- remaining background tiles pruned",
+                "classify_extent: scene identified after %d/%d tile(s) in %.0fms -- remaining background tiles pruned",
                 awaited, len(current_keys), (time.monotonic() - t0) * 1000,
             )
             break
@@ -238,7 +238,7 @@ async def classify_extent(
 
 
 PREFETCH_THREADS = 16
-SITE_CLASSIFY_INTERVAL_S = 1.0
+SCENE_CLASSIFY_INTERVAL_S = 1.0
 _PREFETCH_EXECUTOR = ThreadPoolExecutor(max_workers=PREFETCH_THREADS)
 
 
@@ -253,7 +253,7 @@ async def _prefetch_with_ring(tiles: list[tuple[int, int, int]]) -> None:
 async def process_site(websocket: WebSocket, site: dict, session: "_Session") -> None:
     tiles = _center_out_order(set(sites.site_tiles(site)))
     session.known_tiles = set(tiles)
-    session.tracker = site_tracker.SiteTracker()
+    session.tracker = scene_tracker.SceneTracker()
     t0 = time.monotonic()
     forgotten = tile_server.forget(tiles)
     logger.info(
@@ -284,14 +284,14 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
                 "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets or []})},
                 "components": sites.component_summary(all_detections, GRAPH, site_ref_lat),
             }
-            if time.monotonic() - last_classified_at >= SITE_CLASSIFY_INTERVAL_S:
-                message["sites"] = _feature_collection(detections_by_tile, session.tracker)
+            if time.monotonic() - last_classified_at >= SCENE_CLASSIFY_INTERVAL_S:
+                message["scenes"] = _feature_collection(detections_by_tile, session.tracker)
                 last_classified_at = time.monotonic()
             await websocket.send_json(message)
     logger.info("process_site: %s done in %.0fs", site["id"], time.monotonic() - t0)
     await websocket.send_json({
         "type": "site_done", "site": site["id"],
-        "sites": _feature_collection(detections_by_tile, session.tracker),
+        "scenes": _feature_collection(detections_by_tile, session.tracker),
         "detections": {
             "type": "FeatureCollection",
             "features": sites.detection_features(
@@ -307,11 +307,11 @@ router = APIRouter()
 
 async def _send_result(
     websocket: WebSocket, current_tiles: set[tuple[int, int, int]], historical_tiles: set[tuple[int, int, int]],
-    tracker: site_tracker.SiteTracker,
+    tracker: scene_tracker.SceneTracker,
 ) -> None:
     result = await classify_extent(current_tiles, historical_tiles, tracker, websocket)
     await websocket.send_json(result)
-    logger.info("_send_result: sent %d site feature(s) to client", len(result["sites"]["features"]))
+    logger.info("_send_result: sent %d scene feature(s) to client", len(result["scenes"]["features"]))
 
 
 @router.websocket("/ws/extent")

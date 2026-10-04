@@ -3,7 +3,7 @@ from pathlib import Path
 
 GRAPH_PATH = Path(__file__).resolve().parent / "semantic_graph.json"
 
-SITE_DEFAULT_FIELDS = ("default_min_distance_m", "default_max_distance_m", "default_boost")
+SCENE_DEFAULT_FIELDS = ("default_min_distance_m", "default_max_distance_m", "default_boost")
 
 
 def load_graph() -> dict:
@@ -14,14 +14,14 @@ def _validate(raw: dict) -> dict:
     nodes = raw.get("nodes", {})
     for name, cfg in nodes.items():
         kind = cfg.get("kind")
-        if kind not in ("site", "component"):
-            raise ValueError(f"node {name!r} has no valid kind (site/component): {cfg!r}")
-        if kind == "site" and any(f not in cfg for f in SITE_DEFAULT_FIELDS):
-            raise ValueError(f"site node {name!r} is missing one of {SITE_DEFAULT_FIELDS}: {cfg!r}")
-        if kind == "site" and "group_within_m" in cfg:
+        if kind not in ("scene", "component", "hint"):
+            raise ValueError(f"node {name!r} has no valid kind (scene/component/hint): {cfg!r}")
+        if kind == "scene" and any(f not in cfg for f in SCENE_DEFAULT_FIELDS):
+            raise ValueError(f"scene node {name!r} is missing one of {SCENE_DEFAULT_FIELDS}: {cfg!r}")
+        if kind == "scene" and "group_within_m" in cfg:
             raise ValueError(
-                f"site node {name!r} has 'group_within_m': that is a component's own member spacing, "
-                "site nodes use default_max_distance_m for the distance between different components"
+                f"scene node {name!r} has 'group_within_m': that is a component's own member spacing, "
+                "scene nodes use default_max_distance_m for the distance between different components"
             )
         if kind == "component" and cfg.get("group_within_m") is not None and cfg["group_within_m"] <= 0:
             raise ValueError(f"component {name!r} has a non-positive 'group_within_m': {cfg!r}")
@@ -34,55 +34,61 @@ def _validate(raw: dict) -> dict:
             raise ValueError(f"edge {frm!r} -> {to!r} references a node that doesn't exist")
 
         if relation == "requires":
-            if nodes[frm]["kind"] != "site" or nodes[to]["kind"] != "component":
-                raise ValueError(f"'requires' edge {frm!r} -> {to!r} must go site -> component")
+            if nodes[frm]["kind"] != "scene" or nodes[to]["kind"] != "component":
+                raise ValueError(f"'requires' edge {frm!r} -> {to!r} must go scene -> component")
             required_components.setdefault(frm, set()).add(to)
+        elif relation == "refines":
+            if nodes[frm]["kind"] != "component" or nodes[to]["kind"] != "hint":
+                raise ValueError(f"'refines' edge {frm!r} -> {to!r} must go component -> hint")
+            tolerance = edge.get("tolerance_m")
+            if tolerance is None or tolerance <= 0:
+                raise ValueError(f"'refines' edge {frm!r} -> {to!r} needs a positive 'tolerance_m': {edge!r}")
         elif relation == "proximity":
             if nodes[frm]["kind"] != "component" or nodes[to]["kind"] != "component":
                 raise ValueError(f"'proximity' edge {frm!r} -> {to!r} must connect two components")
-            site = edge.get("site")
-            if site not in nodes or nodes[site]["kind"] != "site":
-                raise ValueError(f"proximity edge {frm!r} -> {to!r} has no valid 'site': {site!r}")
+            scene = edge.get("site")
+            if scene not in nodes or nodes[scene]["kind"] != "scene":
+                raise ValueError(f"proximity edge {frm!r} -> {to!r} has no valid 'site': {scene!r}")
         else:
             raise ValueError(f"edge {frm!r} -> {to!r} has unknown relation {relation!r}")
 
     for edge in raw.get("edges", []):
         if edge.get("relation") != "proximity":
             continue
-        site, frm, to = edge["site"], edge["from"], edge["to"]
-        wanted = required_components.get(site, set())
+        scene, frm, to = edge["site"], edge["from"], edge["to"]
+        wanted = required_components.get(scene, set())
         if frm not in wanted or to not in wanted:
             raise ValueError(
-                f"proximity override {frm!r} -> {to!r} for site {site!r} names a component "
-                f"{site!r} doesn't require"
+                f"proximity override {frm!r} -> {to!r} for site {scene!r} names a component "
+                f"{scene!r} doesn't require"
             )
 
     return raw
 
 
-def requirements_for(graph: dict, site: str) -> list[dict]:
-    return [e for e in graph["edges"] if e["relation"] == "requires" and e["from"] == site]
+def requirements_for(graph: dict, scene: str) -> list[dict]:
+    return [e for e in graph["edges"] if e["relation"] == "requires" and e["from"] == scene]
 
 
 def group_within_m(graph: dict, component: str) -> "float | None":
     return graph["nodes"].get(component, {}).get("group_within_m")
 
 
-def min_count(graph: dict, site: str, component: str) -> int:
-    for edge in requirements_for(graph, site):
+def min_count(graph: dict, scene: str, component: str) -> int:
+    for edge in requirements_for(graph, scene):
         if edge["to"] == component:
             return edge.get("min_count", 1)
     return 1
 
 
-def proximity_for(graph: dict, site: str) -> list[dict]:
-    site_cfg = graph["nodes"][site]
-    components = sorted({e["to"] for e in requirements_for(graph, site)})
+def proximity_for(graph: dict, scene: str) -> list[dict]:
+    scene_cfg = graph["nodes"][scene]
+    components = sorted({e["to"] for e in requirements_for(graph, scene)})
 
     overrides = {
         frozenset((e["from"], e["to"])): e
         for e in graph["edges"]
-        if e["relation"] == "proximity" and e["site"] == site
+        if e["relation"] == "proximity" and e["site"] == scene
     }
 
     result = []
@@ -91,24 +97,24 @@ def proximity_for(graph: dict, site: str) -> list[dict]:
             edge = overrides.get(frozenset((a, b)))
             if edge is None:
                 edge = {
-                    "relation": "proximity", "site": site, "from": a, "to": b,
-                    "min_distance_m": site_cfg["default_min_distance_m"],
-                    "max_distance_m": site_cfg["default_max_distance_m"],
-                    "boost": site_cfg["default_boost"],
+                    "relation": "proximity", "site": scene, "from": a, "to": b,
+                    "min_distance_m": scene_cfg["default_min_distance_m"],
+                    "max_distance_m": scene_cfg["default_max_distance_m"],
+                    "boost": scene_cfg["default_boost"],
                 }
             result.append(edge)
     return result
 
 
-def min_types_present(graph: dict, site: str) -> tuple[int, int]:
-    total = len(requirements_for(graph, site))
-    return graph["nodes"][site]["min_types_present"], total
+def min_types_present(graph: dict, scene: str) -> tuple[int, int]:
+    total = len(requirements_for(graph, scene))
+    return graph["nodes"][scene]["min_types_present"], total
 
 
 def max_relevant_distance_m(graph: dict) -> float:
     distances = []
     for cfg in graph["nodes"].values():
-        if cfg["kind"] != "site":
+        if cfg["kind"] != "scene":
             continue
         distances.append(cfg["default_max_distance_m"])
         if cfg.get("merge_distance_m") is not None:

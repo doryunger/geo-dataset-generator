@@ -6,7 +6,7 @@ follow:
 
 - `tile_server.py` â€” raster tile serving (`/api/tile`, `/api/detections`, `/api/stats`):
   request/response, one CPU-bound inference job at a time through a bounded queue.
-- `ws_server.py` â€” site-level results (`/ws/extent`): a long-lived websocket, driven by how the
+- `ws_server.py` â€” scene-level results (`/ws/extent`): a long-lived websocket, driven by how the
   user is browsing rather than by any single tile request.
 
 Run with (normally via `app/restart.*`; from the repo root):
@@ -19,7 +19,7 @@ uvicorn server:app --app-dir app/server --port 8010
 Pipeline across a tile: `model_router.py` decides which models run â†’ each runs unfiltered â†’
 `fuser.py` dedups cross-model detections per tile â†’ `tile_server._is_graph_relevant()` narrows to
 what the semantic graph cares about â†’ `classifier.py` clusters/scores against the graph (live map
-view, not per tile) â†’ `site_tracker.py` reconciles fresh candidates into stable tracked sites
+view, not per tile) â†’ `scene_tracker.py` reconciles fresh candidates into stable tracked scenes
 across rounds. See `docs/semantic-graph.md` for the graph model itself.
 
 ## tile_server.py
@@ -32,7 +32,7 @@ Model-agnostic by design: what to detect is driven entirely by `config.json`'s `
 hardcoded. Every configured model runs against every detected tile, completely unfiltered â€” no
 per-model class restriction. Raw detections are pooled and deduplicated by `fuser.py`, then
 narrowed to whatever's actually relevant to the semantic graph (`_is_graph_relevant()`) before
-rendering *or* caching â€” a class the graph doesn't care about, or one below every site's confidence
+rendering *or* caching â€” a class the graph doesn't care about, or one below every scene's confidence
 floor for it, is dropped rather than drawn as clutter or carried into what the classifier later
 reads back out of the cache.
 
@@ -76,7 +76,7 @@ Two independent raster tile endpoints, stacked as two MapLibre sources on the fr
   eviction only kicks in genuinely past double the expected size.
 - `TILE_CACHE_CAPACITY = 300` â€” last 300 processed tiles kept. Raised from 20, then 50, then 72 as
   low-zoom extent reports needed more `DETECT_ZOOM` tiles per reported tile; 300 gives headroom for
-  several reports' worth of historical continuity (`site_graph`'s `MAX_RELEVANT_DISTANCE_M`-pruned
+  several reports' worth of historical continuity (`scene_graph`'s `MAX_RELEVANT_DISTANCE_M`-pruned
   historical tiles, not just the current live view) â€” cheap since a cached entry is one small PNG
   overlay + a detection list, not the source tile image.
 
@@ -407,7 +407,7 @@ Only ever does real work at exactly `DETECT_ZOOM` â€” every other zoom retu
 placeholder immediately, including zooms *above* `DETECT_ZOOM`: showing a blown-up `DETECT_ZOOM`
 box next to native-resolution imagery would misrepresent where the box actually is, and showing
 nothing is a more honest "you're not at the zoom this was detected at" than a stretched, misaligned
-one. The site-level layer (`ws_server.py`) is what still shows a match at any zoom â€” this endpoint
+one. The scene-level layer (`ws_server.py`) is what still shows a match at any zoom â€” this endpoint
 is just the per-tile visual boxes, a different concern.
 
 **Never blocks on inference (fixed 2026-09-04).** A cache hit returns the real overlay instantly;
@@ -501,7 +501,7 @@ concurrent worker, not expected to trip today since fusion happens per tile).
 
 ### classifier.py
 
-Consumes `site_graph.py` (the graph) and `geometry.py` (pixel-based centroid distance); never
+Consumes `scene_graph.py` (the graph) and `geometry.py` (pixel-based centroid distance); never
 computes IoU or does dedup â€” that's the fuser's job, already done by the time detections reach
 here.
 
@@ -511,29 +511,29 @@ Two-level clustering, coarse to fine:
    groups. Two facilities separated by a gap of unrelated tiles land in different groups
    automatically, so the finer clustering below never even compares detections that aren't
    geographically close to begin with.
-2. **Per-site proximity** (`_component_clusters_for_site()`) â€” within one tile group's pooled
-   detections, chains "next component within threshold" using a specific site's own proximity
-   rules (`site_graph.proximity_for()`) â€” density-reachable clustering. Site-specific because
-   different sites can want different proximity rules for the same component pair, so this runs
-   once per candidate site, not once globally.
+2. **Per-scene proximity** (`_component_clusters_for_scene()`) â€” within one tile group's pooled
+   detections, chains "next component within threshold" using a specific scene's own proximity
+   rules (`scene_graph.proximity_for()`) â€” density-reachable clustering. Scene-specific because
+   different scenes can want different proximity rules for the same component pair, so this runs
+   once per candidate scene, not once globally.
 
 Only prominence-scoring tier 1 (type-coverage ratio) is implemented â€” tier 2 (instance-strength
 tie-break) was retired along with `min_count`, and candidacy-vs-affiliation resolution across
-*competing* site types isn't built either: with only one site type (`oil_refinery`) in the graph
+*competing* scene types isn't built either: with only one scene type (`oil_refinery`) in the graph
 today, there's nothing to compete against yet, and building that resolution now, untested against a
 real second profile, risks getting it wrong. Flagged, not silently skipped.
 
 `polygon_for()` shapes an identified cluster into a boundary once `classify()` has already decided
-it's a site â€” presentation for the frontend, not part of deciding identity. Returns the convex hull
+it's a scene â€” presentation for the frontend, not part of deciding identity. Returns the convex hull
 of every detection's centroid (so no detection sits outside it), padded outward by
 `BOUNDARY_BUFFER_M` (a placeholder like every other number in `docs/semantic-graph.md`), plus a label
 point (the hull's centroid *before* buffering â€” buffering can shift a centroid if the hull is very
 elongated, and the label should sit with the detections, not the padding around them).
 
-`classify()` deliberately does *not* merge same-site-type results close together into one â€” that's
-`site_tracker.SiteTracker.reconcile()`'s job now, applied uniformly to fresh candidates together
+`classify()` deliberately does *not* merge same-scene-type results close together into one â€” that's
+`scene_tracker.SceneTracker.reconcile()`'s job now, applied uniformly to fresh candidates together
 with whatever's already tracked from earlier rounds, not just within one round's own results (see
-the site_tracker section below for why merging needs to span rounds, not just happen once here).
+the scene_tracker section below for why merging needs to span rounds, not just happen once here).
 
 ### geometry.py
 
@@ -551,81 +551,103 @@ pixel coordinates mean nothing to a map. It's the exact inverse of `common.lonla
 via `common.tile_to_lonlat`'s own continuous (non-floored) math, just taking global pixel
 coordinates instead of a lon/lat in the first place.
 
-## Stateful tracking: site_graph, site_tracker
+## Stateful tracking: scene_graph, scene_tracker
 
-### site_graph.py
+### scene_graph.py
 
 Loads `semantic_graph.json`: one graph, every node defined once. Loading/validation only â€” the
 clustering/scoring logic that consumes this lives in `classifier.py`.
 
 Two kinds of node:
 
-- **`site`** â€” a site type (e.g. `oil_refinery`). Carries `min_types_present` (how many of its own
-  `requires` edges must be satisfied for this site type to be identified) plus
+- **`scene`** â€” a scene type (e.g. `oil_refinery`). Carries `min_types_present` (how many of its own
+  `requires` edges must be satisfied for this scene type to be identified) plus
   `default_min_distance_m`/`default_max_distance_m`/`default_boost`, the proximity rule used for
   any pair of its required components that doesn't have its own override edge. `of_total_types` is
-  never stored â€” it's just how many `requires` edges the site node has, derived on read so it can't
+  never stored â€” it's just how many `requires` edges the scene node has, derived on read so it can't
   drift from the edges themselves.
 - **`component`** â€” a detectable component type (e.g. `storage tank`). No config of its own; every
-  number that depends on *which* site is asking lives on the edge instead, so the same component
-  node can be shared by many sites without repeating itself.
+  number that depends on *which* scene is asking lives on the edge instead, so the same component
+  node can be shared by many scenes without repeating itself.
 
 Two kinds of edge:
 
-- **`requires`** â€” site â†’ component. Carries `min_confidence`: how confident a detection of this
-  component must be to count as "present" for this site type. No instance count â€” identification is
+- **`requires`** â€” scene â†’ component. Carries `min_confidence`: how confident a detection of this
+  component must be to count as "present" for this scene type. No instance count â€” identification is
   presence-based, not "need N of this component."
-- **`proximity`** â€” component â†’ component, tagged with which site's rule it is via `site` (the same
-  pair of components can need a different distance range under a different site type, so proximity
+- **`proximity`** â€” component â†’ component, tagged with which scene's rule it is via `site` (the same
+  pair of components can need a different distance range under a different scene type, so proximity
   can't live on the component nodes either). Carries `min_distance_m`/`max_distance_m`/`boost`.
-  Only needed for a pair whose rule actually differs from its site's defaults above â€” most pairs
+  Only needed for a pair whose rule actually differs from its scene's defaults above â€” most pairs
   need no edge at all; see `proximity_for()`.
+
+Multi-level graphs (foundation only, no graph uses them yet): a `hint` node is a coarse detection
+class from a preliminary, cheaper source (e.g. a low-resolution basemap), and a `component` can
+carry a `refines` edge to a hint, meaning the high-resolution component sits within the hint's
+area. `refines` runs component -> hint and requires a positive `tolerance_m`: the buffer, in
+meters, around the hint inside which a component counts as refining it. The tolerance has to cover
+the coarse source's localisation error, not just the hint's footprint, or real objects fall outside
+it. Refinement is many-to-one in both directions (one hint can cover several components, and a
+component can fall inside several overlapping hints), so the structure is a layered graph rather
+than a tree. `requires` stays scene -> component, so a scene can never depend on a hint directly.
 
 Functions:
 
 - `max_relevant_distance_m()` â€” the farthest apart two things can be anywhere in this graph and
-  still plausibly matter to some rule in it (the largest of every site's
+  still plausibly matter to some rule in it (the largest of every scene's
   `default_max_distance_m`/`merge_distance_m` and every explicit proximity edge's
   `max_distance_m`). Not used by the classifier itself; `ws_server.py` uses it as the radius beyond
   which a tile from an earlier report is no longer worth carrying forward as "historical" â€” a tile
-  farther than this from anything in the current view can't affect any site/merge decision the
+  farther than this from anything in the current view can't affect any scene/merge decision the
   graph is capable of making.
-- `component_index()` â€” reverse lookup: component type â†’ every site that "requires" it. Derived
+- `component_index()` â€” reverse lookup: component type â†’ every scene that "requires" it. Derived
   from the graph's own edges.
 
-### site_tracker.py
+A scene graph's shape is derived from the properties of the specific imagery/data source it's
+built for -- resolution, capture cadence, what's actually resolvable in it -- not a template to be
+copied and relabeled for a different domain. `semantic_graph.json`'s `oil_refinery` graph is shaped
+the way it is because it was built against the resolution and revisit cadence Mapbox satellite
+imagery actually provides at `DETECT_ZOOM`: component nodes that are individually resolvable at
+that GSD, proximity thresholds calibrated against what "close together" means at that scale, no
+temporal/change-detection nodes because a single-pass satellite tile has no revisit history to
+draw on. A graph built for a different data regime -- higher-resolution imagery, a sensor with
+frequent revisits, something that resolves texture or sub-component detail this one can't -- should
+be expected to end up with a genuinely different node/edge structure and lean on different signals
+entirely, not just the oil-refinery graph's shape with its threshold numbers swapped out.
 
-Turns one round's fresh `classifier.classify()` results into stable, ever-growing tracked sites.
+### scene_tracker.py
 
-Without this, every extent report recomputed site boundaries from scratch out of whatever
+Turns one round's fresh `classifier.classify()` results into stable, ever-growing tracked scenes.
+
+Without this, every extent report recomputed scene boundaries from scratch out of whatever
 detections happened to be in `detections_by_tile` *this* round â€” as the live view shifted by even
 one tile (zoom, pan, or just the cache dropping an older tile), the exact set of pooled detections
-shifted with it, so a site's convex-hull boundary could shrink, shift, or vanish and reappear
+shifted with it, so a scene's convex-hull boundary could shrink, shift, or vanish and reappear
 between two calls that were really looking at the same real facility the whole time. Confirmed
 live: boundaries visibly "dancing" on small zoom/pan changes.
 
-A `SiteTracker` instance is per-websocket-connection (`ws_server.py` owns exactly one, created
+A `SceneTracker` instance is per-websocket-connection (`ws_server.py` owns exactly one, created
 alongside `known_tiles` in `ws_extent()`) â€” never shared across connections or persisted past a
 disconnect, same lifetime as the other per-connection state there.
 
 Reconciliation rule, run once per extent report:
 
-1. Pool this round's fresh candidates with every already-tracked site of the same site type.
+1. Pool this round's fresh candidates with every already-tracked scene of the same scene type.
 2. Union-find over that pool: two entries merge when the distance between their boundary hulls is
-   within that site's own `merge_distance_m` (a node field in `semantic_graph.json`, the same one
+   within that scene's own `merge_distance_m` (a node field in `semantic_graph.json`, the same one
    `classifier.py` used to apply only within a single round â€” see git history). Literal overlap is
-   just the distance-0 case of this same check, not a separate rule. A site type with no
+   just the distance-0 case of this same check, not a separate rule. A scene type with no
    `merge_distance_m` configured falls back to 0 â€” only literal overlap merges, matching the
    conservative default a missing config value implies.
-3. Each resulting group becomes one tracked site: its detections are the union of every group
+3. Each resulting group becomes one tracked scene: its detections are the union of every group
    member's detections (deduped by identity, see `_detection_key`), and it keeps whichever member's
-   id already existed (a fresh candidate has none; if a group merges two *already-tracked* sites
+   id already existed (a fresh candidate has none; if a group merges two *already-tracked* scenes
    together, the lower-numbered id survives and the other is retired). A group with no prior id at
    all gets a freshly minted one.
-4. Every tracked site is returned, not just ones a fresh candidate touched this round â€” a site
+4. Every tracked scene is returned, not just ones a fresh candidate touched this round â€” a scene
    already found is never dropped just because the current live view moved away from it.
 
-Because detections only ever get added to a tracked site's accumulated set, never removed, and its
+Because detections only ever get added to a tracked scene's accumulated set, never removed, and its
 boundary is the convex hull of that (monotonically growing) set, the boundary is monotonically
 non-shrinking by construction â€” exactly the "we merge, we don't redraw from scratch, so area can
 only grow" rule this module exists to implement.
@@ -828,8 +850,8 @@ three columns in, 360 m gives 1. Below 120 m the plant stops being one cluster a
 60 m it is not identified.
 
 Note the knob: `merge_distance_m` was raised first and changed nothing, because it merges two
-*already-identified site polygons* in `site_tracker`, while what decides whether a detection joins
-the cluster is `default_max_distance_m` in `classifier._component_clusters_for_site`. Easy to
+*already-identified scene polygons* in `scene_tracker`, while what decides whether a detection joins
+the cluster is `default_max_distance_m` in `classifier._component_clusters_for_scene`. Easy to
 confuse; they are set to the same value now but they are not the same mechanism.
 
 Widening the radius can only ever merge clusters, so it cannot rescue a look-alike that fails on
@@ -842,10 +864,10 @@ The full 57-site benchmark was not re-run for this (no cached detections on disk
 
 The graph now separates them, at the user's request:
 
-- **Between different components** -- the site (parent) node's `default_max_distance_m` (300 m),
-  applied by `classifier._component_clusters_for_site` to decide what belongs to one candidate
-  site. Per-pair overrides are possible via `proximity` edges; since 2026-09-24 the three pairs
-  involving `distillation-column` (with tanks, fans and itself) are declared at 450 m, the site
+- **Between different components** -- the scene (parent) node's `default_max_distance_m` (300 m),
+  applied by `classifier._component_clusters_for_scene` to decide what belongs to one candidate
+  scene. Per-pair overrides are possible via `proximity` edges; since 2026-09-24 the three pairs
+  involving `distillation-column` (with tanks, fans and itself) are declared at 450 m, the scene
   default staying 300 m. Litvinov, a sprawling complex never trained on, had tanks, fans and 8
   columns >= 0.65 but its columns sat more than 300 m from the rest; with the override it is
   identified, and nothing else in the benchmark moved (16/18 trained refineries, 0/39 look-alikes,
@@ -968,7 +990,7 @@ what OSM says is there, and `GET /api/sites` no longer sends `geometry` at all (
 the camera fit).
 
 `process_site` resets `session.tracker` and `session.known_tiles` for each run. The tracker is
-built for roaming -- it keeps every site it has ever seen so a site doesn't vanish when you pan
+built for roaming -- it keeps every scene it has ever seen so a scene doesn't vanish when you pan
 away -- which meant selecting a look-alike still showed the polygons and readout cards of
 refineries selected earlier in the session, in a different country.
 
@@ -990,11 +1012,11 @@ starts `process_site`: the site's tiles plus a one-tile halo ring are prefetched
 frontend scales its progress bar by instead of the one `sites.json` implies -- then every
 z17 tile of the polygon, centre-out, is handed to `get_or_process_detections`; as each future
 completes a `site_tile` message goes out with **that tile's** detections as GeoJSON, the cumulative
-component summary and `done/total`; the classifier + tracker (`sites`) are included at most once
-per `SITE_CLASSIFY_INTERVAL_S` (1 s) and on the final `site_done`. The first version re-ran the
+component summary and `done/total`; the classifier + tracker (`scenes`) are included at most once
+per `SCENE_CLASSIFY_INTERVAL_S` (1 s) and on the final `site_done`. The first version re-ran the
 classifier and re-serialised every detection so far on every tile: 3 s of event-loop time and
 6.5 MB over the socket for Esso, growing quadratically, and each stall delayed the next batch
-dispatch. Extent results still carry the full `sites`/`detections`/`components` with
+dispatch. Extent results still carry the full `scenes`/`detections`/`components` with
 `type: "extent"`. The site's tiles are added to `session.known_tiles` so, once the user roams
 afterwards, they count as historical tiles for the extent classifier and the tracker.
 
@@ -1006,13 +1028,13 @@ for the UX.
 
 ## ws_server.py
 
-Websocket serving for site-level results â€” the push/pull-over-a-live-connection half of the app, as
+Websocket serving for scene-level results â€” the push/pull-over-a-live-connection half of the app, as
 opposed to `tile_server.py`'s per-tile request/response half. Only ever calls
 `tile_server.get_or_process_detections()` â€” never reaches into `tile_server`'s own state, and
 `tile_server` has no idea this module exists.
 
-Site-level results (identified-site boundaries) don't fit the tile server's request/response shape:
-a site spans the whole live view, not one tile, and isn't triggered by any single tile request the
+Scene-level results (identified-scene boundaries) don't fit the tile server's request/response shape:
+a scene spans the whole live view, not one tile, and isn't triggered by any single tile request the
 way `/api/tile` or `/api/detections` are â€” it's driven by how the user is browsing. A websocket fits
 that better than a one-shot HTTP call: the frontend sends its current live view on every
 moveend/idle, and gets a GeoJSON FeatureCollection back over the same long-lived connection.
@@ -1030,13 +1052,13 @@ rather than a background task â€” simplest correct option given how infrequ
 relative to the timeout window). Deliberately *not* meant to survive a page reload or a new tab â€”
 `api.ts`'s `ExtentSocket` generates a fresh session id per instance (once per page load), so this
 only ever resumes a transient reconnect *within* an already-open tab (a brief network drop), not a
-genuinely new visit. Losing tracked sites between actual sessions is accepted as-is, not a gap to
+genuinely new visit. Losing tracked scenes between actual sessions is accepted as-is, not a gap to
 close.
 
-`_Session`/the site tracker live keyed by the `?session=` query param (see `api.ts`'s
+`_Session`/the scene tracker live keyed by the `?session=` query param (see `api.ts`'s
 `ExtentSocket`) rather than as plain per-connection local variables, so a brief reconnect (same tab,
 same `ExtentSocket` instance, just a dropped-then-reopened TCP connection) resumes the same tracked
-sites instead of starting over.
+scenes instead of starting over.
 
 `MAX_ZOOM_GAP` â€” defensive cap on `DETECT_ZOOM - reported_zoom`. The frontend's own trigger zoom
 (15, kept below `tile_server.DETECT_ZOOM=17`) never reports anything more than 2 per axis (4
@@ -1049,26 +1071,26 @@ frontend's own gate.
 The `DETECT_ZOOM` tile(s) covering the same ground as `(z, x, y)` â€” a single tile if `z` is already
 `DETECT_ZOOM`, its one ancestor if `z` is zoomed in past it, or every descendant if `z` is zoomed
 out below it (e.g. a z15 tile has 2^(16-15) x 2^(16-15) = 2x2 = 4 z16 descendants). Real detection
-only ever happens at `DETECT_ZOOM` â€” this is what lets the site-level layer still show a match at
+only ever happens at `DETECT_ZOOM` â€” this is what lets the scene-level layer still show a match at
 any zoom the user is actually looking at.
 
 ### `_prune_far_tiles()`
 
 Drops any `historical_tiles` entry farther than `MAX_RELEVANT_DISTANCE_M` from every tile in
 `current_tiles` â€” the radius beyond which nothing in the graph could still merge/relate it to
-whatever's in the current view. Without this, a tile from a site the user panned away from minutes
-ago stayed in `known_tiles` forever (the connection's whole lifetime), so that old site kept
+whatever's in the current view. Without this, a tile from a scene the user panned away from minutes
+ago stayed in `known_tiles` forever (the connection's whole lifetime), so that old scene kept
 getting reported alongside whatever new one the user panned to next â€” confirmed live, this is what
-caused two unrelated sites to show up together. A tile that's still part of the *same* site the
+caused two unrelated scenes to show up together. A tile that's still part of the *same* scene the
 user zoomed into a sub-area of stays, since it's within `MAX_RELEVANT_DISTANCE_M` of the current
 view by construction (that's the whole point of the radius being the graph's own largest configured
 distance).
 
 ### `_feature_collection()`
 
-Classifies `detections_by_tile` into fresh candidate site matches, reconciles them into `tracker`'s
-ever-growing tracked sites (see the site_tracker section above for why â€” this is the fix for
-boundaries "dancing" between calls), and returns the *full* set of tracked sites as a GeoJSON
+Classifies `detections_by_tile` into fresh candidate scene matches, reconciles them into `tracker`'s
+ever-growing tracked scenes (see the scene_tracker section above for why â€” this is the fix for
+boundaries "dancing" between calls), and returns the *full* set of tracked scenes as a GeoJSON
 FeatureCollection â€” not just the ones `detections_by_tile` touched this round.
 
 ### `_center_out_order()`
@@ -1096,7 +1118,7 @@ Both sets ordered center-out purely so a large batch's processing *order* still 
 most central, even though nothing gets reported until `current_tiles` is fully done.
 
 Runs through `tracker`/`_feature_collection()` even when both tile sets are empty (e.g. an
-empty-tiles cancel report, see `Map.tsx`'s movestart handler) â€” a tracked site already found must
+empty-tiles cancel report, see `Map.tsx`'s movestart handler) â€” a tracked scene already found must
 keep being reported regardless of what's currently in view, not just dropped because this
 particular report has nothing new to contribute.
 
@@ -1105,9 +1127,9 @@ particular report has nothing new to contribute.
 The frontend sends its current live view (`{"zoom", "tiles"}`) on every moveend; each message
 translates to `DETECT_ZOOM` tiles (`_detect_zoom_tiles()`) and merges them into this connection's
 accumulated `known_tiles`. A tile that scrolled off screen (e.g. zooming in on part of an
-already-identified site) still counts toward classification, so the site doesn't un-identify itself
+already-identified scene) still counts toward classification, so the scene doesn't un-identify itself
 just because the live view got smaller â€” but only as long as it's still within
-`MAX_RELEVANT_DISTANCE_M` of the current view (`_prune_far_tiles()`); a tile from a site the user
+`MAX_RELEVANT_DISTANCE_M` of the current view (`_prune_far_tiles()`); a tile from a scene the user
 has since panned well away from gets dropped instead of lingering in `known_tiles` for the rest of
 the connection. Only *this* message's tiles are worth spending queue/worker time on â€” everything
 else kept is passed to `classify_extent()` as best-effort "historical" tiles (cache-only, see
@@ -1134,17 +1156,17 @@ tiles" goal â€” but the loop then just `continue`s back to waiting for the 
 in-flight `classify_extent()`/`_send_result()` alone. Before this fix, the empty-tiles message went
 through the exact same cancel-then-restart path as a real report: it cancelled whatever was running
 (even if it was seconds away from finishing) and started a new, fast, essentially-empty
-`_send_result()` in its place. Since `SiteTracker` always re-reports *every* already-tracked site
+`_send_result()` in its place. Since `SceneTracker` always re-reports *every* already-tracked scene
 regardless of what a given round's fresh candidates were, that fast empty report could still carry
-a non-zero `siteCount` â€” just stale data from an earlier successful round, not the result of
+a non-zero `sceneCount` â€” just stale data from an earlier successful round, not the result of
 whatever the user was actually now looking at. Confirmed live: the backend really was finishing the
 work (the underlying per-tile jobs aren't affected by cancelling the *classify_extent* task that
 was awaiting them â€” see `tile_server.py`'s `_run_detection_batch` docs above), it just never got a
 chance to report it, because an incidental `movestart` (which fires on almost any interaction, not
 just a deliberate "I'm done waiting" gesture) kept discarding the result moments before it would
-have been sent. This was the actual cause of "the site-boundary layer only updates after panning" â€”
+have been sent. This was the actual cause of "the scene-boundary layer only updates after panning" â€”
 a separate bug from (and this fix predates) the raster-tile connection-starvation issue described
-above under `get_detections()`, which affected only the per-tile boxes, not the site polygon.
+above under `get_detections()`, which affected only the per-tile boxes, not the scene polygon.
 
 ## Deployment: restart.sh / restart.ps1 / stop.sh / stop.ps1
 

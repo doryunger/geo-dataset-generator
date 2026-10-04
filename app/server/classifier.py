@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"
 
 import common  # noqa: E402
 import geometry  # noqa: E402
-import site_graph  # noqa: E402
+import scene_graph  # noqa: E402
 
 BOUNDARY_BUFFER_M = 100.0
 
@@ -47,10 +47,10 @@ def tile_clusters(tiles: list[tuple[int, int, int]]) -> list[list[tuple[int, int
     return list(groups.values())
 
 
-def _component_clusters_for_site(
-    detections: list[dict], site: str, graph: dict, z: int, ref_lat: float,
+def _component_clusters_for_scene(
+    detections: list[dict], scene: str, graph: dict, z: int, ref_lat: float,
 ) -> list[list[dict]]:
-    edges = site_graph.proximity_for(graph, site)
+    edges = scene_graph.proximity_for(graph, scene)
     edge_lookup = {frozenset((e["from"], e["to"])): e for e in edges}
 
     uf = _UnionFind(len(detections))
@@ -113,7 +113,7 @@ GROUP_MIN_MEMBERS = 2
 
 
 def counted_groups(detections: list[dict], graph: dict, component: str, z: int, ref_lat: float) -> list[list[int]]:
-    within_m = site_graph.group_within_m(graph, component)
+    within_m = scene_graph.group_within_m(graph, component)
     if within_m is None:
         return [[i] for i in range(len(detections))]
     return [g for g in same_class_groups(detections, z, ref_lat, within_m) if len(g) >= GROUP_MIN_MEMBERS]
@@ -130,12 +130,12 @@ def counts_for(cluster_dets: list[dict], requirements: dict, graph: dict, z: int
     return counts
 
 
-def score(cluster_dets: list[dict], site: str, graph: dict, z: int, ref_lat: float) -> dict:
-    requirements = {e["to"]: e for e in site_graph.requirements_for(graph, site)}
+def score(cluster_dets: list[dict], scene: str, graph: dict, z: int, ref_lat: float) -> dict:
+    requirements = {e["to"]: e for e in scene_graph.requirements_for(graph, scene)}
     counts = counts_for(cluster_dets, requirements, graph, z, ref_lat)
     matched_types = {name for name, n in counts.items() if n >= requirements[name].get("min_count", 1)}
 
-    min_needed, total = site_graph.min_types_present(graph, site)
+    min_needed, total = scene_graph.min_types_present(graph, scene)
     return {
         "matched_types": sorted(matched_types),
         "type_coverage_ratio": (len(matched_types) / total) if total else 0.0,
@@ -146,18 +146,18 @@ def score(cluster_dets: list[dict], site: str, graph: dict, z: int, ref_lat: flo
 def classify(
     detections_by_tile: dict[tuple[int, int, int], list[dict]], z: int, ref_lat: float, graph: dict,
 ) -> list[dict]:
-    site_names = [name for name, cfg in graph["nodes"].items() if cfg["kind"] == "site"]
+    scene_names = [name for name, cfg in graph["nodes"].items() if cfg["kind"] == "scene"]
 
     results = []
     for tile_group in tile_clusters(list(detections_by_tile)):
         pooled = [d for t in tile_group for d in detections_by_tile[t]]
         if not pooled:
             continue
-        for site in site_names:
-            for comp_cluster in _component_clusters_for_site(pooled, site, graph, z, ref_lat):
-                scored = score(comp_cluster, site, graph, z, ref_lat)
+        for scene in scene_names:
+            for comp_cluster in _component_clusters_for_scene(pooled, scene, graph, z, ref_lat):
+                scored = score(comp_cluster, scene, graph, z, ref_lat)
                 if scored["identified"]:
-                    results.append({**scored, "site": site, "detections": comp_cluster})
+                    results.append({**scored, "scene": scene, "detections": comp_cluster})
     return results
 
 

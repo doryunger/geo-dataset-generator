@@ -2,7 +2,7 @@
 
 Satellite map that runs three OBB detectors on every tile it looks at: DOTAv1's pretrained
 `storage tank`, plus the custom-trained `fan-unit` and `distillation-column`. It then applies
-the semantic graph (`server/semantic_graph.json`) to decide whether a site is an oil refinery.
+the semantic graph (`server/semantic_graph.json`) to decide whether a scene is an oil refinery.
 See the root [README](../README.md) for the idea. Design notes and measurements are in
 [server/context/server.md](server/context/server.md) and
 [web/context/frontend.md](web/context/frontend.md).
@@ -45,7 +45,7 @@ For a remote deployment, see `deploy/`.
 - **Free roaming**: base imagery comes from `GET /api/tile/{z}/{x}/{y}` and never waits on
   detection. Boxes arrive over the websocket as tiles finish. Below zoom 16 nothing is
   detected.
-- **Guided tour** after the first site: site list, graph, verdict box, site outline, then a
+- **Guided tour** after the first site: site list, graph, verdict box, scene outline, then a
   zoom onto a cluster of detections. Esc skips it.
 - `?debug` in the URL shows the inference stats box.
 
