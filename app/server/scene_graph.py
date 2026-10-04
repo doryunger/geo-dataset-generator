@@ -6,8 +6,19 @@ GRAPH_PATH = Path(__file__).resolve().parent / "semantic_graph.json"
 SCENE_DEFAULT_FIELDS = ("default_min_distance_m", "default_max_distance_m", "default_boost")
 
 
-def load_graph() -> dict:
-    return _validate(json.loads(GRAPH_PATH.read_text()))
+def load_graph(path: Path = GRAPH_PATH) -> dict:
+    return _validate(json.loads(path.read_text()))
+
+
+def hints(graph: dict, source: str) -> dict[str, float]:
+    tolerances: dict[str, float] = {}
+    for edge in graph["edges"]:
+        if edge["relation"] != "refines":
+            continue
+        hint = graph["nodes"][edge["to"]]
+        if hint["source"] == source:
+            tolerances[hint["class"]] = max(tolerances.get(hint["class"], 0.0), edge["tolerance_m"])
+    return tolerances
 
 
 def _validate(raw: dict) -> dict:
@@ -23,6 +34,8 @@ def _validate(raw: dict) -> dict:
                 f"scene node {name!r} has 'group_within_m': that is a component's own member spacing, "
                 "scene nodes use default_max_distance_m for the distance between different components"
             )
+        if kind == "hint" and not (isinstance(cfg.get("source"), str) and isinstance(cfg.get("class"), str)):
+            raise ValueError(f"hint {name!r} needs a 'source' and a 'class' naming the detection it refines: {cfg!r}")
         if kind == "component" and cfg.get("group_within_m") is not None and cfg["group_within_m"] <= 0:
             raise ValueError(f"component {name!r} has a non-positive 'group_within_m': {cfg!r}")
 

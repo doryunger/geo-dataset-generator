@@ -6,10 +6,9 @@ from shapely.geometry import MultiPoint
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
 
+import classifier  # noqa: E402
 import common  # noqa: E402
 import geometry  # noqa: E402
-
-import classifier  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

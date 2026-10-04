@@ -581,10 +581,11 @@ Two kinds of edge:
   Only needed for a pair whose rule actually differs from its scene's defaults above â€” most pairs
   need no edge at all; see `proximity_for()`.
 
-Multi-level graphs (foundation only, no graph uses them yet): a `hint` node is a coarse detection
-class from a preliminary, cheaper source (e.g. a low-resolution basemap), and a `component` can
-carry a `refines` edge to a hint, meaning the high-resolution component sits within the hint's
-area. `refines` runs component -> hint and requires a positive `tolerance_m`: the buffer, in
+Multi-level graphs: a `hint` node is a coarse detection class from a preliminary, cheaper
+source, named explicitly by its fields (`{"kind": "hint", "source": "basemap", "class":
+"fan-unit"}`) rather than by the node name, because a finer graph often has a component with the
+same name as the coarse class it refines and node names must be unique. A `component` can carry a
+`refines` edge to a hint, meaning the finer component sits within the hint's area. `refines` runs component -> hint and requires a positive `tolerance_m`: the buffer, in
 meters, around the hint inside which a component counts as refining it. The tolerance has to cover
 the coarse source's localisation error, not just the hint's footprint, or real objects fall outside
 it. Refinement is many-to-one in both directions (one hint can cover several components, and a
@@ -1257,3 +1258,94 @@ logs who *woke* the instance. This log shows what the instance did while it was 
   writing its own. A crash or a hard stop is picked up at the next boot, and a clean stop just
   overwrites the same key with identical content. The S3 client uses short timeouts, so the upload
   fits inside Docker's 10 s stop grace period.
+
+## flags.py, flags.json -- feature flags (2026-10-04)
+
+Feature switches live in `flags.json`, separate from the model settings in `config.json`. `flags.py`
+reads it once at startup and rejects a malformed value (a non-boolean `enabled`, an unknown
+`tile_scheme`) instead of guessing, so a typo stops the app rather than silently flipping a feature.
+`GET /api/flags` returns the same values so the frontend picks them up when a session starts
+instead of baking them in at build time; changing a flag needs a restart, not a rebuild of the web
+image. The Docker build reads the same file to decide whether to install a feature's extra
+packages, so there is one switch per feature. The file is served publicly: never put secrets in it.
+
+## detection_store.py, detection_api.py -- stored detections (detection_tiles flag, 2026-10-04)
+
+Off unless `flags.json` sets `detection_tiles.enabled`. With it off, nothing is recorded, the routes are not mounted, and
+pyarrow is never imported, so a default deployment behaves exactly as before. Storage and display
+are separate concerns: GeoParquet is the queryable store, and MBTiles (vector tiles built by
+tippecanoe) is only for drawing.
+
+- **Store**: one GeoParquet file per detected tile under `detections/<source>/tiles/`, written by
+  `tile_server` right after fusion and the graph-relevance filter, so it holds what the map draws.
+  A reprocessed tile overwrites its file and a tile with no detections deletes it, so the store
+  tracks the latest model rather than accumulating stale runs. Each row carries a precomputed
+  lon/lat bbox (`minx/miny/maxx/maxy`) so `query_bbox` filters with plain column predicates and
+  needs no spatial library. Sized for ~100k detections; at that scale a file per tile is fine.
+- **Tiles**: every write schedules one debounced rebuild per source (30 s), which exports the store
+  to GeoJSON-seq, runs tippecanoe (z14-18, the last deep enough that quantisation doesn't blur
+  boxes), and atomically replaces `detections/<source>/detections.mbtiles`. A burst of tile writes
+  costs one rebuild. Manual rebuild: `python app/server/detection_store.py build --source basemap`.
+- **Serving**: `GET /api/detection-tiles/{source}/{z}/{x}/{y}.pbf` always takes XYZ coordinates
+  (what MapLibre requests). The MBTiles spec stores rows in TMS order, which is the default
+  (`tile_scheme: tms`) and keeps the file readable by standard tools; the reader then flips `y`.
+  `tile_scheme: xyz` rewrites the rows to XYZ after the build so no flip is needed, at the cost of a
+  file other MBTiles tools will misread. The build records the scheme in the file's `metadata`
+  table and the reader follows that, not the current flag, so changing the flag can't mismatch a
+  file built under the other scheme. The rewrite goes through negative row values in two updates
+  because a direct flip collides with the unique tile index partway through. tippecanoe gzips tiles, so the endpoint sets `Content-Encoding: gzip`.
+  `GET /api/detections/query?bbox=w,s,e,n` returns GeoJSON from the Parquet store, capped at 5000.
+- **Source name** is checked against `[a-z0-9_-]+` because it becomes a path component.
+- **Only complete results are recorded.** When roaming, a batch with no evidence closes the model
+  gate and the gated models (fan unit, distillation column) never run. Recording that partial
+  result would overwrite, or delete, a full result stored earlier by a site run or the pipeline,
+  so `tile_server` records only when the gate was open.
+- **Build next to the store.** The tile build runs in a temp directory inside the store, not the
+  system temp dir: in Docker the store is a mounted volume, and `os.replace` across filesystems
+  fails, so a system-temp build would never land.
+- **Keep small boxes.** tippecanoe by default thins features and turns tiny polygons into
+  placeholder squares at lower zooms; `--drop-rate=1 --no-tiny-polygon-reduction` keeps every box
+  as drawn.
+- **Bounded tile coordinates.** The endpoint rejects `z` above 24 and `x`/`y` outside the zoom's
+  range before computing `1 << z`, so a crafted URL can't make the server build a huge integer.
+- **Readers tolerate a vanishing file.** A tile file can be deleted between listing and reading
+  (its tile became empty), so a store read retries once on `FileNotFoundError`.
+- **Stale until reprocessed.** Each store holds the last result per tile. If a later pipeline run
+  stops before a finer source, that source's earlier results in the area stay in its store and on
+  its tiles until those tiles are processed again.
+- The Docker image installs tippecanoe and pyarrow only when `flags.json` enables the feature at
+  build time, so a default build is unchanged and can't fail on the extra apt package. Enabling it
+  therefore needs an image rebuild once, to get the packages in. Detections persist in the
+  `detections` compose volume.
+
+## sources.json, sources.py, pipeline.py -- multi-source processing (2026-10-04)
+
+Multi-level graphs mean multi-source processing: each imagery source has its own detector, its own
+graph and its own detection store and tileset, and `sources.json` lists the sources in one global
+order, cheapest and widest coverage first. Only `basemap` exists today; the second entry is added
+when real imagery is available.
+
+- **Source entry**: `detector` (`builtin` = the app's own tile pipeline, `yolo` = a generic
+  detector over any XYZ web-mercator tile set given by a `tiles` URL or path template, with a
+  `models` list), `detect_zoom`, and `graph` (a graph file next to `sources.json`). `display` names
+  the source whose tileset the map shows, which must match the imagery on screen. A `builtin`
+  source must run at the app's detect zoom, since it reuses the app's tile cache and models.
+- **Validation** (`sources.py`) rejects a source after the first whose graph has no `refines` edge
+  to a hint from the source right before it, since it would have no way to take hints. It also
+  requires a `graph` on every source, and requires a `builtin` source to use the app's own
+  `semantic_graph.json`, since the app filters that source's detections by that graph. The app
+  validates at startup when the detection_tiles flag is on, so a broken config stops it early.
+- **Pipeline** (`python app/server/pipeline.py --site <id>` or `--bbox w,s,e,n`) is headless: the
+  map and websocket paths never call it. The first source processes every tile in the area. Each
+  later source queries the previous source's store for detections of its hinted classes, buffers
+  each by its `refines` tolerance, and processes only the tiles those buffers touch. A stage with
+  no hinted detections stops the pipeline, since there is nothing for the finer source to refine.
+  Every stage records to its own store, builds its tileset before exiting (the store's debounce
+  timer would never fire in a short-lived process), and reports its graph's scene verdict.
+  `--max-tiles` guards against an area so large it would run up imagery costs by accident.
+- **Tile scale**: the generic detector rescales each image's box coordinates to the app's tile
+  pixel size, so sources with 256 px tiles, or any other size, land in the same coordinate space.
+- **Tested** on 2026-10-04 with a stubbed basemap stage and a synthetic local 256 px XYZ folder as
+  the second source: the hint cut the second stage from 169 tiles to 4, box sizes came out right
+  after rescaling, and an area with no hinted class stopped after the first stage. No real second
+  source has run yet.

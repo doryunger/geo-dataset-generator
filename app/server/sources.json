@@ -1,0 +1,11 @@
+{
+  "order": ["basemap"],
+  "display": "basemap",
+  "sources": {
+    "basemap": {
+      "detector": "builtin",
+      "detect_zoom": 17,
+      "graph": "semantic_graph.json"
+    }
+  }
+}

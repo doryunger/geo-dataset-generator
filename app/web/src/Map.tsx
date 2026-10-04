@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
-  type ComponentSummary, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, INITIAL_ZOOM, type SceneFeatureCollection,
+  type ComponentSummary, EMPTY_DETECTIONS, EMPTY_FEATURE_COLLECTION, fetchDetectionSources, fetchFlags, INITIAL_ZOOM,
+  type SceneFeatureCollection,
   type SceneFeatureProperties,
 } from './api'
 import { classColorExpression } from './classColors'
@@ -314,6 +315,30 @@ export default function Map() {
       layout: { 'text-field': ['get', 'scene'], 'text-size': 16, 'text-font': ['Open Sans Semibold'] },
       paint: { 'text-color': '#fff', 'text-halo-color': '#000', 'text-halo-width': 1.5 },
     })
+  }, [isMapLoaded])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!isMapLoaded || !map) return
+    let cancelled = false
+    fetchFlags()
+      .then((flags) => (flags.detection_tiles.enabled ? fetchDetectionSources() : null))
+      .then((sources) => {
+        if (cancelled || !sources || map.getSource('stored-detections')) return
+        map.addSource('stored-detections', {
+          type: 'vector', tiles: [`/api/detection-tiles/${sources.display}/{z}/{x}/{y}.pbf`], minzoom: 14, maxzoom: 18,
+        })
+        map.addLayer({
+          id: 'stored-detection-outline', type: 'line', source: 'stored-detections', 'source-layer': 'detections',
+          paint: {
+            'line-color': classColorExpression() as maplibregl.ExpressionSpecification,
+            'line-width': 1.5,
+            'line-dasharray': [2, 1],
+          },
+        }, 'detection-outline-weak')
+      })
+      .catch((err) => console.warn('[flags] could not load flags or detection sources, stored detections stay hidden', err))
+    return () => { cancelled = true }
   }, [isMapLoaded])
 
   useEffect(() => {

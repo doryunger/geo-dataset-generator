@@ -2,6 +2,7 @@ import asyncio
 import time
 from contextlib import asynccontextmanager
 
+import flags
 import sites
 import tile_server
 import usage_log
@@ -26,10 +27,17 @@ app = FastAPI(lifespan=lifespan)
 @app.middleware("http")
 async def count_requests(request: Request, call_next):
     if request.url.path != "/api/stats":
-        usage_log.record_request(usage_log.client_info(request.headers, request.client.host if request.client else None))
+        host = request.client.host if request.client else None
+        usage_log.record_request(usage_log.client_info(request.headers, host))
     return await call_next(request)
 
 
 app.include_router(tile_server.router)
 app.include_router(ws_server.router)
 app.include_router(sites.router)
+app.include_router(flags.router)
+
+if flags.DETECTION_TILES:
+    import detection_api
+
+    app.include_router(detection_api.router)

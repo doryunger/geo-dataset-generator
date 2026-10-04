@@ -1,0 +1,6 @@
+{
+  "detection_tiles": {
+    "enabled": false,
+    "tile_scheme": "tms"
+  }
+}

@@ -654,3 +654,20 @@ proxy doesn't upgrade websockets on its own); production uses nginx for the same
 (`deploy/nginx.conf`). `maplibre-gl` is excluded from `optimizeDeps` because it loads a separate
 worker bundle at runtime that the pre-bundler doesn't follow: every GeoJSON source 404'd its
 worker and silently never finished loading, while raster sources rendered fine.
+
+## Stored detections layer (detection_tiles flag, 2026-10-04)
+
+Added only when `GET /api/flags` reports `detection_tiles.enabled`; the map fetches the flags once
+it has loaded, so the switch is the backend's `flags.json` rather than a build-time variable. If
+the request fails the layer stays off and the map works as before. Adds a vector source over
+`/api/detection-tiles/basemap/{z}/{x}/{y}.pbf` (XYZ) and a dashed outline layer inserted below the
+live detection layers, coloured by `class_name` with the same expression as the live detections so
+the two read as one palette while staying distinguishable. The `getSource` check guards against
+React's development double-run of effects adding the source twice.
+
+The tileset shown must match the imagery source on screen: detections from a coarse source drawn
+over finer imagery look misplaced by the coarse source's localisation error. The tileset comes from
+`display` in the backend's `sources.json` via `GET /api/detection-sources`, not a hardcoded name;
+once a second imagery source is on screen, `display` has to change with it. Showing a coarse
+source's detections over finer imagery should only happen deliberately, as a differently styled
+hints layer, never as the default.

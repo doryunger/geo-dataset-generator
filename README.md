@@ -68,6 +68,46 @@ team, since the imagery is licensed.
 
 Full process: [docs/training-a-new-class.md](docs/training-a-new-class.md).
 
+## Part 3: storing detections and reusing them
+
+Running the detectors is the expensive step, so the results are kept instead of thrown away. Two
+needs are kept apart, each with its own format:
+
+- **Querying** uses a GeoParquet store. Detections are saved per tile with their class,
+  confidence and location, so they can be looked up by area without running the detectors again.
+- **Display** uses vector tiles built from that store. The map draws them at every zoom level and
+  never touches the store directly.
+
+```mermaid
+flowchart LR
+    I[Imagery tile] --> D[Detectors]
+    D --> F[Detections for the tile]
+    F --> S[(Detection store<br/>GeoParquet)]
+    S -->|query by area| Q[Detections in an area]
+    S -->|rebuilt when detections change| T[Vector tiles]
+    T -->|drawn by zoom| M[Map]
+```
+
+When a tile is processed again, its stored detections are replaced, and the vector tiles are
+rebuilt from the store, so the map always shows the latest run.
+
+The same store is how several imagery sources work together. Sources run in one fixed order,
+cheapest and widest coverage first. Each later source asks the store what the source before it
+found, and only looks closely around those places. Each source keeps its own detectors, scene
+rules, store and vector tiles, and the map shows the tiles that match the imagery on screen:
+
+```mermaid
+flowchart LR
+    C[Coarse imagery] --> CD[Its detectors] --> CS[(Its store)]
+    CS -->|where to look| F[Finer imagery, only around hints]
+    F --> FD[Its detectors] --> FS[(Its store)]
+    FS --> FT[Its vector tiles] --> M[Map showing the finer imagery]
+```
+
+If the coarse source finds nothing the finer one is meant to refine, the chain stops there.
+
+This path is optional and switched off by default.
+
 ## The demo app
 
 Live at **<https://refinery.stamsite.cc/>**. The first load can take a few minutes. Pick a

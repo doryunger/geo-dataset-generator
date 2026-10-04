@@ -1,6 +1,7 @@
 # Generated/fetched data — not source-controlled (size + Mapbox licensing + it's all
 # reconstructible from a fresh search, none of it is hand-authored).
 tiles/
+detections/
 embeddings/
 models/
 classes/

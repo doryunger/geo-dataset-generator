@@ -15,6 +15,15 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu126 \
         "torch==$(grep '^torch==' app/requirements.txt | cut -d= -f3)" torchvision \
     && pip install -r app/requirements.txt
 
+COPY app/requirements-detection-tiles.txt app/requirements-detection-tiles.txt
+COPY app/server/flags.json app/server/flags.json
+RUN if python -c "import json, sys; sys.exit(0 if json.load(open('app/server/flags.json'))['detection_tiles']['enabled'] else 1)"; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends tippecanoe \
+        && rm -rf /var/lib/apt/lists/* \
+        && pip install -r app/requirements-detection-tiles.txt; \
+    fi
+
 COPY scripts/common.py scripts/s3_sync.py scripts/app_assets.py scripts/
 COPY app/server app/server
 COPY app/data/sites.json app/data/sites.json

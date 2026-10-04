@@ -13,6 +13,7 @@ services:
       - models:/repo/models
       - tiles:/repo/tiles
       - logs:/repo/logs
+      - detections:/repo/detections
     deploy:
       resources:
         reservations:
@@ -44,3 +45,4 @@ volumes:
   models:
   tiles:
   logs:
+  detections:

@@ -82,6 +82,27 @@ export interface ResultMessage {
   total?: number
 }
 
+export interface Flags {
+  detection_tiles: { enabled: boolean; tile_scheme: 'tms' | 'xyz' }
+}
+
+export async function fetchFlags(): Promise<Flags> {
+  const res = await fetch('/api/flags')
+  if (!res.ok) throw new Error(`GET /api/flags failed: ${res.status}`)
+  return res.json()
+}
+
+export interface DetectionSources {
+  order: string[]
+  display: string
+}
+
+export async function fetchDetectionSources(): Promise<DetectionSources> {
+  const res = await fetch('/api/detection-sources')
+  if (!res.ok) throw new Error(`GET /api/detection-sources failed: ${res.status}`)
+  return res.json()
+}
+
 export async function fetchSites(): Promise<Site[]> {
   const res = await fetch('/api/sites')
   if (!res.ok) throw new Error(`GET /api/sites failed: ${res.status}`)

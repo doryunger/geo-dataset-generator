@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import common  # noqa: E402
+import detection_store  # noqa: E402
 import fuser  # noqa: E402
 import geometry  # noqa: E402
 import model_router  # noqa: E402
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 MIN_DETECT_ZOOM: int = model_router.MIN_DETECT_ZOOM
 
 DETECT_ZOOM = 17
+RECORD_DETECTIONS = detection_store.enabled()
 
 _GRAPH: dict = scene_graph.load_graph()
 _COMPONENT_MIN_CONFIDENCE: dict[str, float] = {}
@@ -396,7 +398,8 @@ def _collect(p: dict, model_key: str, r) -> tuple[list[dict], dict[str, int]]:
     halo_dropped = 0
     for cls_id, conf, xy in zip(r.obb.cls.tolist(), r.obb.conf.tolist(), r.obb.xyxyxyxy.tolist()):
         class_name = r.names[int(cls_id)]
-        corners = [(pt[0] * src["scale_back_x"] - p["halo_px"], pt[1] * src["scale_back_y"] - p["halo_px"]) for pt in xy]
+        halo = p["halo_px"]
+        corners = [(pt[0] * src["scale_back_x"] - halo, pt[1] * src["scale_back_y"] - halo) for pt in xy]
         cx = sum(pt[0] for pt in corners) / 4
         cy = sum(pt[1] for pt in corners) / 4
         if not (0 <= cx < p["native_w"] and 0 <= cy < p["native_h"]):
@@ -517,6 +520,8 @@ def _run_detection_batch(jobs: "list[Job]") -> "list[tuple[bytes | None, list[di
                 [(d["class_name"], d["model"], round(d["confidence"], 3)) for d in dropped],
             )
 
+        if RECORD_DETECTIONS and p["gate"] == "open":
+            detection_store.record_tile(detection_store.DEFAULT_SOURCE, job.z, job.x, job.y, detections)
         results_by_index[p["index"]] = (TRANSPARENT_TILE_BYTES if not detections else None, detections)
     stage_ms["fuse"] = (time.perf_counter() - stage_t0) * 1000
     logger.info("Batch of %d stages: %s", len(jobs), {k: f"{v:.0f}ms" for k, v in stage_ms.items()})

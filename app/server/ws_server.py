@@ -7,18 +7,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import usage_log
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-
-import usage_log
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import classifier  # noqa: E402
-import model_router  # noqa: E402
 import common  # noqa: E402
 import geometry  # noqa: E402
+import model_router  # noqa: E402
 import scene_graph  # noqa: E402
 import scene_tracker  # noqa: E402
 import sites  # noqa: E402
@@ -128,7 +127,9 @@ def _ref_lat_from_detections(detections: list[dict], z: int) -> float:
     return sum(lats) / len(lats)
 
 
-def _feature_collection(detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: scene_tracker.SceneTracker) -> dict:
+def _feature_collection(
+    detections_by_tile: dict[tuple[int, int, int], list[dict]], tracker: scene_tracker.SceneTracker,
+) -> dict:
     fresh_matches = []
     ref_lat = _ref_lat(detections_by_tile) if detections_by_tile else DEFAULT_REF_LAT
     if detections_by_tile:
@@ -280,7 +281,8 @@ async def process_site(websocket: WebSocket, site: dict, session: "_Session") ->
                 detections_by_tile[key] = dets
                 all_detections.extend(dets)
             message = {
-                "type": "site_tile", "site": site["id"], "tile": common.tile_id(*key), "done": done, "total": len(tiles),
+                "type": "site_tile", "site": site["id"], "tile": common.tile_id(*key),
+                "done": done, "total": len(tiles),
                 "detections": {"type": "FeatureCollection", "features": sites.detection_features({key: dets or []})},
                 "components": sites.component_summary(all_detections, GRAPH, site_ref_lat),
             }
