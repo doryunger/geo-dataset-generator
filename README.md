@@ -118,15 +118,12 @@ seconds. A guided tour explains the interface after the first site.
 
 Some scenes cannot be identified from a single source. Fusing several sources lets us find them.
 
-Each source gets its own graph, with its own classes, built around what that source can resolve.
-The graphs are chained into levels. The first level is the cheapest and coarsest and covers the
-whole area. Each next level looks only around what the level before found, so it can afford
-better imagery and heavier computation. The area keeps shrinking, and the last levels may look
-only at the detections themselves.
+Each source has its own graph and classes, built around what it can resolve. The graphs are
+chained into levels. The first level is the cheapest and coarsest. It covers the whole area. Each
+following level looks only around what the level before found, so it can afford better imagery
+and heavier computation. The area keeps shrinking, and the last levels may look only at the
+detections themselves.
 
-Each class declares its purpose on its source, and the purpose decides how its detections are
-used. Some only narrow where the next level looks. Others confirm or reject what an earlier level
-found, so false positives are removed rather than passed on.
-
-Any scene that can be described by its visible components works the same way, on any source that
-can resolve them.
+Each class also declares a purpose, which decides how its detections are used. Some only guide
+where the next level looks. Others confirm or reject what an earlier level found, so false
+positives are removed rather than passed on.
