@@ -118,28 +118,15 @@ seconds. A guided tour explains the interface after the first site.
 
 Some scenes cannot be identified from a single source. Fusing several sources lets us find them.
 
-Each source shows something different. A wide and cheap source shows where something might be. A
-sharper source, or another kind of sensor, shows what it is. So each source gets its own graph,
-built around what that source can resolve at its resolution and refresh rate. The graphs are then
-chained into levels, in the source order from Part 3.
+Each source gets its own graph, with its own classes, built around what that source can resolve.
+The graphs are chained into levels. The first level is the cheapest and coarsest and covers the
+whole area. Each next level looks only around what the level before found, so it can afford
+better imagery and heavier computation. The area keeps shrinking, and the last levels may look
+only at the detections themselves.
 
-The first level is the cheapest and coarsest. It runs over the whole area of interest. Each next
-level covers less ground and only looks where the level before found something. That is where it
-can afford better imagery and heavier computation. The expensive steps run only where they are
-needed.
-
-Each level does two jobs. It focuses the search on places likely to hold more detections. It also
-checks what earlier levels found, so false positives are removed rather than passed on. The area
-keeps shrinking, and the last levels may look only at the detections themselves.
-
-A graph has its own classes. It names only what its own detectors can see in its own imagery, and
-does not inherit the classes of the graph before it. Levels are linked by hints instead. A later
-graph points to a class from the previous source and looks only around those places, within a set
-distance.
-
-Each class also declares why it is looked for on that source. This purpose decides how its
-detections are processed. A detection may only narrow where the next source looks. It may also
-confirm or reject what an earlier source found, using a signal only this source measures.
+Each class declares its purpose on its source, and the purpose decides how its detections are
+used. Some only narrow where the next level looks. Others confirm or reject what an earlier level
+found, so false positives are removed rather than passed on.
 
 Any scene that can be described by its visible components works the same way, on any source that
 can resolve them.
