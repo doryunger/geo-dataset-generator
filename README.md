@@ -114,12 +114,32 @@ Live at **<https://refinery.stamsite.cc/>**. The first load can take a few minut
 refinery or a look-alike site and all three detectors and the graph run on it live, within
 seconds. A guided tour explains the interface after the first site.
 
-## Next: near-real-time monitoring
+## Next: complex scenes from fused sources
 
-Nothing here is specific to refineries. Any scene type that can be described by its visible
-components works the same way: a graph rule for the scene, and the loop for any component no
-existing model detects.
+Some scenes cannot be identified from a single source. Fusing several sources lets us find them.
 
-A whole scene goes from imagery to a verdict in seconds. Connected to a stream of new imagery,
-the pipeline could return a result for every incoming capture within seconds of its arrival.
-That makes near-real-time monitoring of many sites, of many types, practical.
+Each source shows something different. A wide and cheap source shows where something might be. A
+sharper source, or another kind of sensor, shows what it is. So each source gets its own graph,
+built around what that source can resolve at its resolution and refresh rate. The graphs are then
+chained into levels, in the source order from Part 3.
+
+The first level is the cheapest and coarsest. It runs over the whole area of interest. Each next
+level covers less ground and only looks where the level before found something. That is where it
+can afford better imagery and heavier computation. The expensive steps run only where they are
+needed.
+
+Each level does two jobs. It focuses the search on places likely to hold more detections. It also
+checks what earlier levels found, so false positives are removed rather than passed on. The area
+keeps shrinking, and the last levels may look only at the detections themselves.
+
+A graph has its own classes. It names only what its own detectors can see in its own imagery, and
+does not inherit the classes of the graph before it. Levels are linked by hints instead. A later
+graph points to a class from the previous source and looks only around those places, within a set
+distance.
+
+Each class also declares why it is looked for on that source. This purpose decides how its
+detections are processed. A detection may only narrow where the next source looks. It may also
+confirm or reject what an earlier source found, using a signal only this source measures.
+
+Any scene that can be described by its visible components works the same way, on any source that
+can resolve them.
