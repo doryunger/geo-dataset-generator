@@ -37,6 +37,15 @@ repo (it's public) -- the instance ID only lives in the Lightsail-side `.env`.
   previous instance..." while it's still `stopping` (the slow part of a restart, see bug #3 below),
   and "Starting a new instance..." for everything else until `ready`. The richer `stage`/`detail`
   fields are still in the `/_wake/status` JSON for debugging; the page just doesn't show them.
+  On 2026-10-08 the radar was replaced by a pure-CSS carousel of the four `icons/*.svg` (storage
+  tank, fan unit, distillation column, factory), one at a time, each new one pushing the previous
+  out sideways, colored with the app's palette (cyan/purple/pink from `classColors.ts`, yellow from
+  the sites panel); the status text stays white, plus a note under it that also switches
+  between closing and starting. The SVGs draw in
+  `currentColor` and are inlined into the page at import time, so `icons/` has to be copied into
+  the image (`Dockerfile`). Headless-Chrome screenshots show the stage empty because compositor
+  animations don't advance there -- verify frames by pausing the animation with a negative
+  `animation-delay` instead.
 - **`START_DEBOUNCE_S`**: `ec2:StartInstances` is safe to call repeatedly (a no-op once already
   pending/running), but every browser poll hitting it directly would still be wasteful API traffic
   during the ~2-3 minute boot window; debounced to once per 20s regardless of request volume.

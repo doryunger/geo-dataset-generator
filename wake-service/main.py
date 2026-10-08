@@ -4,6 +4,7 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import boto3
 import httpx
@@ -275,54 +276,53 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-WAKING_PAGE = """<!doctype html>
+ICON_ORDER = ("storage-tank", "fan-unit", "distillation-column", "factory")
+ICONS_DIR = Path(__file__).parent / "icons"
+
+WAKING_PAGE_TEMPLATE = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Starting the demo</title>
 <style>
   html, body { height: 100%; margin: 0; }
   body {
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 32px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 36px;
+    padding: 0 16px; text-align: center;
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-    background: #0f1115; color: #e8e8e8;
+    background: #0f1115; color: #ffffff;
   }
-  .radar {
-    position: relative; width: 140px; height: 140px; border-radius: 50%; overflow: hidden;
-    background:
-      radial-gradient(circle, transparent 0 32%, rgba(46,255,138,0.22) 32.5% 33.5%, transparent 34% 65%,
-        rgba(46,255,138,0.22) 65.5% 66.5%, transparent 67%),
-      linear-gradient(transparent calc(50% - 0.5px), rgba(46,255,138,0.18) 0 calc(50% + 0.5px), transparent 0),
-      linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(46,255,138,0.18) 0 calc(50% + 0.5px), transparent 0),
-      #14161c;
-    box-shadow: 0 0 0 1px rgba(46,255,138,0.4), 0 0 32px rgba(46,255,138,0.15);
+  .stage { position: relative; width: 180px; height: 180px; overflow: hidden; }
+  .icon {
+    position: absolute; inset: 0; transform: translateX(120%);
+    animation: push 8.8s cubic-bezier(0.65, 0, 0.35, 1) infinite backwards;
   }
-  .sweep {
-    position: absolute; inset: 0; border-radius: 50%;
-    background: conic-gradient(from 0deg, transparent 0deg 280deg, rgba(46,255,138,0.6) 360deg);
-    animation: sweep 2.4s linear infinite;
+  .icon svg { width: 100%; height: 100%; display: block; }
+  .i0 { color: #00c8ff; animation-delay: 0s; }
+  .i1 { color: #a64dff; animation-delay: 2.2s; }
+  .i2 { color: #ff2bd1; animation-delay: 4.4s; }
+  .i3 { color: #ffd400; animation-delay: 6.6s; }
+  @keyframes push {
+    0% { transform: translateX(120%); }
+    6% { transform: translateX(0); }
+    25% { transform: translateX(0); }
+    31% { transform: translateX(-120%); }
+    100% { transform: translateX(-120%); }
   }
-  .blip {
-    position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
-    background: #8dffbf; box-shadow: 0 0 8px #2eff8a; opacity: 0;
-    animation: blip 2.4s linear infinite;
-  }
-  .b1 { top: 28%; left: 64%; animation-delay: 0.25s; }
-  .b2 { top: 68%; left: 72%; animation-delay: 0.9s; }
-  .b3 { top: 60%; left: 30%; animation-delay: 1.55s; }
-  @keyframes sweep { to { transform: rotate(360deg); } }
-  @keyframes blip { 0% { opacity: 0; } 4% { opacity: 1; } 45% { opacity: 0; } 100% { opacity: 0; } }
-  #status { font-size: 16px; letter-spacing: 0.02em; margin: 0; }
+  #status { font-size: 26px; font-weight: 600; letter-spacing: 0.02em; margin: 0; }
+  .note { font-size: 17px; line-height: 1.5; color: #b8bcc6; margin: -16px 0 0; max-width: 520px; }
 </style>
 </head>
 <body>
-  <div class="radar">
-    <div class="sweep"></div>
-    <span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span>
-  </div>
+  <div class="stage">{{ICONS}}</div>
   <p id="status">Starting a new instance...</p>
+  <p class="note" id="note">Hang tight, the demo opens on its own when ready.</p>
 <script>
 const status = document.getElementById("status");
+const note = document.getElementById("note");
+const STARTING_NOTE = "Hang tight, the demo opens on its own when ready.";
+const CLOSING_NOTE = "This usually takes a few minutes.";
 
 async function poll() {
   try {
@@ -334,10 +334,13 @@ async function poll() {
     }
     if (data.stage === "error") {
       status.textContent = "Something went wrong";
+      note.textContent = "";
     } else if (data.ec2_state === "stopping") {
       status.textContent = "Closing previous instance...";
+      note.textContent = CLOSING_NOTE;
     } else {
       status.textContent = "Starting a new instance...";
+      note.textContent = STARTING_NOTE;
     }
   } catch (e) {
     status.textContent = "Reconnecting...";
@@ -348,6 +351,11 @@ poll();
 </script>
 </body>
 </html>"""
+
+WAKING_PAGE = WAKING_PAGE_TEMPLATE.replace("{{ICONS}}", "".join(
+    f'<div class="icon i{i}">{(ICONS_DIR / f"{name}.svg").read_text().strip()}</div>'
+    for i, name in enumerate(ICON_ORDER)
+))
 
 
 @app.get("/_wake/status")
