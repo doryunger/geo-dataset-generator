@@ -138,3 +138,16 @@ so the request that triggered the start is recorded as the session's `trigger`. 
   tailing. It uses the same IAM user as the EC2 side (`geo-dataset-genrator-s3`), which already
   has PutObject on the bucket. If `S3_BUCKET_NAME` is unset, uploads are skipped and the local
   JSONL stays the only copy.
+
+## Refinery start on the worker (added 2026-10-30)
+
+The worker's refinery containers have `restart: "no"`, so a boot starts nothing; the STS dispatcher starts the instance
+itself and must not bring up the demo or its 9 GB of GPU memory. `deploy/refinery-trigger/` installs a systemd
+service on the worker (`refinery-trigger.service`) that listens on port 80 until the first request from the wake
+host (`63.181.197.45`; other sources get 403), answers 503, frees the port and runs `docker start
+refinery-demo-app-1 refinery-demo-web-1`. This service's `check_warm` request to `/api/stats` is that request, on a
+wake and on any later status poll while the app is not warm, so both "wake from stopped" and "wake while the machine is
+up" start the demo with no change to this service and no SSH key on the wake host. A boot that nobody asks the
+refinery for leaves port 80 held by the listener and the GPU free. The wake host address is hard-coded in the script.
+
+`IDLE_STOP_MINUTES=0` turns the idle stop off (the loop returns at start). On 2026-10-30 the refinery instance's stop moved to the STS control host (`worker_idle.py`: CPU and GPU use over SSH, process-independent), so this service no longer stops it.

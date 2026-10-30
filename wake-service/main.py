@@ -245,6 +245,8 @@ async def proxy_status(trigger: dict | None = None) -> dict:
 
 
 async def idle_stop_loop():
+    if IDLE_STOP_MINUTES <= 0:
+        return
     while True:
         await asyncio.sleep(IDLE_CHECK_INTERVAL_S)
         idle_for = time.time() - _state["last_activity"]
